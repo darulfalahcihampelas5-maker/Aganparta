@@ -1,0 +1,18 @@
+Cols for X1:
+{ id: 'TGS-1785884777808', title: 'Tugas 1', type: 'assignment' }
+{
+  id: 'EXM-1785285114939',
+  title: 'Preetes  - Bab 1 ikg',
+  type: 'exam'
+}
+{ id: 'EXM-1788852998025-2y9q', title: 'Untitled', type: 'exam' }
+{
+  id: 'EXM-MANUAL-1789356232108',
+  title: 'PTS Informatika Ganjil',
+  type: 'exam'
+}
+{
+  id: 'TGS-MANUAL-1788609715720',
+  title: 'Postes Bab 1 IKG',
+  type: 'exam'
+}

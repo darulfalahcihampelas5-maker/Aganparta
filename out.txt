@@ -1,0 +1,3 @@
+ID: TGS-1785884777808 | Title: Tugas 1 | Materi: Tugas 1 | Kelas: X7, X3, X3 | targetClasses: ["X7","X3"]
+ID: TGS-1787706979275 | Title: undefined | Materi: Tugas 2  | Kelas: X3 | targetClasses: undefined
+ID: TGS-MANUAL-1788342922554 | Title: Tugas 1 Bab 1 IKG | Materi: Tugas 1 Bab 1 IKG | Kelas: X2 | targetClasses: ["X2"]

@@ -1,0 +1,1 @@
+sed -i 's/<div className="space-y-6 animate-in fade-in duration-300">/<div className="space-y-6 animate-in fade-in duration-300">\n                      <SimulasiBKSettings classesList={classesList} \/>/g' src/pages/DashboardTeacher.tsx

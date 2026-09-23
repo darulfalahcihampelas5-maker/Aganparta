@@ -1,0 +1,6 @@
+Exam ID: EXM-1785285114939, Title: Preetes  - Bab 1, Materi: Informatika dan Keterampilan Generik, Kelas: undefined, targets: undefined, targetClasses: undefined
+Exam ID: EXM-1787900695841-3uha, Title: Postes  - Bab 1 IKG, Materi: Keterampilan Generik,, Kelas: undefined, targets: undefined, targetClasses: ["X7"]
+Exam ID: EXM-1788161672800-eums, Title: Postes  - Bab 1 IKG, Materi: Keterampilan Generik,, Kelas: undefined, targets: undefined, targetClasses: ["X8"]
+Exam ID: EXM-1788161673755-tx5r, Title: Postes  - Bab 1 IKG, Materi: Keterampilan Generik,, Kelas: undefined, targets: undefined, targetClasses: ["X2"]
+Exam ID: TGS-MANUAL-1788609715720, Title: POSTES BAB 1 IKG, Materi: POSTES BAB 1 IKG, Kelas: X1, targets: [{"startDate":"2026-08-27T00:00:00.000Z","kelas":"X1"}], targetClasses: ["X1"]
+Exam ID: TGS-MANUAL-1788609824543, Title: POSTES BAB 1 IKG, Materi: POSTES BAB 1 IKG, Kelas: X6, targets: [{"kelas":"X6","startDate":"2026-09-01T00:00:00.000Z"}], targetClasses: ["X6"]
