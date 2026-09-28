@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { doc, setDoc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
+import { dbSetDoc as setDoc } from "../../lib/supabaseSync";
 import { db } from "../../lib/firebase";
 import { 
   Settings, 

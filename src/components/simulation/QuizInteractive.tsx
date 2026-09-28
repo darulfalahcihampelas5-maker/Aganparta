@@ -117,14 +117,14 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
           {isPassed ? <Trophy className="w-10 h-10" /> : <Award className="w-10 h-10" />}
         </div>
 
-        <span className="text-xs font-black uppercase tracking-wider text-slate-400">
+        <span className="text-xs font-black uppercase tracking-wider text-emerald-600">
           Hasil Kuis Evaluasi Berpikir Komputasional
         </span>
-        <h3 className="text-2xl font-black text-slate-800 mt-1">{levelTitle}</h3>
+        <h3 className="text-2xl font-black text-emerald-950 mt-1 break-words whitespace-normal">{levelTitle}</h3>
 
         <div className="my-6 p-6 rounded-2xl bg-slate-50 border border-slate-200 w-full flex items-center justify-around">
           <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+            <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider block">
               Nilai Akhir
             </span>
             <span
@@ -140,7 +140,7 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
           <div className="h-12 w-px bg-slate-200" />
 
           <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+            <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider block">
               Status Kelulusan
             </span>
             <span
@@ -157,7 +157,7 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
           <div className="h-12 w-px bg-slate-200" />
 
           <div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+            <span className="text-xs font-bold text-emerald-700 uppercase tracking-wider block">
               Jawaban Benar
             </span>
             <span className="text-2xl font-black text-slate-800 font-mono">
@@ -194,7 +194,7 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
       {/* Quiz Top Progress */}
-      <div className="p-5 bg-gradient-to-r from-slate-900 to-slate-800 text-white flex items-center justify-between">
+      <div className="p-5 bg-gradient-to-r from-emerald-900 to-emerald-800 text-white flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
             <Flame className="w-5 h-5" />
@@ -224,7 +224,7 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
                     ? isCorrect
                       ? "bg-emerald-500"
                       : "bg-rose-500"
-                    : "bg-slate-700"
+                    : "bg-emerald-700"
                 }`}
               />
             );
@@ -300,7 +300,7 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
 
         {/* Detailed Explanation Drawer (shown immediately after answer) */}
         {showExplanation && (
-          <div className="p-4 rounded-2xl bg-slate-900 text-white border border-slate-800 text-xs space-y-1.5 animate-fadeIn">
+          <div className="p-4 rounded-2xl bg-emerald-950 text-white border border-emerald-800 text-xs space-y-1.5 animate-fadeIn">
             <div className="flex items-center gap-2 text-emerald-400 font-bold">
               <Sparkles className="w-4 h-4" />
               <span>Pembahasan Berpikir Komputasional:</span>
@@ -312,7 +312,7 @@ export const QuizInteractive: React.FC<QuizInteractiveProps> = ({
 
       {/* Footer Navigation */}
       <div className="p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-        <div className="text-xs text-slate-500">
+        <div className="text-xs text-emerald-700">
           {hasAnsweredCurrent ? (
             <span className="text-emerald-700 font-bold flex items-center gap-1">
               <CheckCircle2 className="w-4 h-4" /> Jawaban tersimpan. Lanjutkan ke soal berikutnya.

@@ -4403,13 +4403,13 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         </header>
         )}
 
-        <div className="flex-1 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-emerald-50/60 via-slate-50 to-[#85cc00]/15 p-6 sm:p-8 md:p-12 relative">
+        <div className={`flex-1 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-emerald-50/60 via-slate-50 to-[#85cc00]/15 ${activeMenu === 'simulasi' ? 'p-0 md:p-1' : 'p-6 sm:p-8 md:p-12'} relative`}>
           {/* Decorative background green glow blobs (gradasi pada sela-sela frame agar tidak polos) */}
           <div className="absolute top-10 left-10 w-96 h-96 rounded-full bg-gradient-to-br from-[#85cc00]/15 to-emerald-400/5 blur-3xl pointer-events-none z-0" />
           <div className="absolute bottom-20 right-10 w-96 h-96 rounded-full bg-gradient-to-tr from-emerald-500/15 to-[#85cc00]/5 blur-3xl pointer-events-none z-0" />
           <div className="absolute top-1/2 left-1/3 w-[500px] h-[500px] rounded-full bg-gradient-to-r from-emerald-200/10 to-[#85cc00]/10 blur-3xl pointer-events-none z-0" />
 
-          <div className="mx-auto w-full max-w-full px-4 sm:px-6 md:px-8 py-4 relative z-10">
+          <div className={`mx-auto w-full max-w-full ${activeMenu === 'simulasi' ? '' : 'px-4 sm:px-6 md:px-8'} py-4 relative z-10`}>
             {isOffline && (
               <div className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-2xl px-5 py-4 text-xs font-semibold text-amber-800 flex items-center gap-3 animate-in slide-in-from-top duration-300">
                 <span className="relative flex h-2.5 w-2.5 shrink-0">
@@ -6852,11 +6852,11 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
               {/* Simulasi Berpikir Komputasional Menu */}
               {activeMenu === "simulasi" && (
-                <div className="space-y-6 max-w-[1400px] mx-auto px-1 sm:px-4 pb-12 animate-in fade-in duration-300">
+                <div className="space-y-6 w-full mx-auto pb-12 animate-in fade-in duration-300">
                   <SimulasiChapterMenu
                     userRole="student"
                     currentUser={{
-                      name: student?.nama,
+                      name: student?.displayName || student?.name || student?.nama,
                       nisn: student?.nisn,
                       kelas: student?.kelas,
                     }}

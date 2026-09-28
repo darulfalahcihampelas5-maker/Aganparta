@@ -402,7 +402,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
   return (
     <div className="bg-white rounded-3xl border border-slate-200/90 shadow-xl overflow-hidden flex flex-col">
       {/* Top Banner */}
-      <div className="p-5 bg-gradient-to-r from-emerald-800 via-slate-900 to-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
+      <div className="p-5 bg-gradient-to-r from-emerald-800 via-emerald-900 to-emerald-900 text-white flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0">
             <Bot className="w-6 h-6" />
@@ -420,7 +420,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
         </div>
 
         {/* Puzzle Switcher */}
-        <div className="flex items-center gap-2 bg-slate-800/80 p-1.5 rounded-2xl border border-slate-700/80">
+        <div className="flex items-center gap-2 bg-emerald-800/80 p-1.5 rounded-2xl border border-emerald-700/80">
           {ROVER_PUZZLES.map((p, idx) => (
             <button
               key={p.id}
@@ -445,7 +445,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
       <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 bg-slate-50/50">
         {/* Left: 2D Grid Board */}
         <div className="lg:col-span-6 flex flex-col items-center justify-center">
-          <div className="w-full max-w-md bg-slate-900 rounded-3xl p-5 border-4 border-slate-800 shadow-2xl relative">
+          <div className="w-full max-w-md bg-emerald-900 rounded-3xl p-5 border-4 border-emerald-800 shadow-2xl relative">
             {/* Status bar inside board */}
             <div className="flex items-center justify-between text-xs text-slate-400 mb-3 px-2">
               <div className="flex items-center gap-1.5 font-mono">
@@ -461,7 +461,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
             </div>
 
             {/* 5x5 Grid */}
-            <div className="grid grid-cols-5 gap-2 aspect-square bg-slate-950 p-2.5 rounded-2xl border border-slate-800">
+            <div className="grid grid-cols-5 gap-2 aspect-square bg-emerald-950 p-2.5 rounded-2xl border border-emerald-800">
               {Array.from({ length: GRID_SIZE }).map((_, y) =>
                 Array.from({ length: GRID_SIZE }).map((_, x) => {
                   const isRover = roverPos.x === x && roverPos.y === y;
@@ -476,8 +476,8 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
                       key={`cell-${x}-${y}`}
                       className={`relative rounded-xl flex items-center justify-center border transition-all duration-300 ${
                         isWall
-                          ? "bg-slate-800 border-slate-700 shadow-inner"
-                          : "bg-slate-900/90 border-slate-800/80 hover:border-slate-700"
+                          ? "bg-emerald-800 border-emerald-700 shadow-inner"
+                          : "bg-emerald-900/90 border-emerald-800/80 hover:border-emerald-700"
                       }`}
                     >
                       {/* Grid coordinates label subtle */}
@@ -504,7 +504,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
 
                       {/* Wall Icon */}
                       {isWall && (
-                        <div className="w-full h-full rounded-lg bg-slate-800 flex items-center justify-center text-slate-600 font-bold text-xs select-none">
+                        <div className="w-full h-full rounded-lg bg-emerald-800 flex items-center justify-center text-emerald-600 font-bold text-xs select-none">
                           ▓▓
                         </div>
                       )}
@@ -524,7 +524,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
 
             {/* Outcome Modal Overlay */}
             {gameStatus === "WIN" && (
-              <div className="absolute inset-0 bg-slate-950/90 rounded-3xl p-6 flex flex-col items-center justify-center text-center backdrop-blur-sm animate-fadeIn">
+              <div className="absolute inset-0 bg-emerald-950/90 rounded-3xl p-6 flex flex-col items-center justify-center text-center backdrop-blur-sm animate-fadeIn">
                 <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center text-emerald-400 mb-3 animate-bounce">
                   <Trophy className="w-8 h-8" />
                 </div>
@@ -552,7 +552,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
                   <button
                     type="button"
                     onClick={resetBoard}
-                    className="px-4 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold hover:bg-slate-700 cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-emerald-800 text-emerald-100 text-xs font-bold hover:bg-emerald-700 cursor-pointer"
                   >
                     Ulangi Misi
                   </button>
@@ -570,7 +570,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
             )}
 
             {gameStatus === "CRASH" && (
-              <div className="absolute inset-0 bg-slate-950/90 rounded-3xl p-6 flex flex-col items-center justify-center text-center backdrop-blur-sm animate-fadeIn">
+              <div className="absolute inset-0 bg-emerald-950/90 rounded-3xl p-6 flex flex-col items-center justify-center text-center backdrop-blur-sm animate-fadeIn">
                 <div className="w-16 h-16 rounded-full bg-rose-500/20 border-2 border-rose-500 flex items-center justify-center text-rose-400 mb-3 animate-shake">
                   <AlertTriangle className="w-8 h-8" />
                 </div>

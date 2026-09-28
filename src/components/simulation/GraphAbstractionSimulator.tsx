@@ -251,7 +251,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
       {/* Banner & Mission Switcher */}
-      <div className="p-5 bg-gradient-to-r from-sky-950 via-indigo-950 to-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
+      <div className="p-5 bg-gradient-to-r from-emerald-900 via-emerald-800 to-emerald-900 text-white flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-12 h-12 rounded-2xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shrink-0">
             <Network className="w-6 h-6" />
@@ -278,7 +278,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 missionIdx === idx
                   ? "bg-sky-600 text-white shadow-md shadow-sky-600/30"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800"
+                  : "text-emerald-100 hover:text-white hover:bg-emerald-800"
               }`}
             >
               Misi {idx + 1}
@@ -288,7 +288,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
       </div>
 
       {/* Main Interactive Graph Canvas */}
-      <div className="p-6 bg-slate-950 flex flex-col items-center justify-center relative min-h-[420px]">
+      <div className="p-6 bg-emerald-950 flex flex-col items-center justify-center relative min-h-[420px]">
         {/* Grid pattern background */}
         <div
           className="absolute inset-0 opacity-10 pointer-events-none"
@@ -341,8 +341,8 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
                   width="36"
                   height="22"
                   rx="6"
-                  fill={isEdgeInPath ? "#0284c7" : "#1e293b"}
-                  stroke={isEdgeInPath ? "#38bdf8" : "#475569"}
+                  fill={isEdgeInPath ? "#0284c7" : "#064e3b"}
+                  stroke={isEdgeInPath ? "#38bdf8" : "#065f46"}
                   strokeWidth="1.5"
                 />
                 <text
@@ -388,8 +388,8 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
                       : isSelected
                       ? "bg-sky-500 text-white border-2 border-white shadow-sky-500/40"
                       : isClickable
-                      ? "bg-slate-800 text-sky-400 border-2 border-sky-400/80 hover:bg-sky-950 hover:scale-105 animate-pulse"
-                      : "bg-slate-900 text-slate-500 border border-slate-800 opacity-60 cursor-not-allowed"
+                      ? "bg-emerald-800 text-sky-400 border-2 border-sky-400/80 hover:bg-emerald-900 hover:scale-105 animate-pulse"
+                      : "bg-emerald-900 text-emerald-500 border border-emerald-800 opacity-60 cursor-not-allowed"
                   }`}
                 >
                   <span className="text-sm font-black">{node.id}</span>
@@ -397,7 +397,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
                   {node.id === mission.targetNode && <Zap className="w-3.5 h-3.5 mt-0.5 text-amber-300" />}
                 </button>
 
-                <span className="mt-1.5 text-[10px] font-bold text-slate-300 bg-slate-900/90 px-2 py-0.5 rounded-md border border-slate-800 whitespace-nowrap shadow-sm">
+                <span className="mt-1.5 text-[10px] font-bold text-emerald-100 bg-emerald-900/90 px-2 py-0.5 rounded-md border border-emerald-800 whitespace-nowrap shadow-sm">
                   {node.name}
                 </span>
               </div>
@@ -435,7 +435,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
           <button
             type="button"
             onClick={handleReset}
-            className="px-4 py-2.5 rounded-2xl bg-slate-800 text-slate-200 text-xs font-bold hover:bg-slate-700 flex items-center gap-1.5 cursor-pointer"
+            className="px-4 py-2.5 rounded-2xl bg-emerald-800 text-emerald-100 text-xs font-bold hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer"
           >
             <RotateCcw className="w-3.5 h-3.5" /> Reset Rute
           </button>

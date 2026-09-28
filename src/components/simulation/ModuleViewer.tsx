@@ -64,7 +64,7 @@ export const ModuleViewer: React.FC<ModuleViewerProps> = ({
   return (
     <div className="bg-white rounded-3xl border border-slate-200 shadow-xl overflow-hidden flex flex-col">
       {/* Module Header */}
-      <div className="p-6 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
+      <div className="p-6 bg-gradient-to-r from-emerald-900 via-emerald-800 to-emerald-900 text-white flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-[10px] font-black uppercase tracking-wider bg-indigo-500/30 text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-500/40">
@@ -209,7 +209,7 @@ export const ModuleViewer: React.FC<ModuleViewerProps> = ({
             </div>
 
             {/* Key Takeaways */}
-            <div className="p-4 rounded-2xl bg-slate-900 text-white space-y-2.5">
+            <div className="p-4 rounded-2xl bg-emerald-900 text-white space-y-2.5">
               <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5" />
                 <span>Intisari Berpikir Komputasional:</span>
@@ -239,7 +239,7 @@ export const ModuleViewer: React.FC<ModuleViewerProps> = ({
                     sound.playStep();
                     setActiveSectionIdx((prev) => prev + 1);
                   }}
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                  className="px-5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
                 >
                   <span>Topik Selanjutnya</span>
                   <ChevronRight className="w-4 h-4" />

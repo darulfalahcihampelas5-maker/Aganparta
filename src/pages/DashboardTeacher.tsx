@@ -5680,7 +5680,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
           </div>
         </header>
 
-        <div className="flex-1 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-emerald-50/60 via-slate-50 to-[#85cc00]/15 p-4 sm:p-8 md:p-12 scroll-smooth flex flex-col relative">
+        <div className={`flex-1 overflow-x-hidden overflow-y-auto bg-gradient-to-br from-emerald-50/60 via-slate-50 to-[#85cc00]/15 ${activeMenu === 'simulasi' ? 'p-0 md:p-1' : 'p-4 sm:p-8 md:p-12'} scroll-smooth flex flex-col relative`}>
           {/* Decorative background green glow blobs (gradasi pada sela-sela frame agar tidak polos) */}
           <div className="absolute top-10 left-10 w-96 h-96 rounded-full bg-gradient-to-br from-[#85cc00]/15 to-emerald-400/5 blur-3xl pointer-events-none z-0" />
           <div className="absolute bottom-20 right-10 w-96 h-96 rounded-full bg-gradient-to-tr from-emerald-500/15 to-[#85cc00]/5 blur-3xl pointer-events-none z-0" />
