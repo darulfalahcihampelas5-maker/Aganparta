@@ -44,20 +44,31 @@ interface DailyLifeSimulatorEngineProps {
     name?: string;
     kelas?: string;
   };
+  simConfig?: {
+    active: boolean;
+    chapters: string[];
+  };
 }
 
 export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> = ({
   userRole = "student",
   currentUser,
+  simConfig,
 }) => {
   const currentNisn = currentUser?.nisn || "guest_student";
   const currentStudentName = currentUser?.name || "Siswa Informatika";
 
-  // Navigation & Filtering (Default to Dekomposisi for clean 1st pillar focus)
-  const [selectedPillar, setSelectedPillar] = useState<PillarType | "all">("dekomposisi");
+  // Filter global simulators based on teacher settings (only for students)
+  const availableSimulators = userRole === "teacher" 
+    ? DAILY_LIFE_SIMULATORS 
+    : DAILY_LIFE_SIMULATORS.filter(s => simConfig?.chapters.includes(s.pillar));
+
+  // Navigation & Filtering (Default to first available pillar or "all")
+  const initialPillar = availableSimulators.length > 0 ? availableSimulators[0].pillar : "dekomposisi";
+  const [selectedPillar, setSelectedPillar] = useState<PillarType | "all">(initialPillar);
   const [selectedDifficulty, setSelectedDifficulty] = useState<DifficultyLevel | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeItem, setActiveItem] = useState<SimulatorItem>(DAILY_LIFE_SIMULATORS[0]);
+  const [activeItem, setActiveItem] = useState<SimulatorItem>(availableSimulators[0] || DAILY_LIFE_SIMULATORS[0]);
 
   // Mobile View Switcher: "list" (pilihan level) or "arena" (main tantangan)
   const [mobileViewMode, setMobileViewMode] = useState<"list" | "arena">("list");
@@ -104,7 +115,19 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
       const shuffled = [...ids].reverse();
       setUserSequence(shuffled);
     }
-  }, [activeItem]);
+
+    // If already attempted, show "attempted" state
+    if (progress.attemptedIds.includes(activeItem.id)) {
+      const isCorrect = progress.scores[activeItem.id] > 0;
+      setEvaluationResult({
+        status: isCorrect ? "success" : "wrong",
+        score: progress.scores[activeItem.id] || 0,
+        stars: progress.stars[activeItem.id] || 0,
+        message: isCorrect ? "Tantangan ini telah diselesaikan dengan benar." : "Tantangan ini telah dikerjakan namun kurang tepat.",
+        details: "Kesempatan pengerjaan simulasi ini telah habis (1x kesempatan)."
+      });
+    }
+  }, [activeItem, progress.attemptedIds, progress.scores, progress.stars]);
 
   // Load progress when current user changes
   useEffect(() => {
@@ -116,7 +139,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
     sound.playClick();
     setSelectedPillar(pillar);
     if (pillar !== "all") {
-      const firstInPillar = DAILY_LIFE_SIMULATORS.find((s) => s.pillar === pillar);
+      const firstInPillar = availableSimulators.find((s) => s.pillar === pillar);
       if (firstInPillar) {
         setActiveItem(firstInPillar);
       }
@@ -137,7 +160,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
   };
 
   // Filter list
-  const filteredSimulators = DAILY_LIFE_SIMULATORS.filter((sim) => {
+  const filteredSimulators = availableSimulators.filter((sim) => {
     if (selectedPillar !== "all" && sim.pillar !== selectedPillar) return false;
     if (selectedDifficulty !== "all" && sim.difficulty !== selectedDifficulty) return false;
     if (searchQuery.trim()) {
@@ -156,37 +179,54 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
   const prevChallengeItem = currentFilteredIndex > 0 ? filteredSimulators[currentFilteredIndex - 1] : null;
   const nextChallengeItem = currentFilteredIndex < filteredSimulators.length - 1 ? filteredSimulators[currentFilteredIndex + 1] : null;
 
-  // Global Progression Lock Logic
-  const allPemulaIds = DAILY_LIFE_SIMULATORS.filter(s => s.difficulty === "pemula").map(s => s.id);
-  const allMenengahIds = DAILY_LIFE_SIMULATORS.filter(s => s.difficulty === "menengah").map(s => s.id);
-  const isPemulaCompletedAll = allPemulaIds.every(id => progress.completedIds.includes(id));
-  const isMenengahCompletedAll = allMenengahIds.every(id => progress.completedIds.includes(id));
+  // Global Progression Lock Logic (Only if all available in previous difficulty are done)
+  const allPemulaIds = availableSimulators.filter(s => s.difficulty === "pemula").map(s => s.id);
+  const allMenengahIds = availableSimulators.filter(s => s.difficulty === "menengah").map(s => s.id);
+  const isPemulaCompletedAll = allPemulaIds.every(id => progress.attemptedIds.includes(id));
+  const isMenengahCompletedAll = allMenengahIds.every(id => progress.attemptedIds.includes(id));
 
   // Pillar counters
   const pillarCounts = {
-    dekomposisi: DAILY_LIFE_SIMULATORS.filter((s) => s.pillar === "dekomposisi").length,
-    pola: DAILY_LIFE_SIMULATORS.filter((s) => s.pillar === "pola").length,
-    abstraksi: DAILY_LIFE_SIMULATORS.filter((s) => s.pillar === "abstraksi").length,
-    algoritma: DAILY_LIFE_SIMULATORS.filter((s) => s.pillar === "algoritma").length,
+    dekomposisi: availableSimulators.filter((s) => s.pillar === "dekomposisi").length,
+    pola: availableSimulators.filter((s) => s.pillar === "pola").length,
+    abstraksi: availableSimulators.filter((s) => s.pillar === "abstraksi").length,
+    algoritma: availableSimulators.filter((s) => s.pillar === "algoritma").length,
   };
 
   const pillarCompleted = {
-    dekomposisi: DAILY_LIFE_SIMULATORS.filter(
-      (s) => s.pillar === "dekomposisi" && progress.completedIds.includes(s.id)
+    dekomposisi: availableSimulators.filter(
+      (s) => s.pillar === "dekomposisi" && progress.attemptedIds.includes(s.id)
     ).length,
-    pola: DAILY_LIFE_SIMULATORS.filter(
-      (s) => s.pillar === "pola" && progress.completedIds.includes(s.id)
+    pola: availableSimulators.filter(
+      (s) => s.pillar === "pola" && progress.attemptedIds.includes(s.id)
     ).length,
-    abstraksi: DAILY_LIFE_SIMULATORS.filter(
-      (s) => s.pillar === "abstraksi" && progress.completedIds.includes(s.id)
+    abstraksi: availableSimulators.filter(
+      (s) => s.pillar === "abstraksi" && progress.attemptedIds.includes(s.id)
     ).length,
-    algoritma: DAILY_LIFE_SIMULATORS.filter(
-      (s) => s.pillar === "algoritma" && progress.completedIds.includes(s.id)
+    algoritma: availableSimulators.filter(
+      (s) => s.pillar === "algoritma" && progress.attemptedIds.includes(s.id)
     ).length,
+  };
+
+  // Pillar scores (10 points per question)
+  const pillarScores = {
+    dekomposisi: Object.entries(progress.scores)
+      .filter(([id, _]) => availableSimulators.find(s => s.id === id)?.pillar === "dekomposisi")
+      .reduce((sum, [_, score]) => sum + score, 0),
+    pola: Object.entries(progress.scores)
+      .filter(([id, _]) => availableSimulators.find(s => s.id === id)?.pillar === "pola")
+      .reduce((sum, [_, score]) => sum + score, 0),
+    abstraksi: Object.entries(progress.scores)
+      .filter(([id, _]) => availableSimulators.find(s => s.id === id)?.pillar === "abstraksi")
+      .reduce((sum, [_, score]) => sum + score, 0),
+    algoritma: Object.entries(progress.scores)
+      .filter(([id, _]) => availableSimulators.find(s => s.id === id)?.pillar === "algoritma")
+      .reduce((sum, [_, score]) => sum + score, 0),
   };
 
   // Reordering handler for sequence game
   const moveSequenceItem = (index: number, direction: "up" | "down") => {
+    if (progress.attemptedIds.includes(activeItem.id)) return;
     sound.playClick();
     const newSeq = [...userSequence];
     const targetIdx = direction === "up" ? index - 1 : index + 1;
@@ -199,6 +239,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
   // Toggle filter item
   const toggleFilterItem = (id: string) => {
+    if (progress.attemptedIds.includes(activeItem.id)) return;
     sound.playClick();
     if (userSelectedFilters.includes(id)) {
       setUserSelectedFilters(userSelectedFilters.filter((x) => x !== id));
@@ -209,6 +250,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
   // Set category for an item
   const setItemCategory = (itemId: string, category: string) => {
+    if (progress.attemptedIds.includes(activeItem.id)) return;
     sound.playClick();
     setUserCategorization((prev) => ({
       ...prev,
@@ -218,6 +260,11 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
   // Check Solution
   const handleCheckSolution = async () => {
+    // If already attempted, don't allow re-submit
+    if (progress.attemptedIds.includes(activeItem.id)) {
+      return;
+    }
+
     let isCorrect = false;
     let score = 0;
     let stars = 0;
@@ -322,20 +369,20 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
     });
 
     // Save progress to LocalStorage + Supabase
-    if (score >= 60) {
-      const updated = await saveSimulationProgress(
-        currentNisn,
-        currentStudentName,
-        activeItem.id,
-        score,
-        stars
-      );
-      setProgress(updated);
-    }
+    // We mark it as attempted regardless of score
+    const updated = await saveSimulationProgress(
+      currentNisn,
+      currentStudentName,
+      activeItem.id,
+      score,
+      stars
+    );
+    setProgress(updated);
   };
 
   // Reset current challenge
   const handleResetChallenge = () => {
+    if (progress.attemptedIds.includes(activeItem.id)) return;
     sound.playClick();
     setUserCategorization({});
     setUserSelectedPatternOpt(null);
@@ -350,9 +397,9 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
   // Next challenge
   const handleNextChallenge = () => {
     sound.playCoin();
-    const currentIndex = DAILY_LIFE_SIMULATORS.findIndex((s) => s.id === activeItem.id);
-    if (currentIndex < DAILY_LIFE_SIMULATORS.length - 1) {
-      setActiveItem(DAILY_LIFE_SIMULATORS[currentIndex + 1]);
+    const currentIndex = availableSimulators.findIndex((s) => s.id === activeItem.id);
+    if (currentIndex < availableSimulators.length - 1) {
+      setActiveItem(availableSimulators[currentIndex + 1]);
     }
   };
 
@@ -414,16 +461,15 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
             </div>
             <div className="text-center px-3 border-r border-slate-700">
               <div className="text-2xl font-black text-emerald-400">
-                {progress.completedIds.length}/40
+                {pillarScores[activeItem.pillar]}/100
               </div>
-              <div className="text-xs text-slate-400 font-medium">Terselesaikan</div>
+              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Skor {getPillarBadge(activeItem.pillar).name}</div>
             </div>
             <div className="text-center px-2">
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-medium">
-                <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                Aman Cloud & Offline
+              <div className="text-2xl font-black text-indigo-400">
+                {progress.attemptedIds.length}/{availableSimulators.length}
               </div>
-              <div className="text-[11px] text-slate-400 mt-1">Supabase & LocalStorage</div>
+              <div className="text-xs text-slate-400 font-medium">Progres Selesai</div>
             </div>
           </div>
         </div>
@@ -898,7 +944,12 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                   <button
                     type="button"
                     onClick={handleResetChallenge}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 transition-all cursor-pointer"
+                    disabled={progress.attemptedIds.includes(activeItem.id)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                      progress.attemptedIds.includes(activeItem.id)
+                        ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+                        : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100 cursor-pointer"
+                    }`}
                   >
                     <RotateCcw className="w-3.5 h-3.5" />
                     Ulangi
@@ -1180,6 +1231,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                       <button
                         key={opt.id}
                         onClick={() => {
+                          if (progress.attemptedIds.includes(activeItem.id)) return;
                           sound.playClick();
                           setUserSelectedPatternOpt(opt.id);
                         }}
@@ -1257,8 +1309,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                 {evaluationResult.status === "success" && (
                   <div className="pt-2 border-t border-emerald-200/80 flex items-center justify-between text-xs">
                     <span className="text-emerald-700 font-medium">
-                      Nilai tersimpan: <strong>{evaluationResult.score}/100</strong> (Aman tersinkron
-                      Cloud & Offline)
+                      Nilai tersimpan: <strong>{evaluationResult.score >= 60 ? 10 : 0}/10</strong> (Satu kali kesempatan)
                     </span>
                     <button
                       onClick={handleNextChallenge}
@@ -1295,16 +1346,84 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleCheckSolution}
-                  className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all flex items-center gap-2"
+                  disabled={evaluationResult.status !== "idle" || progress.attemptedIds.includes(activeItem.id)}
+                  className={`px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm shadow-md transition-all flex items-center gap-2 ${
+                    progress.attemptedIds.includes(activeItem.id)
+                      ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+                      : "bg-indigo-600 hover:bg-indigo-700 text-white hover:shadow-lg cursor-pointer"
+                  }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  Periksa Solusi Logika
+                  {progress.attemptedIds.includes(activeItem.id) ? "Sudah Dikerjakan" : "Periksa Solusi Logika (+10)"}
                 </button>
               </div>
             </div>
           </div>
         </div>
       </div>
+      {/* Final Report Card - Show when all available are attempted */}
+      {availableSimulators.length > 0 && progress.attemptedIds.length >= availableSimulators.length && (
+        <div className="bg-white rounded-3xl border-4 border-amber-400 shadow-2xl p-8 text-center space-y-6 animate-bounce-subtle mt-8">
+          <div className="w-20 h-20 bg-amber-400 rounded-full flex items-center justify-center mx-auto shadow-lg">
+            <Trophy className="w-10 h-10 text-amber-950" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-3xl font-black text-slate-900">Hasil Simulasi Berpikir Komputasional</h2>
+            <p className="text-slate-500 font-medium italic">Selamat! Kamu telah menyelesaikan seluruh tantangan yang diaktifkan.</p>
+          </div>
+
+          <div className="max-w-2xl mx-auto bg-slate-50 rounded-2xl border border-slate-200 p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div className="text-left space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Nama Lengkap</span>
+                <p className="text-sm font-black text-slate-800 truncate">{currentStudentName}</p>
+              </div>
+              <div className="text-left space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-400">NIS / NISN</span>
+                <p className="text-sm font-black text-slate-800">{currentNisn}</p>
+              </div>
+              <div className="text-left space-y-1">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Kelas</span>
+                <p className="text-sm font-black text-slate-800">{currentUser?.kelas || "X SMA"}</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] uppercase font-black text-indigo-600 block text-center border-b pb-2">Rincian Nilai per Pilar</span>
+              
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-600">1. Dekomposisi</span>
+                <span className="font-black text-emerald-600">{pillarScores.dekomposisi} / 100</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-600">2. Pengenalan Pola</span>
+                <span className="font-black text-sky-600">{pillarScores.pola} / 100</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-600">3. Abstraksi</span>
+                <span className="font-black text-amber-600">{pillarScores.abstraksi} / 100</span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-600">4. Algoritma</span>
+                <span className="font-black text-indigo-600">{pillarScores.algoritma} / 100</span>
+              </div>
+              
+              <div className="flex justify-between items-center text-sm pt-2 border-t mt-2">
+                <span className="font-black text-slate-900 uppercase">Total Akumulasi</span>
+                <span className="font-black text-indigo-700 text-lg">{progress.totalScore} / 400</span>
+              </div>
+            </div>
+          </div>
+
+          <button
+            onClick={() => window.print()}
+            className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold flex items-center gap-2 mx-auto hover:bg-slate-800 transition-all cursor-pointer shadow-xl shadow-slate-900/20 active:scale-95"
+          >
+            <ShieldCheck className="w-5 h-5 text-emerald-400" />
+            Cetak Raport & Sertifikat
+          </button>
+        </div>
+      )}
     </div>
   );
 };

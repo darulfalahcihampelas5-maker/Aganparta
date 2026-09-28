@@ -11,10 +11,17 @@ interface SimulasiChapterMenuProps {
     kelas?: string;
   };
   onBackToDashboard?: () => void;
+  simConfig?: any;
   children?: React.ReactNode;
 }
 
-export const SimulasiChapterMenu: React.FC<SimulasiChapterMenuProps> = ({ userRole, currentUser, onBackToDashboard, children }) => {
+export const SimulasiChapterMenu: React.FC<SimulasiChapterMenuProps> = ({ 
+  userRole, 
+  currentUser, 
+  onBackToDashboard, 
+  simConfig,
+  children 
+}) => {
   const [selectedChapter, setSelectedChapter] = useState<string | null>(null);
 
   const chapters = [
@@ -61,7 +68,14 @@ export const SimulasiChapterMenu: React.FC<SimulasiChapterMenuProps> = ({ userRo
   ];
 
   if (selectedChapter === "berpikir_komputasional") {
-    return <ComputationalThinkingSimulation userRole={userRole} currentUser={currentUser} onBackToDashboard={() => setSelectedChapter(null)} />;
+    return (
+      <ComputationalThinkingSimulation 
+        userRole={userRole} 
+        currentUser={currentUser} 
+        simConfig={simConfig}
+        onBackToDashboard={() => setSelectedChapter(null)} 
+      />
+    );
   }
   if (selectedChapter === "informatika_generik") {
     return <GenericInformaticsSimulator onBack={() => setSelectedChapter(null)} />;

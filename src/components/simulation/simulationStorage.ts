@@ -3,8 +3,9 @@ import { supabase, isSupabaseConfigured } from "../../lib/supabase";
 export interface SimulationProgress {
   nisn: string;
   studentName: string;
-  completedIds: string[]; // List of completed simulator IDs (e.g. "dek-1", "pol-2")
-  scores: Record<string, number>; // id -> score (0-100)
+  completedIds: string[]; // List of successfully completed simulator IDs
+  attemptedIds: string[]; // List of attempted simulator IDs (1 attempt limit)
+  scores: Record<string, number>; // id -> score (0 or 10)
   stars: Record<string, number>; // id -> stars (1-3)
   lastUpdated: string;
   totalScore: number;
@@ -21,6 +22,7 @@ export function loadLocalProgress(nisn: string): SimulationProgress {
     nisn: nisn || "guest",
     studentName: "Siswa Informatika",
     completedIds: [],
+    attemptedIds: [],
     scores: {},
     stars: {},
     lastUpdated: new Date().toISOString(),
@@ -57,14 +59,27 @@ export async function saveSimulationProgress(
   stars: number
 ): Promise<SimulationProgress> {
   const current = loadLocalProgress(nisn);
-  const updatedCompletedIds = Array.from(new Set([...current.completedIds, simulatorId]));
+  
+  // Rule: Only 1 attempt allowed. If already attempted, don't update score unless it's the first time.
+  if (current.attemptedIds.includes(simulatorId)) {
+    return current;
+  }
+
+  // User requested 10 points per correct question
+  const actualScore = score >= 60 ? 10 : 0;
+  
+  const updatedAttemptedIds = Array.from(new Set([...current.attemptedIds, simulatorId]));
+  const updatedCompletedIds = score >= 60 
+    ? Array.from(new Set([...current.completedIds, simulatorId]))
+    : current.completedIds;
+
   const updatedScores = {
     ...current.scores,
-    [simulatorId]: Math.max(current.scores[simulatorId] || 0, score),
+    [simulatorId]: actualScore,
   };
   const updatedStars = {
     ...current.stars,
-    [simulatorId]: Math.max(current.stars[simulatorId] || 0, stars),
+    [simulatorId]: stars,
   };
 
   const totalScore = Object.values(updatedScores).reduce((a, b) => a + b, 0);
@@ -74,6 +89,7 @@ export async function saveSimulationProgress(
     nisn: nisn || "guest",
     studentName: studentName || current.studentName,
     completedIds: updatedCompletedIds,
+    attemptedIds: updatedAttemptedIds,
     scores: updatedScores,
     stars: updatedStars,
     lastUpdated: new Date().toISOString(),
@@ -97,13 +113,15 @@ export async function saveSimulationProgress(
         nisn: nisn,
         student_name: studentName || "Siswa Informatika",
         assignment_id: "simulasi_bk_komputasional",
-        score: Math.round(totalScore / Math.max(1, updatedCompletedIds.length)),
-        nilai: Math.round(totalScore / Math.max(1, updatedCompletedIds.length)),
+        score: totalScore, // Total sum of 10 points per question
+        nilai: totalScore,
         submitted_at: new Date().toISOString(),
         answers: {
           completedCount: updatedCompletedIds.length,
+          attemptedCount: updatedAttemptedIds.length,
           totalStars,
           completedIds: updatedCompletedIds,
+          attemptedIds: updatedAttemptedIds,
           scores: updatedScores,
         },
       };
@@ -326,6 +344,7 @@ export async function getAllSimulatedStudents(): Promise<StudentSimOverview[]> {
                   nisn,
                   studentName: row.student_name || "Siswa",
                   completedIds,
+                  attemptedIds: Array.isArray(answers.attemptedIds) ? answers.attemptedIds : completedIds,
                   scores,
                   stars: answers.stars || {},
                   lastUpdated: row.submitted_at || new Date().toISOString(),

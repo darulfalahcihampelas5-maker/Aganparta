@@ -663,6 +663,7 @@ export default function DashboardStudent() {
     return () => clearTimeout(timer);
   }, []);
 
+  const [simConfig, setSimConfig] = useState<any>(null);
   const studentData = student;
   useEffect(() => {
     if (!student?.kelas) return;
@@ -670,12 +671,25 @@ export default function DashboardStudent() {
       const docRef = doc(db, "config", "simulasiBK");
       const unsubscribe = onSnapshot(docRef, (snap) => {
         if (snap.exists()) {
-          const activeClasses = snap.data().activeClasses || [];
-          setIsSimulasiEnabled(activeClasses.includes(student.kelas));
+          const data = snap.data();
+          const activeClasses = data.activeClasses || [];
+          const classConfigs = data.classConfigs || {};
+          
+          const isEnabled = activeClasses.includes(student.kelas);
+          setIsSimulasiEnabled(isEnabled);
+          
+          if (isEnabled && classConfigs[student.kelas]) {
+            setSimConfig(classConfigs[student.kelas]);
+          } else {
+            // Default if old format or no specific config
+            setSimConfig({ active: isEnabled, chapters: ["dekomposisi", "pola", "abstraksi", "algoritma", "classic_sim", "modul_kuis"] });
+          }
         } else {
           setIsSimulasiEnabled(false);
+          setSimConfig(null);
         }
       });
+      return () => unsubscribe();
     });
   }, [student?.kelas]);
 
@@ -751,23 +765,6 @@ export default function DashboardStudent() {
     }
   }, [showPhotoWarning]);
 
-  useEffect(() => {
-    if (!student?.kelas) return;
-    import("firebase/firestore").then(({ doc, onSnapshot }) => {
-      const docRef = doc(db, "config", "simulasiBK");
-      const unsubscribe = onSnapshot(docRef, (snap) => {
-        if (snap.exists()) {
-          const activeClasses = snap.data().activeClasses || [];
-          setIsSimulasiEnabled(activeClasses.includes(student.kelas));
-        } else {
-          setIsSimulasiEnabled(false);
-        }
-      });
-      return () => unsubscribe();
-    });
-  }, [student?.kelas]);
-
-  // Sync student data if it changes in firestore (like profile image)
   useEffect(() => {
     initAuth(
       () => setNeedsDriveAuth(false),
@@ -6863,6 +6860,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       nisn: student?.nisn,
                       kelas: student?.kelas,
                     }}
+                    simConfig={simConfig}
                     onBackToDashboard={() => setActiveMenu("dashboard")}
                   />
                 </div>

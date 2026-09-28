@@ -44,12 +44,17 @@ interface ComputationalThinkingSimulationProps {
     nisn?: string;
     kelas?: string;
   };
+  simConfig?: {
+    active: boolean;
+    chapters: string[];
+  };
   onBackToDashboard?: () => void;
 }
 
 export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimulationProps> = ({
   userRole,
   currentUser,
+  simConfig,
   onBackToDashboard,
 }) => {
   const [selectedLevelId, setSelectedLevelId] = useState<LevelDifficulty>("pemula");
@@ -209,72 +214,81 @@ export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimu
 
         {/* Navigation Tabs are now here at the top */}
         <div className="relative z-10 mt-6 pt-6 border-t border-slate-800 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              sound.playClick();
-              setActiveTab("daily_life");
-            }}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
-              activeTab === "daily_life"
-                ? "bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-600/20"
-                : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
-            }`}
-          >
-            <Boxes className="w-4 h-4 text-emerald-300" />
-            <span>40 Simulator Siswa (10/Pilar)</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/20 font-black text-emerald-100">
-              40 Level
-            </span>
-          </button>
+          {/* Daily Life is visible if any of the 4 pillars are active */}
+          {(userRole === "teacher" || ["dekomposisi", "pola", "abstraksi", "algoritma"].some(p => simConfig?.chapters.includes(p))) && (
+            <button
+              type="button"
+              onClick={() => {
+                sound.playClick();
+                setActiveTab("daily_life");
+              }}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
+                activeTab === "daily_life"
+                  ? "bg-emerald-600 text-white border-emerald-500 shadow-md shadow-emerald-600/20"
+                  : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
+              }`}
+            >
+              <Boxes className="w-4 h-4 text-emerald-300" />
+              <span>40 Simulator Siswa (10/Pilar)</span>
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/20 font-black text-emerald-100">
+                40 Level
+              </span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => {
-              sound.playClick();
-              setActiveTab("classic_sim");
-            }}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
-              activeTab === "classic_sim"
-                ? "bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/20"
-                : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
-            }`}
-          >
-            <Gamepad2 className="w-4 h-4" />
-            <span>Lab Virtual Klasik</span>
-          </button>
+          {(userRole === "teacher" || simConfig?.chapters.includes("classic_sim")) && (
+            <button
+              type="button"
+              onClick={() => {
+                sound.playClick();
+                setActiveTab("classic_sim");
+              }}
+              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
+                activeTab === "classic_sim"
+                  ? "bg-indigo-600 text-white border-indigo-500 shadow-md shadow-indigo-600/20"
+                  : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
+              }`}
+            >
+              <Gamepad2 className="w-4 h-4" />
+              <span>Lab Virtual Klasik</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => {
-              sound.playClick();
-              setActiveTab("modul");
-            }}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
-              activeTab === "modul"
-                ? "bg-sky-600 text-white border-sky-500 shadow-md shadow-sky-600/20"
-                : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
-            }`}
-          >
-            <BookOpen className="w-4 h-4" />
-            <span>Modul Materi</span>
-          </button>
+          {(userRole === "teacher" || simConfig?.chapters.includes("modul_kuis")) && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  sound.playClick();
+                  setActiveTab("modul");
+                }}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
+                  activeTab === "modul"
+                    ? "bg-sky-600 text-white border-sky-500 shadow-md shadow-sky-600/20"
+                    : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <BookOpen className="w-4 h-4" />
+                <span>Modul Materi</span>
+              </button>
 
-          <button
-            type="button"
-            onClick={() => {
-              sound.playClick();
-              setActiveTab("kuis");
-            }}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
-              activeTab === "kuis"
-                ? "bg-amber-600 text-white border-amber-500 shadow-md shadow-amber-600/20"
-                : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
-            }`}
-          >
-            <HelpCircle className="w-4 h-4" />
-            <span>Kuis Interaktif</span>
-          </button>
+              <button
+                type="button"
+                onClick={() => {
+                  sound.playClick();
+                  setActiveTab("kuis");
+                }}
+                className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
+                  activeTab === "kuis"
+                    ? "bg-amber-600 text-white border-amber-500 shadow-md shadow-amber-600/20"
+                    : "bg-slate-800/80 text-slate-300 border-slate-700 hover:bg-slate-700 hover:text-white"
+                }`}
+              >
+                <HelpCircle className="w-4 h-4" />
+                <span>Kuis Interaktif</span>
+              </button>
+            </>
+          )}
 
           <button
             type="button"
@@ -381,6 +395,7 @@ export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimu
           <DailyLifeSimulatorEngine
             userRole={userRole}
             currentUser={currentUser}
+            simConfig={simConfig}
           />
         )}
 
