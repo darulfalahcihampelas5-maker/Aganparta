@@ -973,7 +973,25 @@ export default function DashboardTeacher() {
   const [feedbackReason, setFeedbackReason] = useState("");
   const [isRejecting, setIsRejecting] = useState(false);
   const [isMassAuditing, setIsMassAuditing] = useState(false);
+  const [isRefreshingSubmissions, setIsRefreshingSubmissions] = useState(false);
   const [isSavingGrade, setIsSavingGrade] = useState(false);
+
+  const handleRefreshSubmissions = async () => {
+    setIsRefreshingSubmissions(true);
+    try {
+      const snap = await getDocs(collection(db, "submissions"));
+      const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      trackUsage(snap.size, 0);
+      setSubmissionsList(subs);
+      setLocalCache("firas_cache_submissions", subs);
+      showAlert("Data Disinkronkan", `Berhasil memuat ${subs.length} data respon tugas terbaru dari server.`, "alert");
+    } catch (e: any) {
+      console.warn("Gagal menyinkronkan data tugas:", e);
+      showAlert("Gagal", "Terjadi kendala saat menyinkronkan data respon tugas.", "alert");
+    } finally {
+      setIsRefreshingSubmissions(false);
+    }
+  };
 
   
   const [examToReset, setExamToReset] = useState<any>(null);
@@ -1584,48 +1602,24 @@ export default function DashboardTeacher() {
         }
       }
 
-      // 4. Submissions (Solution B: Targeted Query for last 7 days OR status != "sudah dinilai")
+      // 4. Submissions (Direct query to ensure all new/pending/graded submissions appear)
       // Highly dynamic, obeys forceRefresh
-      const cachedSubmissions = !forceRefresh && getLocalCache<any[]>("firas_cache_submissions", 10 * 60 * 1000);
+      const cachedSubmissions = !forceRefresh && getLocalCache<any[]>("firas_cache_submissions", 2 * 60 * 1000);
       if (cachedSubmissions && cachedSubmissions.length > 0) {
         setSubmissionsList(cachedSubmissions);
       } else {
         try {
-          const sevenDaysAgo = new Date();
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-          const sevenDaysAgoIso = sevenDaysAgo.toISOString();
-
-          // Query A: Submissions in the last 7 days (both graded and ungraded)
-          const qRecent = query(
-            collection(db, "submissions"),
-            where("submittedAt", ">=", sevenDaysAgoIso)
-          );
-
-          // Query B: Ungraded/pending/rejected submissions (even if older than 7 days)
-          const qPending = query(
-            collection(db, "submissions"),
-            where("status", "!=", "sudah dinilai")
-          );
-
-          const [snapRecent, snapPending] = await Promise.all([
-            getDocs(qRecent),
-            getDocs(qPending)
-          ]);
-
-          // Merge by ID to prevent duplicates
-          const mergedDocs = new Map();
-          snapRecent.docs.forEach((d) => mergedDocs.set(d.id, { id: d.id, ...d.data() }));
-          snapPending.docs.forEach((d) => mergedDocs.set(d.id, { id: d.id, ...d.data() }));
-
-          const subs = Array.from(mergedDocs.values());
-          trackUsage(snapRecent.size + snapPending.size, 0);
-
-          if (subs.length > 0) {
-            setSubmissionsList(subs);
-            setLocalCache("firas_cache_submissions", subs);
+          const snap = await getDocs(collection(db, "submissions"));
+          const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+          trackUsage(snap.size, 0);
+          setSubmissionsList(subs);
+          setLocalCache("firas_cache_submissions", subs);
+        } catch (e: any) {
+          console.warn("Failed fetching submissions directly:", e);
+          const stale = getLocalCache<any[]>("firas_cache_submissions", 24 * 60 * 60 * 1000);
+          if (stale && stale.length > 0) {
+            setSubmissionsList(stale);
           }
-        } catch (e) {
-          console.warn("Failed fetching submissions with targeted query:", e);
         }
       }
 
@@ -7524,18 +7518,29 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                 Tinjau pengumpulan tugas siswa dan kelola nilai tugas secara efisien.
                               </p>
                             </div>
-                            <button
-                              onClick={handleMassAudit}
-                              disabled={isMassAuditing}
-                              className="px-8 py-5 bg-[#85cc00] text-slate-950 rounded-2xl text-xs font-black uppercase tracking-widest hover:brightness-110 shadow-xl shadow-[#85cc00]/20 transition-all active:scale-95 flex items-center gap-3 disabled:opacity-50"
-                            >
-                              {isMassAuditing ? (
-                                <RefreshCw className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Zap className="w-4 h-4" />
-                              )}
-                              Audit Semua Respon
-                            </button>
+                            <div className="flex items-center gap-3 flex-wrap justify-center md:justify-end">
+                              <button
+                                onClick={handleRefreshSubmissions}
+                                disabled={isRefreshingSubmissions}
+                                className="px-6 py-5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-2xl text-xs font-black uppercase tracking-widest shadow-md transition-all active:scale-95 flex items-center gap-2.5 disabled:opacity-50 cursor-pointer"
+                                title="Perbarui daftar pengumpulan tugas siswa secara langsung dari server"
+                              >
+                                <RefreshCw className={`w-4 h-4 text-[#85cc00] ${isRefreshingSubmissions ? "animate-spin" : ""}`} />
+                                {isRefreshingSubmissions ? "Menyinkronkan..." : "Segarkan Respon"}
+                              </button>
+                              <button
+                                onClick={handleMassAudit}
+                                disabled={isMassAuditing}
+                                className="px-8 py-5 bg-[#85cc00] text-slate-950 rounded-2xl text-xs font-black uppercase tracking-widest hover:brightness-110 shadow-xl shadow-[#85cc00]/20 transition-all active:scale-95 flex items-center gap-3 disabled:opacity-50 cursor-pointer"
+                              >
+                                {isMassAuditing ? (
+                                  <RefreshCw className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Zap className="w-4 h-4" />
+                                )}
+                                Audit Semua Respon
+                              </button>
+                            </div>
                           </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 bg-white p-8 sm:p-10 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40">
@@ -7647,17 +7652,17 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                     const filtered = submissionsList
                                       .filter((sub) => {
                                         const matchTask = selectedAssignmentFilter
-                                          ? sub.assignmentId ===
-                                            selectedAssignmentFilter
+                                          ? String(sub.assignmentId) === String(selectedAssignmentFilter)
                                           : true;
+                                        const student = studentsList.find(s => isSameNisn(s.nisn, sub.nisn));
+                                        const studentClass = sub.kelas || student?.kelas || "";
                                         const matchClass = selectedClassFilter
-                                          ? isClassMatch(sub.kelas, selectedClassFilter)
+                                          ? isClassMatch(studentClass, selectedClassFilter)
                                           : true;
-                                        const student = studentsList.find(s => s.nisn === sub.nisn);
                                         const studentDisplayName = (student?.displayName || student?.studentName || student?.name || sub.studentName || "").toLowerCase();
                                         const searchQuery = selectedStudentSearchFilter.trim().toLowerCase();
                                         const matchStudent = searchQuery
-                                          ? studentDisplayName.includes(searchQuery) || (sub.nisn && sub.nisn.toLowerCase().includes(searchQuery))
+                                          ? studentDisplayName.includes(searchQuery) || (sub.nisn && String(sub.nisn).toLowerCase().includes(searchQuery))
                                           : true;
                                         return matchTask && matchClass && matchStudent;
                                       })
@@ -7695,9 +7700,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
 
                                     return filtered.map((sub, idx) => {
                                       const assignment = assignmentsList.find(
-                                        (a) => a.id === sub.assignmentId,
+                                        (a) => String(a.id) === String(sub.assignmentId),
                                       );
-                                      const student = studentsList.find(s => s.nisn === sub.nisn);
+                                      const student = studentsList.find(s => isSameNisn(s.nisn, sub.nisn));
                                       const studentDisplayName = student?.displayName || student?.studentName || student?.name || sub.studentName || "Siswa";
                                       const studentKelas = student?.kelas || sub.kelas || "-";
                                       const isTruePerbaikan = !!sub.resubmittedAt && (sub.wasRejected === true || !!sub.keterangan || sub.status === "ditolak");
@@ -10399,10 +10404,10 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
         }}
         submission={selectedSubmission}
         assignment={assignmentsList.find(
-          (a) => a.id === selectedSubmission?.assignmentId
+          (a) => String(a.id) === String(selectedSubmission?.assignmentId)
         )}
         student={studentsList.find(
-          (s) => s.nisn === selectedSubmission?.nisn
+          (s) => isSameNisn(s.nisn, selectedSubmission?.nisn)
         )}
         gradeValue={gradeValue}
         setGradeValue={setGradeValue}

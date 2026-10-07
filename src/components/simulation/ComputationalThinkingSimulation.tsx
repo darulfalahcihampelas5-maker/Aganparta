@@ -203,12 +203,12 @@ export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimu
               }}
               className={`p-6 rounded-[2rem] text-left transition-all cursor-pointer border-2 relative overflow-hidden group bg-white ${
                 activeTab === "daily_life"
-                  ? "border-[#85cc00] shadow-xl shadow-[#85cc00]/20 scale-[1.02]"
-                  : "border-emerald-100 hover:border-[#85cc00]/50 hover:bg-emerald-50/10"
+                  ? "border-[#85cc00] shadow-xl shadow-[#85cc00]/10 scale-[1.02]"
+                  : "border-emerald-100 hover:border-[#85cc00]/30"
               }`}
             >
               <div className="relative z-10">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 transition-colors ${activeTab === 'daily_life' ? 'bg-[#85cc00]/20 text-[#85cc00]' : 'bg-emerald-50 text-emerald-600'}`}>
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 transition-colors ${activeTab === 'daily_life' ? 'bg-slate-50 text-[#85cc00]' : 'bg-slate-50 text-emerald-600'}`}>
                   <Boxes className="w-7 h-7" />
                 </div>
                 <h3 className="text-xl font-black uppercase tracking-tight text-emerald-950">
@@ -227,9 +227,7 @@ export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimu
                 </div>
               </div>
               
-              {/* Green Transition Background Decoration */}
-              <div className={`absolute -right-10 -bottom-10 w-48 h-48 rounded-full opacity-[0.08] transition-transform duration-700 group-hover:scale-125 ${activeTab === 'daily_life' ? 'bg-[#85cc00]' : 'bg-emerald-400'}`}></div>
-              <div className={`absolute top-0 right-0 w-full h-full bg-gradient-to-br from-transparent via-transparent to-[#85cc00]/5 transition-opacity duration-500 ${activeTab === 'daily_life' ? 'opacity-100' : 'opacity-0'}`}></div>
+              {/* Clean White Background with only Border and Shadow for Active State */}
             </button>
           )}
 
@@ -242,12 +240,12 @@ export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimu
               }}
               className={`p-6 rounded-[2rem] text-left transition-all cursor-pointer border-2 relative overflow-hidden group bg-white ${
                 activeTab === "classic_sim"
-                  ? "border-indigo-600 shadow-xl shadow-indigo-600/20 scale-[1.02]"
-                  : "border-indigo-100 hover:border-indigo-400 hover:bg-indigo-50/10"
+                  ? "border-indigo-600 shadow-xl shadow-indigo-600/10 scale-[1.02]"
+                  : "border-indigo-100 hover:border-indigo-400"
               }`}
             >
               <div className="relative z-10">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 transition-colors ${activeTab === 'classic_sim' ? 'bg-indigo-100 text-indigo-600' : 'bg-indigo-50 text-indigo-600'}`}>
+                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center mb-4 transition-colors ${activeTab === 'classic_sim' ? 'bg-slate-50 text-indigo-600' : 'bg-slate-50 text-indigo-600'}`}>
                   <Gamepad2 className="w-7 h-7" />
                 </div>
                 <h3 className={`text-xl font-black uppercase tracking-tight ${activeTab === 'classic_sim' ? 'text-indigo-950' : 'text-indigo-900'}`}>
@@ -262,7 +260,7 @@ export const ComputationalThinkingSimulation: React.FC<ComputationalThinkingSimu
                   </span>
                 </div>
               </div>
-              <div className={`absolute -right-6 -bottom-6 w-32 h-32 rounded-full opacity-5 transition-transform group-hover:scale-150 bg-indigo-400`}></div>
+              {/* Clean White Background */}
             </button>
           )}
         </div>

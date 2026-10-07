@@ -2199,8 +2199,6 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const fetchSubmissions = async () => {
     if (!student?.nisn) return [];
     const cacheKey = `firas_cache_submissions_${student.nisn}`;
-    const cached = getLocalCache<any[]>(cacheKey, 1 * 60 * 60 * 1000);
-    if (cached) return cached;
 
     try {
       const snapshot = await getDocs(query(collection(db, "submissions"), where("nisn", "==", student.nisn)));
@@ -2221,7 +2219,11 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const { data: submissionsList = EMPTY_ARRAY, error: errSubmissions, mutate: mutateSubmissions } = useSWR(
     student?.nisn ? ['submissions', student.nisn] : null,
     fetchSubmissions,
-    { refreshInterval: 0, revalidateOnFocus: false }
+    { 
+      fallbackData: student?.nisn ? (getLocalCache<any[]>(`firas_cache_submissions_${student.nisn}`, 24 * 60 * 60 * 1000) || undefined) : undefined,
+      revalidateOnFocus: true,
+      revalidateOnMount: true
+    }
   );
 
   const fetchFinalGrades = async () => {
@@ -2920,7 +2922,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         pubDate.getDate() === now.getDate() &&
         pubDate.getMonth() === now.getMonth() &&
         pubDate.getFullYear() === now.getFullYear();
-      const isMengumpul = submissionsList.some((s) => s.assignmentId === a.id);
+      const isMengumpul = submissionsList.some((s) => 
+        (String(s.assignmentId) === String(a.id) || s.id === `SUB-${student.nisn}-${a.id}`) &&
+        (isSameNisn(s.nisn, student.nisn) || !s.nisn)
+      );
       return isToday && !isMengumpul && pubDate <= now;
     });
 
@@ -2972,7 +2977,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           return !isDinilaiEntry?.hiddenByStudents?.includes(student.nisn);
         })
         .map((sub) => {
-          const assignment = assignmentsList.find((a) => a.id === sub.assignmentId);
+          const assignment = assignmentsList.find((a) => String(a.id) === String(sub.assignmentId));
           return {
             id: sub.id,
             title: assignment ? assignment.materi : "Data Terhapus",
@@ -3031,8 +3036,11 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     const studentAssignments = assignmentsList.filter(a => isAssignmentForClass(a, student.kelas));
     studentAssignments.forEach(a => {
-      const sub = submissionsList.find(s => s.assignmentId === a.id && s.nisn === student.nisn);
-      const fGrade = finalGradesList.find(f => f.assignmentId === a.id && f.nisn === student.nisn);
+      const sub = submissionsList.find(s => 
+        (String(s.assignmentId) === String(a.id) || s.id === `SUB-${student.nisn}-${a.id}`) && 
+        (isSameNisn(s.nisn, student.nisn) || !s.nisn)
+      );
+      const fGrade = finalGradesList.find(f => (f.assignmentId === a.id || f.id === `${a.id}_${student.nisn}`) && isSameNisn(f.nisn, student.nisn));
       const val = sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" ? sub.nilai : fGrade?.nilai;
       if (val !== undefined && val !== null && val !== "") {
         tugasVals.push(Number(val));
@@ -3130,8 +3138,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         }
       }
 
-      const sub = submissionsList.find((s) => s.assignmentId === assignment.id && (s.nisn === student.nisn || !s.nisn));
-      const fGrade = finalGradesList.find((f) => (f.assignmentId === assignment.id || f.id === `${assignment.id}_${student.nisn}`) && f.nisn === student.nisn);
+      const sub = submissionsList.find((s) => 
+        (String(s.assignmentId) === String(assignment.id) || s.id === `SUB-${student.nisn}-${assignment.id}`) && 
+        (isSameNisn(s.nisn, student.nisn) || !s.nisn)
+      );
+      const fGrade = finalGradesList.find((f) => 
+        (String(f.assignmentId) === String(assignment.id) || f.id === `${assignment.id}_${student.nisn}` || f.id === `FG-${student.nisn}-${assignment.id}`) && 
+        isSameNisn(f.nisn, student.nisn)
+      );
       const gradeVal = sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" 
         ? sub.nilai 
         : (fGrade?.nilai !== undefined && fGrade?.nilai !== null && fGrade?.nilai !== "" ? fGrade.nilai : null);
@@ -3738,8 +3752,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         status: "menunggu penilaian guru",
       };
 
+      const cacheKey = `firas_cache_submissions_${student.nisn}`;
+      const currentList = Array.isArray(submissionsList) ? submissionsList : [];
+      const updatedList = [
+        ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
+        newSubmissionObj
+      ];
+
       // Optimistic update
-      mutateSubmissions([...submissionsList.filter((s: any) => s.id !== submissionId), newSubmissionObj], false);
+      setLocalCache(cacheKey, updatedList);
+      mutateSubmissions(updatedList, false);
 
       await setDoc(
         doc(db, "submissions", submissionId),
@@ -3748,7 +3770,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       );
 
       trackUsage(0, 1); // Track write
-      mutateSubmissions(); // Refetch properly
+      setLocalCache(cacheKey, updatedList);
+      mutateSubmissions(updatedList, false);
 
       setUploadMessage({
         text: "Tugas berhasil dikumpulkan!",
@@ -7775,10 +7798,18 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         status: "menunggu penilaian guru",
                       };
 
+                      const cacheKey = `firas_cache_submissions_${student.nisn}`;
+                      const currentList = Array.isArray(submissionsList) ? submissionsList : [];
+                      const updatedList = [
+                        ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
+                        newSubmissionObj
+                      ];
+
                       setUploadProgress(70);
 
                       try {
-                        mutateSubmissions([...submissionsList.filter((s: any) => s.id !== submissionId), newSubmissionObj], false);
+                        setLocalCache(cacheKey, updatedList);
+                        mutateSubmissions(updatedList, false);
                       } catch (e) {
                         console.warn("Optimistic update error:", e);
                       }
@@ -7792,7 +7823,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       setSuccessTugasMateri(selectedTugas?.materi || "Materi Pelajaran");
                       setUploadProgress(100);
                       trackUsage(0, 1);
-                      mutateSubmissions();
+                      setLocalCache(cacheKey, updatedList);
+                      mutateSubmissions(updatedList, false);
 
                       setIsUploadModalOpen(false);
                       setShowSuccessOverlay(true);
@@ -7935,8 +7967,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                           status: "menunggu penilaian guru",
                         };
 
+                        const cacheKey = `firas_cache_submissions_${student.nisn}`;
+                        const currentList = Array.isArray(submissionsList) ? submissionsList : [];
+                        const updatedList = [
+                          ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
+                          newSubmissionObj
+                        ];
+
                         try {
-                          mutateSubmissions([...submissionsList.filter((s: any) => s.id !== submissionId), newSubmissionObj], false);
+                          setLocalCache(cacheKey, updatedList);
+                          mutateSubmissions(updatedList, false);
                         } catch (e) {
                           console.warn("Optimistic update error:", e);
                         }
@@ -7950,7 +7990,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         setSuccessTugasMateri(selectedTugas?.materi || "Materi Pelajaran");
                         setUploadProgress(100);
                         trackUsage(0, 1);
-                        mutateSubmissions();
+                        setLocalCache(cacheKey, updatedList);
+                        mutateSubmissions(updatedList, false);
 
                         setIsUploadModalOpen(false);
                         setShowSuccessOverlay(true);
