@@ -7,6 +7,7 @@ import {
   query,
   where,
   doc,
+  onSnapshot,
 } from "firebase/firestore";
 import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc } from "../lib/supabaseSync";
 import { db, auth, storage } from "../lib/firebase";
@@ -2196,12 +2197,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     return rawAssignments.filter((assign: any) => isAssignmentForClass(assign, student.kelas));
   }, [rawAssignments, student]);
 
+  const currentNisn = (student?.nisn || student?.nis || student?.id || "").toString().trim();
+
   const fetchSubmissions = async () => {
-    if (!student?.nisn) return [];
-    const cacheKey = `firas_cache_submissions_${student.nisn}`;
+    if (!currentNisn) return [];
+    const cacheKey = `firas_cache_submissions_${currentNisn}`;
 
     try {
-      const rawNisn = String(student.nisn).trim();
+      const rawNisn = currentNisn;
       const unpadded = rawNisn.replace(/^0+/, "");
       const padded = unpadded.padStart(10, "0");
       const variants = Array.from(new Set([rawNisn, unpadded, padded].filter(Boolean)));
@@ -2224,15 +2227,58 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     }
   };
 
-  const { data: submissionsList = EMPTY_ARRAY, error: errSubmissions, mutate: mutateSubmissions } = useSWR(
-    student?.nisn ? ['submissions', student.nisn] : null,
+  const { data: rawSubmissionsList = EMPTY_ARRAY, error: errSubmissions, mutate: mutateSubmissions } = useSWR(
+    currentNisn ? ['submissions', currentNisn] : null,
     fetchSubmissions,
     { 
-      fallbackData: student?.nisn ? (getLocalCache<any[]>(`firas_cache_submissions_${student.nisn}`, 24 * 60 * 60 * 1000) || undefined) : undefined,
+      fallbackData: currentNisn ? (getLocalCache<any[]>(`firas_cache_submissions_${currentNisn}`, 24 * 60 * 60 * 1000) || undefined) : undefined,
       revalidateOnFocus: true,
       revalidateOnMount: true
     }
   );
+
+  // Real-time listener for current student's submissions to ensure instantaneous updates
+  const [realtimeSubmissions, setRealtimeSubmissions] = useState<any[] | null>(() => {
+    if (!currentNisn) return null;
+    return getLocalCache<any[]>(`firas_cache_submissions_${currentNisn}`, 24 * 60 * 60 * 1000) || null;
+  });
+
+  useEffect(() => {
+    if (!currentNisn) return;
+    const cacheKey = `firas_cache_submissions_${currentNisn}`;
+    const unpadded = currentNisn.replace(/^0+/, "");
+    const padded = unpadded.padStart(10, "0");
+    const variants = Array.from(new Set([currentNisn, unpadded, padded].filter(Boolean)));
+
+    const q = variants.length > 1
+      ? query(collection(db, "submissions"), where("nisn", "in", variants))
+      : query(collection(db, "submissions"), where("nisn", "==", currentNisn));
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
+        setRealtimeSubmissions(data);
+        setLocalCache(cacheKey, data);
+        mutateSubmissions(data, false);
+      },
+      (error) => {
+        console.warn("Realtime student submissions snapshot error:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentNisn, mutateSubmissions]);
+
+  const submissionsList = useMemo(() => {
+    if (realtimeSubmissions && realtimeSubmissions.length > 0) return realtimeSubmissions;
+    if (Array.isArray(rawSubmissionsList) && rawSubmissionsList.length > 0) return rawSubmissionsList;
+    if (currentNisn) {
+      const cached = getLocalCache<any[]>(`firas_cache_submissions_${currentNisn}`, 24 * 60 * 60 * 1000);
+      if (cached && cached.length > 0) return cached;
+    }
+    return EMPTY_ARRAY;
+  }, [realtimeSubmissions, rawSubmissionsList, currentNisn]);
 
   const fetchFinalGrades = async () => {
     if (!student?.nisn) return [];
@@ -3146,13 +3192,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         }
       }
 
-      const sub = submissionsList.find((s) => 
-        (String(s.assignmentId) === String(assignment.id) || s.id === `SUB-${student.nisn}-${assignment.id}`) && 
-        (isSameNisn(s.nisn, student.nisn) || !s.nisn)
-      );
+      const sub = submissionsList.find((s) => {
+        const matchAsg = String(s.assignmentId).trim() === String(assignment.id).trim() ||
+          s.id === `SUB-${student.nisn}-${assignment.id}` ||
+          (s.id && (s.id.endsWith(`-${assignment.id}`) || s.id.includes(assignment.id)));
+        const matchStudent = isSameNisn(s.nisn, student.nisn) || isSameNisn(s.nis, student.nisn) || !s.nisn;
+        return matchAsg && matchStudent;
+      });
       const fGrade = finalGradesList.find((f) => 
-        (String(f.assignmentId) === String(assignment.id) || f.id === `${assignment.id}_${student.nisn}` || f.id === `FG-${student.nisn}-${assignment.id}`) && 
-        isSameNisn(f.nisn, student.nisn)
+        (String(f.assignmentId).trim() === String(assignment.id).trim() || f.id === `${assignment.id}_${student.nisn}` || f.id === `FG-${student.nisn}-${assignment.id}`) && 
+        (isSameNisn(f.nisn, student.nisn) || isSameNisn(f.nis, student.nisn))
       );
       const gradeVal = sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" 
         ? sub.nilai 
@@ -3768,6 +3817,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       ];
 
       // Optimistic update
+      setRealtimeSubmissions(updatedList);
       setLocalCache(cacheKey, updatedList);
       mutateSubmissions(updatedList, false);
 
@@ -3778,6 +3828,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       );
 
       trackUsage(0, 1); // Track write
+      setRealtimeSubmissions(updatedList);
       setLocalCache(cacheKey, updatedList);
       mutateSubmissions(updatedList, false);
 
@@ -5536,8 +5587,20 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                               </thead>
                               <tbody className="bg-white">
                                 {displayedTasks.slice(0, visibleTasksCount).map((task, idx) => {
-                                  const isSubmitted = !!task.submission;
-                                  const isCompleted = task.status === "selesai";
+                                  const currentSubmission = task.submission || submissionsList.find((s: any) => {
+                                    const matchAsg = String(s.assignmentId || "").trim() === String(task.id || "").trim() ||
+                                      s.id === `SUB-${student?.nisn}-${task.id}` ||
+                                      s.id === `SUB-${student?.nis}-${task.id}` ||
+                                      s.id === `SUB-${student?.id}-${task.id}` ||
+                                      (s.id && (s.id.endsWith(`-${task.id}`) || s.id.includes(task.id)));
+                                    const matchStudent = isSameNisn(s.nisn, student?.nisn) || isSameNisn(s.nis, student?.nisn) || 
+                                      isSameNisn(s.nisn, student?.nis) || isSameNisn(s.nis, student?.nis) || 
+                                      isSameNisn(s.nisn, student?.id) || isSameNisn(s.nis, student?.id) || !s.nisn;
+                                    return matchAsg && matchStudent;
+                                  }) || null;
+
+                                  const isSubmitted = !!currentSubmission;
+                                  const isCompleted = task.status === "selesai" || isSubmitted;
                                   const isLate = task.status === "terlambat";
 
                                   // Calculate "Tugas Ke" based on the order of this task in its Bab
@@ -5556,11 +5619,12 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                       new Date(task.publishedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
                                   ) : "-";
 
-                                  const submittedDate = task.submission?.submittedAt ? new Date(task.submission.submittedAt).toLocaleDateString("id-ID", {
+                                  const subDate = currentSubmission?.submittedAt || task.submission?.submittedAt;
+                                  const submittedDate = subDate ? new Date(subDate).toLocaleDateString("id-ID", {
                                     day: "numeric",
                                     month: "short",
                                     year: "numeric"
-                                  }) + " " + new Date(task.submission.submittedAt).toLocaleTimeString("id-ID", {
+                                  }) + " " + new Date(subDate).toLocaleTimeString("id-ID", {
                                     hour: "2-digit",
                                     minute: "2-digit"
                                   }) + " WIB" : "-";
@@ -5596,19 +5660,20 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
                                       {/* 5. Kirim Link Tugas */}
                                       <td className="py-4 px-4 text-center whitespace-nowrap">
-                                        {task.submission?.status === "ditolak" ? (
+                                        {currentSubmission?.status === "ditolak" ? (
                                           <button 
-                                            onClick={() => setViewingTugas(task)}
-                                            className="px-4 py-2 bg-rose-50 text-rose-600 font-black uppercase tracking-widest text-[10px] rounded-lg transition-all hover:bg-rose-100 border border-rose-200 cursor-pointer shadow-sm"
+                                            onClick={() => setViewingTugas({ ...task, submission: currentSubmission })}
+                                            className="px-4 py-2 bg-rose-50 text-rose-600 font-black uppercase tracking-widest text-[10px] rounded-lg transition-all hover:bg-rose-100 border border-rose-200 cursor-pointer shadow-sm flex items-center justify-center gap-1.5 mx-auto"
                                           >
-                                            Lihat Alasan ❌
+                                            <span>Lihat Alasan ❌</span>
                                           </button>
                                         ) : isSubmitted ? (
                                           <button 
-                                            onClick={() => setViewingTugas(task)}
-                                            className="px-4 py-2 bg-blue-50 text-blue-600 font-black uppercase tracking-widest text-[10px] rounded-lg transition-all hover:bg-blue-100 border border-blue-200 cursor-pointer shadow-sm"
+                                            onClick={() => setViewingTugas({ ...task, submission: currentSubmission })}
+                                            className="px-4 py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 font-black uppercase tracking-widest text-[10px] rounded-lg transition-all shadow-sm cursor-pointer flex items-center justify-center gap-1.5 mx-auto"
                                           >
-                                            Lihat Hasil
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                                            <span>Lihat Hasil</span>
                                           </button>
                                         ) : (
                                           <button 
@@ -5663,13 +5728,13 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
                                       {/* 8. Nilai Akhir Tugas */}
                                       <td className="py-4 px-4 text-center whitespace-nowrap">
-                                        {task.submission?.status === "ditolak" ? (
+                                        {currentSubmission?.status === "ditolak" ? (
                                           <span className="inline-flex items-center px-2 py-1 text-[9px] font-black uppercase tracking-wider text-rose-600 bg-rose-50 border border-rose-100 rounded">
                                             Ditolak ❌
                                           </span>
-                                        ) : task.submission?.nilai ? (
+                                        ) : (currentSubmission?.nilai !== undefined && currentSubmission?.nilai !== null && currentSubmission?.nilai !== "") ? (
                                           <span className="inline-flex items-center gap-0.5 px-2 py-1 text-[11px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 rounded">
-                                            {task.submission.nilai} ✓
+                                            {currentSubmission.nilai} ✓
                                           </span>
                                         ) : isSubmitted ? (
                                           <span className="inline-flex items-center px-2 py-1 text-[9px] font-black uppercase tracking-wider text-amber-600 bg-amber-50 border border-amber-100 rounded">
@@ -7816,6 +7881,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       setUploadProgress(70);
 
                       try {
+                        setRealtimeSubmissions(updatedList);
                         setLocalCache(cacheKey, updatedList);
                         mutateSubmissions(updatedList, false);
                       } catch (e) {
@@ -7831,6 +7897,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       setSuccessTugasMateri(selectedTugas?.materi || "Materi Pelajaran");
                       setUploadProgress(100);
                       trackUsage(0, 1);
+                      setRealtimeSubmissions(updatedList);
                       setLocalCache(cacheKey, updatedList);
                       mutateSubmissions(updatedList, false);
 
@@ -7983,6 +8050,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         ];
 
                         try {
+                          setRealtimeSubmissions(updatedList);
                           setLocalCache(cacheKey, updatedList);
                           mutateSubmissions(updatedList, false);
                         } catch (e) {
@@ -7998,6 +8066,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         setSuccessTugasMateri(selectedTugas?.materi || "Materi Pelajaran");
                         setUploadProgress(100);
                         trackUsage(0, 1);
+                        setRealtimeSubmissions(updatedList);
                         setLocalCache(cacheKey, updatedList);
                         mutateSubmissions(updatedList, false);
 

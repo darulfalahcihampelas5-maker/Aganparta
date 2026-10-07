@@ -266,6 +266,20 @@ function getCollectionName(queryOrCollection: any): string {
   return "";
 }
 
+// Helper to compare NISN strings robustly
+function checkSameNisn(a: any, b: any): boolean {
+  const strA = String(a || "").trim();
+  const strB = String(b || "").trim();
+  if (!strA || !strB) return false;
+  if (strA === strB) return true;
+  const normA = strA.replace(/^0+/, "");
+  const normB = strB.replace(/^0+/, "");
+  if (normA && normB && normA === normB) return true;
+  const padA = strA.padStart(10, "0");
+  const padB = strB.padStart(10, "0");
+  return padA === padB;
+}
+
 // Helper to filter items client-side using Firebase Query filters
 function applyQueryFilters(collectionName: string, items: any[], queryOrCollection: any): any[] {
   const _query = queryOrCollection?._query;
@@ -279,25 +293,68 @@ function applyQueryFilters(collectionName: string, items: any[], queryOrCollecti
       const fieldName = Array.isArray(fieldSegments) ? fieldSegments[0] : (typeof filter.field === "string" ? filter.field : null);
       const op = filter.op;
       
-      let filterVal = filter.value?.stringValue ?? filter.value?.integerValue ?? filter.value?.booleanValue ?? filter.value;
-      if (filter.value && typeof filter.value === "object" && !filter.value.stringValue && !filter.value.integerValue && !filter.value.booleanValue) {
+      let filterVal: any;
+      if (filter.value?.arrayValue?.values && Array.isArray(filter.value.arrayValue.values)) {
+        filterVal = filter.value.arrayValue.values.map((v: any) => v.stringValue ?? v.integerValue ?? v.booleanValue ?? v);
+      } else if (Array.isArray(filter.value)) {
+        filterVal = filter.value;
+      } else if (filter.value?.stringValue !== undefined) {
+        filterVal = filter.value.stringValue;
+      } else if (filter.value?.integerValue !== undefined) {
+        filterVal = filter.value.integerValue;
+      } else if (filter.value?.booleanValue !== undefined) {
+        filterVal = filter.value.booleanValue;
+      } else if (filter.value && typeof filter.value === "object") {
         const keys = Object.keys(filter.value);
         if (keys.length === 1 && keys[0].endsWith("Value")) {
           filterVal = filter.value[keys[0]];
+        } else {
+          filterVal = filter.value;
         }
+      } else {
+        filterVal = filter.value;
       }
       
       if (fieldName && op && filterVal !== undefined) {
         filtered = filtered.filter(item => {
           const itemVal = item[fieldName];
           const sItemVal = itemVal === null || itemVal === undefined ? "" : String(itemVal).toLowerCase().trim();
-          const sFilterVal = String(filterVal).toLowerCase().trim();
+          const sFilterVal = typeof filterVal === "string" || typeof filterVal === "number" ? String(filterVal).toLowerCase().trim() : "";
           
           if (op === "==" || op === "EQUAL") {
+            if (fieldName === "nisn" || fieldName === "nis") {
+              return checkSameNisn(itemVal, filterVal);
+            }
             return sItemVal === sFilterVal;
           }
           if (op === "!=" || op === "NOT_EQUAL") {
+            if (fieldName === "nisn" || fieldName === "nis") {
+              return !checkSameNisn(itemVal, filterVal);
+            }
             return sItemVal !== sFilterVal;
+          }
+          if (op === "in" || op === "IN") {
+            const arr = Array.isArray(filterVal) ? filterVal : [filterVal];
+            if (fieldName === "nisn" || fieldName === "nis") {
+              return arr.some((v: any) => checkSameNisn(itemVal, v));
+            }
+            return arr.some((v: any) => String(v).toLowerCase().trim() === sItemVal);
+          }
+          if (op === "not-in" || op === "NOT_IN") {
+            const arr = Array.isArray(filterVal) ? filterVal : [filterVal];
+            if (fieldName === "nisn" || fieldName === "nis") {
+              return !arr.some((v: any) => checkSameNisn(itemVal, v));
+            }
+            return !arr.some((v: any) => String(v).toLowerCase().trim() === sItemVal);
+          }
+          if (op === "array-contains" || op === "ARRAY_CONTAINS") {
+            if (!Array.isArray(itemVal)) return false;
+            return itemVal.some((v: any) => String(v).toLowerCase().trim() === sFilterVal);
+          }
+          if (op === "array-contains-any" || op === "ARRAY_CONTAINS_ANY") {
+            if (!Array.isArray(itemVal)) return false;
+            const arr = Array.isArray(filterVal) ? filterVal : [filterVal];
+            return itemVal.some((iv: any) => arr.some((av: any) => String(av).toLowerCase().trim() === String(iv).toLowerCase().trim()));
           }
           if (op === ">=" || op === "GREATER_THAN_OR_EQUAL") {
             return Number(itemVal) >= Number(filterVal);
@@ -341,9 +398,23 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
   if (isSupabaseConfigured && supabase && collectionName) {
     try {
       if (collectionName === "final_grades") {
-        const { data, error } = await supabase.from("final_grades").select("*").limit(5000);
-        if (!error && Array.isArray(data)) {
-          const formatted = data.map((d) => ({
+        let allData: any[] = [];
+        let page = 0;
+        const pageSize = 1000;
+        while (true) {
+          const { data, error } = await supabase
+            .from("final_grades")
+            .select("*")
+            .range(page * pageSize, (page + 1) * pageSize - 1);
+          if (error || !data || data.length === 0) break;
+          allData.push(...data);
+          if (data.length < pageSize) break;
+          page++;
+          if (page >= 10) break;
+        }
+
+        if (allData.length > 0) {
+          const formatted = allData.map((d) => ({
             id: d.id,
             assignmentId: d.assignment_id || d.exam_id,
             examId: d.exam_id || d.assignment_id,
@@ -359,13 +430,14 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             remedialScore: d.remedial_score,
           }));
           const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          const docs = filtered.map(item => ({
-            id: item.id,
-            exists: () => true,
-            data: () => item
-          }));
-          // If we found data in Supabase, return it and skip Firestore
-          if (docs.length > 0) return wrapSnapshot(docs);
+          if (filtered.length > 0) {
+            const docs = filtered.map(item => ({
+              id: item.id,
+              exists: () => true,
+              data: () => item
+            }));
+            return wrapSnapshot(docs);
+          }
         }
       } else if (collectionName === "exams") {
         const { data, error } = await supabase.from("exams").select("*").limit(1000);
@@ -382,33 +454,93 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             createdAt: d.created_at,
           }));
           const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          const docs = filtered.map(item => ({
-            id: item.id,
-            exists: () => true,
-            data: () => item
-          }));
-          if (docs.length > 0) return wrapSnapshot(docs);
+          if (filtered.length > 0) {
+            const docs = filtered.map(item => ({
+              id: item.id,
+              exists: () => true,
+              data: () => item
+            }));
+            return wrapSnapshot(docs);
+          }
         }
       } else {
-        // Generic app_collections table
-        const { data, error } = await supabase
-          .from("app_collections")
-          .select("doc_id, data")
-          .eq("collection_name", collectionName)
-          .limit(5000);
+        // Generic app_collections table (e.g. submissions, studentsByNisn, assignments)
+        const _query = queryOrCollectionRef?._query;
+        let fetchedData: any[] = [];
 
-        if (!error && Array.isArray(data) && data.length > 0) {
-          const formatted = data.map((item: any) => ({
+        // Check if query contains a NISN filter for efficient querying
+        let nisnFilter: any = null;
+        if (_query && Array.isArray(_query.filters)) {
+          for (const f of _query.filters) {
+            const fName = Array.isArray(f.field?.segments) ? f.field.segments[0] : (typeof f.field === "string" ? f.field : null);
+            if (fName === "nisn" || fName === "nis") {
+              nisnFilter = f;
+              break;
+            }
+          }
+        }
+
+        if (nisnFilter) {
+          let filterVal: any;
+          if (nisnFilter.value?.arrayValue?.values && Array.isArray(nisnFilter.value.arrayValue.values)) {
+            filterVal = nisnFilter.value.arrayValue.values.map((v: any) => v.stringValue ?? v.integerValue ?? v.booleanValue ?? v);
+          } else if (Array.isArray(nisnFilter.value)) {
+            filterVal = nisnFilter.value;
+          } else {
+            filterVal = nisnFilter.value?.stringValue ?? nisnFilter.value;
+          }
+
+          const rawValues = Array.isArray(filterVal) ? filterVal : [filterVal];
+          const allNisnVariants: string[] = [];
+          rawValues.forEach((v: any) => {
+            if (!v) return;
+            const str = String(v).trim();
+            const unp = str.replace(/^0+/, "");
+            const pad = unp.padStart(10, "0");
+            allNisnVariants.push(str, unp, pad);
+          });
+          const uniqueVariants = Array.from(new Set(allNisnVariants.filter(Boolean)));
+
+          if (uniqueVariants.length > 0) {
+            const { data } = await supabase
+              .from("app_collections")
+              .select("doc_id, data")
+              .eq("collection_name", collectionName)
+              .in("data->>nisn", uniqueVariants);
+            if (Array.isArray(data)) fetchedData = data;
+          }
+        } else {
+          // Full collection query: Paginate to retrieve ALL records without 1000-row cap truncation
+          let page = 0;
+          const pageSize = 1000;
+          while (true) {
+            const { data, error } = await supabase
+              .from("app_collections")
+              .select("doc_id, data")
+              .eq("collection_name", collectionName)
+              .range(page * pageSize, (page + 1) * pageSize - 1);
+            if (error || !data || data.length === 0) break;
+            fetchedData.push(...data);
+            if (data.length < pageSize) break;
+            page++;
+            if (page >= 10) break; // safety limit at 10,000 items
+          }
+        }
+
+        if (fetchedData.length > 0) {
+          const formatted = fetchedData.map((item: any) => ({
             id: item.doc_id,
             ...item.data
           }));
           const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          const docs = filtered.map(item => ({
-            id: item.id,
-            exists: () => true,
-            data: () => item
-          }));
-          return wrapSnapshot(docs);
+          if (filtered.length > 0) {
+            const docs = filtered.map(item => ({
+              id: item.id,
+              exists: () => true,
+              data: () => item
+            }));
+            return wrapSnapshot(docs);
+          }
         }
       }
     } catch (err: any) {

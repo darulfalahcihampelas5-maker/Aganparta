@@ -13,6 +13,7 @@ import {
   writeBatch,
   query,
   where,
+  onSnapshot,
 } from "firebase/firestore";
 import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc } from "../lib/supabaseSync";
 import { OperationType, handleFirestoreError, getLocalCache, setLocalCache, clearTeacherCaches } from "../lib/firestoreUtils";
@@ -2570,18 +2571,19 @@ export default function DashboardTeacher() {
 
   useEffect(() => {
     if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas") {
-      const fetchLive = async () => {
-        try {
-          const snap = await getDocs(collection(db, "submissions"));
+      const q = collection(db, "submissions");
+      const unsubscribe = onSnapshot(
+        q,
+        (snap) => {
           const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-          trackUsage(snap.size, 0);
           setSubmissionsList(subs);
           setLocalCache("firas_cache_submissions", subs);
-        } catch (e) {
-          console.warn("Gagal sinkron otomatis respon tugas:", e);
+        },
+        (error) => {
+          console.warn("Gagal sinkron otomatis respon tugas realtime:", error);
         }
-      };
-      fetchLive();
+      );
+      return () => unsubscribe();
     }
   }, [activeMenu, activeNilaiTab]);
   const [activePresensiTab, setActivePresensiTab] = useState<
