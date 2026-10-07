@@ -2201,7 +2201,15 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     const cacheKey = `firas_cache_submissions_${student.nisn}`;
 
     try {
-      const snapshot = await getDocs(query(collection(db, "submissions"), where("nisn", "==", student.nisn)));
+      const rawNisn = String(student.nisn).trim();
+      const unpadded = rawNisn.replace(/^0+/, "");
+      const padded = unpadded.padStart(10, "0");
+      const variants = Array.from(new Set([rawNisn, unpadded, padded].filter(Boolean)));
+
+      const snapshot = variants.length > 1
+        ? await getDocs(query(collection(db, "submissions"), where("nisn", "in", variants)))
+        : await getDocs(query(collection(db, "submissions"), where("nisn", "==", rawNisn)));
+
       trackUsage(snapshot.size, 0);
       const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
       setLocalCache(cacheKey, data);

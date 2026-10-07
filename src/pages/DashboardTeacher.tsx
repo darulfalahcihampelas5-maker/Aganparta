@@ -2567,6 +2567,23 @@ export default function DashboardTeacher() {
   const [activeNilaiTab, setActiveNilaiTab] = useState<
     "cek-tugas" | "rekapitulasi"
   >("cek-tugas");
+
+  useEffect(() => {
+    if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas") {
+      const fetchLive = async () => {
+        try {
+          const snap = await getDocs(collection(db, "submissions"));
+          const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+          trackUsage(snap.size, 0);
+          setSubmissionsList(subs);
+          setLocalCache("firas_cache_submissions", subs);
+        } catch (e) {
+          console.warn("Gagal sinkron otomatis respon tugas:", e);
+        }
+      };
+      fetchLive();
+    }
+  }, [activeMenu, activeNilaiTab]);
   const [activePresensiTab, setActivePresensiTab] = useState<
     "input" | "preview" | "analisis"
   >("input");
@@ -7652,7 +7669,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                     const filtered = submissionsList
                                       .filter((sub) => {
                                         const matchTask = selectedAssignmentFilter
-                                          ? String(sub.assignmentId) === String(selectedAssignmentFilter)
+                                          ? String(sub.assignmentId).trim() === String(selectedAssignmentFilter).trim()
                                           : true;
                                         const student = studentsList.find(s => isSameNisn(s.nisn, sub.nisn));
                                         const studentClass = sub.kelas || student?.kelas || "";
@@ -7662,7 +7679,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                         const studentDisplayName = (student?.displayName || student?.studentName || student?.name || sub.studentName || "").toLowerCase();
                                         const searchQuery = selectedStudentSearchFilter.trim().toLowerCase();
                                         const matchStudent = searchQuery
-                                          ? studentDisplayName.includes(searchQuery) || (sub.nisn && String(sub.nisn).toLowerCase().includes(searchQuery))
+                                          ? studentDisplayName.includes(searchQuery) || 
+                                            (sub.nisn && String(sub.nisn).toLowerCase().includes(searchQuery)) ||
+                                            (student?.nisn && String(student.nisn).toLowerCase().includes(searchQuery))
                                           : true;
                                         return matchTask && matchClass && matchStudent;
                                       })
