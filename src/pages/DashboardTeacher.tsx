@@ -7670,6 +7670,10 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                   {(() => {
                                     const filtered = submissionsList
                                       .filter((sub) => {
+                                        // Filter out already graded tasks
+                                        const isGraded = sub.status === "sudah dinilai" || (sub.nilai !== undefined && sub.nilai !== null && sub.nilai !== "");
+                                        if (isGraded) return false;
+
                                         const matchTask = selectedAssignmentFilter
                                           ? String(sub.assignmentId).trim() === String(selectedAssignmentFilter).trim()
                                           : true;
