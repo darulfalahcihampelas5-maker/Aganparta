@@ -2421,20 +2421,8 @@ export default function DashboardTeacher() {
               return next;
             });
 
-            // 6. Clean up in-memory state and local cache
-            const updatedFinalGrades = finalGradesList.filter(
-              (g) => g.assignmentId !== colId && g.examId !== colId && !(g.id && g.id.includes(colId))
-            );
-            setFinalGradesList(updatedFinalGrades);
-            setLocalCache("firas_cache_final_grades", updatedFinalGrades);
-
-            const updatedSubmissions = submissionsList.filter(
-              (s) => s.assignmentId !== colId && !(s.id && s.id.includes(colId))
-            );
-            setSubmissionsList(updatedSubmissions);
-            setLocalCache("firas_cache_submissions", updatedSubmissions);
-
-            clearTeacherCaches();
+            // 6. Force refresh teacher data
+            await fetchTeacherData(true);
             setIsDeleteColumnModalOpen(false);
 
             showAlert(
