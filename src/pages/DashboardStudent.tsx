@@ -2280,19 +2280,27 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     return EMPTY_ARRAY;
   }, [realtimeSubmissions, rawSubmissionsList, currentNisn]);
 
+  const [realtimeFinalGrades, setRealtimeFinalGrades] = useState<any[] | null>(() => {
+    if (!currentNisn) return null;
+    return getLocalCache<any[]>(`firas_cache_final_grades_${currentNisn}`, 24 * 60 * 60 * 1000) || null;
+  });
+
   const fetchFinalGrades = async () => {
-    if (!student?.nisn) return [];
-    const cacheKey = `firas_cache_final_grades_${student.nisn}`;
-    const cached = getLocalCache<any[]>(cacheKey, 2 * 60 * 60 * 1000);
-    if (cached) return cached;
+    if (!currentNisn) return [];
+    const cacheKey = `firas_cache_final_grades_${currentNisn}`;
+
+    const rawNisn = currentNisn;
+    const unpadded = rawNisn.replace(/^0+/, "");
+    const padded = unpadded.padStart(10, "0");
+    const variants = Array.from(new Set([rawNisn, unpadded, padded].filter(Boolean)));
 
     if (isSupabaseConfigured && supabase) {
       try {
         const { data: supaData, error } = await supabase
           .from("final_grades")
           .select("*")
-          .eq("nisn", student.nisn);
-        if (!error && Array.isArray(supaData)) {
+          .in("nisn", variants);
+        if (!error && Array.isArray(supaData) && supaData.length > 0) {
           const data = supaData.map((d) => ({
             id: d.id,
             assignmentId: d.assignment_id || d.exam_id,
@@ -2318,7 +2326,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     }
 
     try {
-      const snapshot = await getDocs(query(collection(db, "final_grades"), where("nisn", "==", student.nisn)));
+      const snapshot = variants.length > 1
+        ? await getDocs(query(collection(db, "final_grades"), where("nisn", "in", variants)))
+        : await getDocs(query(collection(db, "final_grades"), where("nisn", "==", rawNisn)));
       trackUsage(snapshot.size, 0);
       const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
       setLocalCache(cacheKey, data);
@@ -2333,11 +2343,70 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     }
   };
 
-  const { data: finalGradesList = EMPTY_ARRAY, error: errFinalGrades, mutate: mutateFinalGrades } = useSWR(
-    student?.nisn ? ['final_grades', student.nisn] : null,
+  const { data: rawFinalGradesList = EMPTY_ARRAY, error: errFinalGrades, mutate: mutateFinalGrades } = useSWR(
+    currentNisn ? ['final_grades', currentNisn] : null,
     fetchFinalGrades,
-    { refreshInterval: 0, revalidateOnFocus: false }
+    { 
+      fallbackData: currentNisn ? (getLocalCache<any[]>(`firas_cache_final_grades_${currentNisn}`, 24 * 60 * 60 * 1000) || undefined) : undefined,
+      revalidateOnFocus: true,
+      revalidateOnMount: true,
+      refreshInterval: 15000
+    }
   );
+
+  // Real-time listener for current student's final grades
+  useEffect(() => {
+    if (!currentNisn) return;
+    const cacheKey = `firas_cache_final_grades_${currentNisn}`;
+    const unpadded = currentNisn.replace(/^0+/, "");
+    const padded = unpadded.padStart(10, "0");
+    const variants = Array.from(new Set([currentNisn, unpadded, padded].filter(Boolean)));
+
+    const q = variants.length > 1
+      ? query(collection(db, "final_grades"), where("nisn", "in", variants))
+      : query(collection(db, "final_grades"), where("nisn", "==", currentNisn));
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
+        setRealtimeFinalGrades(data);
+        setLocalCache(cacheKey, data);
+        mutateFinalGrades(data, false);
+      },
+      (error) => {
+        console.warn("Realtime student final_grades snapshot error:", error);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [currentNisn, mutateFinalGrades]);
+
+  // Safari / Apple device resume listener (visibilitychange & pageshow)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        mutateSubmissions();
+        mutateFinalGrades();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handleVisibilityChange);
+    };
+  }, [mutateSubmissions, mutateFinalGrades]);
+
+  const finalGradesList = useMemo(() => {
+    if (realtimeFinalGrades && realtimeFinalGrades.length > 0) return realtimeFinalGrades;
+    if (Array.isArray(rawFinalGradesList) && rawFinalGradesList.length > 0) return rawFinalGradesList;
+    if (currentNisn) {
+      const cached = getLocalCache<any[]>(`firas_cache_final_grades_${currentNisn}`, 24 * 60 * 60 * 1000);
+      if (cached && cached.length > 0) return cached;
+    }
+    return EMPTY_ARRAY;
+  }, [realtimeFinalGrades, rawFinalGradesList, currentNisn]);
 
   const fetchAllStudents = async () => {
     if (!student?.kelas) return [];
@@ -3200,14 +3269,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         return matchAsg && matchStudent;
       });
       const fGrade = finalGradesList.find((f) => 
-        (String(f.assignmentId).trim() === String(assignment.id).trim() || f.id === `${assignment.id}_${student.nisn}` || f.id === `FG-${student.nisn}-${assignment.id}`) && 
+        (String(f.assignmentId).trim() === String(assignment.id).trim() || f.id === `${assignment.id}_${student.nisn}` || f.id === `FG-${student.nisn}-${assignment.id}` || (f.id && f.id.includes(assignment.id))) && 
         (isSameNisn(f.nisn, student.nisn) || isSameNisn(f.nis, student.nisn))
       );
       const gradeVal = sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" 
         ? sub.nilai 
-        : (fGrade?.nilai !== undefined && fGrade?.nilai !== null && fGrade?.nilai !== "" ? fGrade.nilai : null);
+        : (fGrade?.nilai !== undefined && fGrade?.nilai !== null && fGrade?.nilai !== "" ? fGrade.nilai : (fGrade?.score ?? null));
       
-      const isGraded = gradeVal !== null && gradeVal !== undefined;
+      const isGraded = gradeVal !== null && gradeVal !== undefined && gradeVal !== "";
       const isCompleted = isGraded || (!!sub && sub.status !== "ditolak");
 
       let status: "selesai" | "tertunda" | "terlambat" = "tertunda";
@@ -3224,13 +3293,17 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         }
       }
 
-      const effectiveSub = sub || (isGraded ? {
+      const effectiveSub = sub ? {
+        ...sub,
+        nilai: (sub.nilai !== undefined && sub.nilai !== null && sub.nilai !== "") ? sub.nilai : gradeVal,
+        status: (sub.status === "ditolak") ? "ditolak" : (gradeVal !== null ? "sudah dinilai" : sub.status)
+      } : (isGraded ? {
         id: `SUB-${student.nisn}-${assignment.id}`,
         assignmentId: assignment.id,
         nisn: student.nisn,
         nilai: Number(gradeVal),
         status: "sudah dinilai",
-        submittedAt: fGrade?.gradedAt || assignment.publishedAt,
+        submittedAt: fGrade?.gradedAt || fGrade?.submittedAt || assignment.publishedAt,
       } : null);
 
       return {
@@ -3242,6 +3315,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         publishedAt: publishedAtStr,
         status,
         submission: effectiveSub,
+        gradeVal,
+        nilai: gradeVal,
         taskLink: assignment.taskLink,
         linkTugas: assignment.linkTugas,
         fileUrl: assignment.fileUrl,
@@ -3272,6 +3347,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       iconColor: "text-blue-600 bg-blue-50 border-blue-100",
       status: real.status,
       submission: real.submission,
+      gradeVal: real.gradeVal,
+      nilai: real.nilai,
       taskLink: real.taskLink,
       linkTugas: real.linkTugas,
       fileUrl: real.fileUrl,
@@ -5599,7 +5676,23 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                     return matchAsg && matchStudent;
                                   }) || null;
 
-                                  const isSubmitted = !!currentSubmission;
+                                  const matchedGrade = finalGradesList.find((f: any) => {
+                                    const matchAsg = String(f.assignmentId || f.examId || "").trim() === String(task.id || "").trim() ||
+                                      f.id === `${task.id}_${student?.nisn}` ||
+                                      f.id === `${task.id}_${student?.nis}` ||
+                                      f.id === `FG-${student?.nisn}-${task.id}` ||
+                                      (f.id && (f.id.endsWith(`-${task.id}`) || f.id.includes(task.id)));
+                                    const matchStudent = isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn);
+                                    return matchAsg && matchStudent;
+                                  });
+
+                                  const taskGrade = (currentSubmission?.nilai !== undefined && currentSubmission?.nilai !== null && currentSubmission?.nilai !== "")
+                                    ? currentSubmission.nilai
+                                    : (matchedGrade?.nilai ?? matchedGrade?.score ?? task.gradeVal ?? task.nilai ?? null);
+
+                                  const isGraded = taskGrade !== null && taskGrade !== undefined && taskGrade !== "";
+                                  const isRejected = currentSubmission?.status === "ditolak";
+                                  const isSubmitted = !!currentSubmission || !!matchedGrade || isGraded;
                                   const isCompleted = task.status === "selesai" || isSubmitted;
                                   const isLate = task.status === "terlambat";
 

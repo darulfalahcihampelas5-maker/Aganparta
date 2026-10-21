@@ -111,7 +111,7 @@ import { SupabaseSyncModal } from "../components/teacher/SupabaseSyncModal";
 import { AddManualColumnModal } from "../components/teacher/AddManualColumnModal";
 import { DeleteColumnModal } from "../components/teacher/DeleteColumnModal";
 import { EditColumnModal, ColumnEditData } from "../components/teacher/EditColumnModal";
-import { getFinalGrades, saveFinalGrade, subscribeToFinalGrades } from "../lib/supabaseSync";
+import { getFinalGrades, saveFinalGrade, subscribeToFinalGrades, dbSetDoc, dbDeleteDoc } from "../lib/supabaseSync";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import { isAssignmentForClass, isExamForClass, isClassMatch, normalizeClassName, isPTSItem, isPASItem, isSameNisn } from "../lib/gradeUtils";
 
@@ -761,6 +761,13 @@ export default function DashboardTeacher() {
 
   const [isAddManualColumnOpen, setIsAddManualColumnOpen] = useState(false);
   const [isDeleteColumnModalOpen, setIsDeleteColumnModalOpen] = useState(false);
+  const [deletedColumnIds, setDeletedColumnIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem("firas_deleted_column_ids");
+      if (raw) return new Set(JSON.parse(raw));
+    } catch (_) {}
+    return new Set<string>();
+  });
   const [isEditColumnModalOpen, setIsEditColumnModalOpen] = useState(false);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [isSavingEditColumn, setIsSavingEditColumn] = useState(false);
@@ -1299,11 +1306,22 @@ export default function DashboardTeacher() {
           gradedAt: now,
           updatedAt: now,
         };
-        await setDoc(
+        await dbSetDoc(
           doc(db, "submissions", selectedSubmission.id),
           subUpdateData,
           { merge: true },
         );
+        if (isSupabaseConfigured && supabase) {
+          try {
+            await supabase.from("app_collections").upsert({
+              id: `submissions_${selectedSubmission.id}`,
+              collection_name: "submissions",
+              doc_id: selectedSubmission.id,
+              data: { ...(selectedSubmission || {}), ...subUpdateData },
+              updated_at: now
+            });
+          } catch (_) {}
+        }
 
         // 3. Immediately update in-memory state
         setFinalGradesList((prev) => {
@@ -2195,11 +2213,17 @@ export default function DashboardTeacher() {
 
     if (shouldDeleteOnlyForClass && isFilteredBySpecificClass) {
       const remainingClasses = currentClasses.filter(
-        (c) => c.toLowerCase() !== currentClass.toLowerCase()
+        (c) => !isClassMatch(c, currentClass)
       );
       const remainingPreview =
         remainingClasses.slice(0, 4).join(", ") +
         (remainingClasses.length > 4 ? ` (+${remainingClasses.length - 4} kelas)` : "");
+
+      // If no remaining classes left, delete permanently for all classes
+      if (remainingClasses.length === 0) {
+        handlePromptDeleteRekapColumn(colId, colTitle, colType, "all_classes");
+        return;
+      }
 
       showConfirm(
         `Hapus Kolom untuk Kelas ${currentClass}`,
@@ -2215,13 +2239,44 @@ export default function DashboardTeacher() {
 
             if (existingItem?.targets && Array.isArray(existingItem.targets)) {
               updatedDocData.targets = existingItem.targets.filter((t: any) => {
-                const k = (typeof t === "string" ? t : (t?.kelas || t?.name || "")).toString().trim().toLowerCase();
-                return k !== currentClass.toLowerCase();
+                const k = (typeof t === "string" ? t : (t?.kelas || t?.name || "")).toString().trim();
+                return !isClassMatch(k, currentClass);
               });
             }
 
+            if (existingItem?.selectedClasses && Array.isArray(existingItem.selectedClasses)) {
+              updatedDocData.selectedClasses = existingItem.selectedClasses.filter((c: any) =>
+                !isClassMatch(c.toString().trim(), currentClass)
+              );
+            }
+
             const docRef = doc(db, colType === "exam" ? "exams" : "assignments", colId);
-            await setDoc(docRef, updatedDocData, { merge: true });
+            await dbSetDoc(docRef, updatedDocData, { merge: true });
+
+            // Purge final_grades and submissions for students of THIS class from Firestore and Supabase
+            const studentsInClass = studentsList.filter((s) => isClassMatch(s.kelas, currentClass));
+            const studentNisns = new Set(studentsInClass.map((s) => s.nisn).filter(Boolean));
+
+            for (const nisn of studentNisns) {
+              try {
+                await dbDeleteDoc(doc(db, "final_grades", `${colId}_${nisn}`), "final_grades", `${colId}_${nisn}`);
+              } catch (_) {}
+              try {
+                await dbDeleteDoc(doc(db, "final_grades", `FG-${nisn}-${colId}`), "final_grades", `FG-${nisn}-${colId}`);
+              } catch (_) {}
+              try {
+                await dbDeleteDoc(doc(db, "submissions", `SUB-${nisn}-${colId}`), "submissions", `SUB-${nisn}-${colId}`);
+              } catch (_) {}
+            }
+
+            if (isSupabaseConfigured && supabase) {
+              try {
+                for (const nisn of studentNisns) {
+                  await supabase.from("final_grades").delete().eq("assignment_id", colId).eq("nisn", nisn);
+                  await supabase.from("final_grades").delete().eq("exam_id", colId).eq("nisn", nisn);
+                }
+              } catch (_) {}
+            }
 
             // Update in-memory state
             if (colType === "exam") {
@@ -2238,12 +2293,20 @@ export default function DashboardTeacher() {
               setLocalCache("firas_cache_assignments_v2", updatedAssignments);
             }
 
+            const updatedFinalGrades = finalGradesList.filter(
+              (g) => !((g.assignmentId === colId || g.examId === colId) && studentNisns.has(g.nisn))
+            );
+            setFinalGradesList(updatedFinalGrades);
+            setLocalCache("firas_cache_final_grades", updatedFinalGrades);
+
+            setIsDeleteColumnModalOpen(false);
+            clearTeacherCaches();
+
             showAlert(
               "Berhasil Dihapus dari Kelas",
               `Kolom ${typeLabel} "${colTitle}" berhasil dihapus dari Kelas ${currentClass}. Kolom di kelas lain tetap aman tersimpan!`,
               "alert"
             );
-            fetchTeacherData(false);
           } catch (err: any) {
             console.warn("Gagal memperbarui kolom kelas:", err);
             showAlert(
@@ -2266,35 +2329,117 @@ export default function DashboardTeacher() {
         warningText,
         async () => {
           try {
+            // 1. Delete main assignment or exam document from Firestore AND Supabase
             if (colType === "exam") {
-              await deleteDoc(doc(db, "exams", colId));
+              await dbDeleteDoc(doc(db, "exams", colId), "exams", colId);
+              if (isSupabaseConfigured && supabase) {
+                try {
+                  await supabase.from("exams").delete().eq("id", colId);
+                  await supabase.from("app_collections").delete().eq("id", `exams_${colId}`);
+                  await supabase.from("app_collections").delete().eq("collection_name", "exams").eq("doc_id", colId);
+                } catch (_) {}
+              }
               const updatedExams = examsList.filter((e) => e.id !== colId);
               setExamsList(updatedExams);
               setLocalCache("firas_cache_exams_v2", updatedExams);
             } else {
-              await deleteDoc(doc(db, "assignments", colId));
+              await dbDeleteDoc(doc(db, "assignments", colId), "assignments", colId);
+              if (isSupabaseConfigured && supabase) {
+                try {
+                  await supabase.from("app_collections").delete().eq("id", `assignments_${colId}`);
+                  await supabase.from("app_collections").delete().eq("collection_name", "assignments").eq("doc_id", colId);
+                } catch (_) {}
+              }
               const updatedAssignments = assignmentsList.filter((a) => a.id !== colId);
               setAssignmentsList(updatedAssignments);
               setLocalCache("firas_cache_assignments_v2", updatedAssignments);
             }
 
-            // Clean up final_grades in memory and cache
+            // 2. Delete all related final_grades in Firestore and Supabase
+            try {
+              const fgAsgSnap = await getDocs(
+                query(collection(db, "final_grades"), where("assignmentId", "==", colId))
+              );
+              for (const d of fgAsgSnap.docs) {
+                await dbDeleteDoc(d.ref, "final_grades", d.id);
+              }
+              const fgExamSnap = await getDocs(
+                query(collection(db, "final_grades"), where("examId", "==", colId))
+              );
+              for (const d of fgExamSnap.docs) {
+                await dbDeleteDoc(d.ref, "final_grades", d.id);
+              }
+              const matchedGrades = finalGradesList.filter(
+                (g) => g.assignmentId === colId || g.examId === colId || (g.id && g.id.includes(colId))
+              );
+              for (const g of matchedGrades) {
+                try {
+                  await dbDeleteDoc(doc(db, "final_grades", g.id), "final_grades", g.id);
+                } catch (_) {}
+              }
+            } catch (errFg) {
+              console.warn("Error deleting related final_grades:", errFg);
+            }
+
+            // 3. Delete all related submissions in Firestore and Supabase
+            try {
+              const subSnap = await getDocs(
+                query(collection(db, "submissions"), where("assignmentId", "==", colId))
+              );
+              for (const d of subSnap.docs) {
+                await dbDeleteDoc(d.ref, "submissions", d.id);
+              }
+              const matchedSubs = submissionsList.filter(
+                (s) => s.assignmentId === colId || (s.id && s.id.includes(colId))
+              );
+              for (const s of matchedSubs) {
+                try {
+                  await dbDeleteDoc(doc(db, "submissions", s.id), "submissions", s.id);
+                } catch (_) {}
+              }
+            } catch (errSub) {
+              console.warn("Error deleting related submissions:", errSub);
+            }
+
+            // 4. Delete from Supabase tables
+            if (isSupabaseConfigured && supabase) {
+              try {
+                await supabase.from("final_grades").delete().eq("assignment_id", colId);
+                await supabase.from("final_grades").delete().eq("exam_id", colId);
+                await supabase.from("app_collections").delete().eq("collection_name", "final_grades").filter("data->>assignmentId", "eq", colId);
+                await supabase.from("app_collections").delete().eq("collection_name", "submissions").filter("data->>assignmentId", "eq", colId);
+              } catch (_) {}
+            }
+
+            // 5. Add to persistent deletedColumnIds
+            setDeletedColumnIds((prev) => {
+              const next = new Set(prev);
+              next.add(colId);
+              try {
+                localStorage.setItem("firas_deleted_column_ids", JSON.stringify(Array.from(next)));
+              } catch (_) {}
+              return next;
+            });
+
+            // 6. Clean up in-memory state and local cache
             const updatedFinalGrades = finalGradesList.filter(
-              (g) => g.assignmentId !== colId && g.id !== colId
+              (g) => g.assignmentId !== colId && g.examId !== colId && !(g.id && g.id.includes(colId))
             );
             setFinalGradesList(updatedFinalGrades);
             setLocalCache("firas_cache_final_grades", updatedFinalGrades);
 
-            // Also clean up submissions in memory and cache
             const updatedSubmissions = submissionsList.filter(
-              (s) => s.assignmentId !== colId
+              (s) => s.assignmentId !== colId && !(s.id && s.id.includes(colId))
             );
             setSubmissionsList(updatedSubmissions);
             setLocalCache("firas_cache_submissions", updatedSubmissions);
 
+            clearTeacherCaches();
+            setIsDeleteColumnModalOpen(false);
+
             showAlert(
               "Berhasil Dihapus",
-              `Kolom ${typeLabel} "${colTitle}" berhasil dihapus secara permanen dari sistem.`,
+              `Kolom ${typeLabel} "${colTitle}" beserta seluruh riwayat nilai telah berhasil dihapus secara permanen dari sistem.`,
               "alert"
             );
           } catch (err: any) {
@@ -2738,6 +2883,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
 
     // 1. Filtered assignments (strictly for selected class or all classes)
     assignmentsList.forEach((a) => {
+      if (deletedColumnIds.has(a.id)) return;
       if (isAssignmentForClass(a, selectedClassFilter)) {
         if (!addedIds.has(a.id)) {
           addedIds.add(a.id);
@@ -2758,6 +2904,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
 
     // 2. Filtered exams (strictly for selected class, universal pretest, or all classes)
     examsList.forEach((e) => {
+      if (deletedColumnIds.has(e.id)) return;
       if (isExamForClass(e, selectedClassFilter)) {
         if (!addedIds.has(e.id)) {
           addedIds.add(e.id);
@@ -2776,10 +2923,10 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
       }
     });
 
-    // 3. Fallback: Any items in finalGradesList for students of selectedClassFilter that aren't yet in cols (e.g. manual columns)
+    // 3. Fallback: Truly manual columns in finalGradesList that aren't yet in assignments/exams
     finalGradesList.forEach((f) => {
       const targetId = f.assignmentId || f.examId || f.id;
-      if (!targetId || addedIds.has(targetId)) return;
+      if (!targetId || addedIds.has(targetId) || deletedColumnIds.has(targetId)) return;
 
       // If this item corresponds to an assignment/exam in assignmentsList or examsList that belongs to a different class, skip it!
       const matchingAsg = assignmentsList.find((a) => a.id === targetId);
@@ -2787,13 +2934,17 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
 
       const matchingExam = examsList.find((e) => e.id === targetId);
       if (matchingExam && !isExamForClass(matchingExam, selectedClassFilter)) return;
+
+      // CRITICAL: If neither matching assignment nor exam exists in assignmentsList/examsList, DO NOT REVIVE IT!
+      if (!matchingAsg && !matchingExam) {
+        return;
+      }
       
       const stu = studentsList.find((s) => isSameNisn(s.nisn, f.nisn) || isSameNisn(s.nis, f.nisn));
       const isForCurrentClass = !selectedClassFilter || selectedClassFilter === "SEMUA_KELAS" || (stu && isClassMatch(stu.kelas, selectedClassFilter));
       
       if (isForCurrentClass) {
         const fallbackTitle = f.title || f.materi || f.examTitle || matchingAsg?.title || matchingAsg?.materi || matchingExam?.title;
-        // Skip orphaned grades that have no title and do not match any known assignment/exam
         if (!fallbackTitle && !matchingAsg && !matchingExam) return;
 
         addedIds.add(targetId);
@@ -2818,7 +2969,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
       if (dateA !== dateB) return dateA - dateB;
       return (a.id || "").localeCompare(b.id || "");
     });
-  }, [assignmentsList, examsList, selectedClassFilter, finalGradesList, studentsList]);
+  }, [assignmentsList, examsList, selectedClassFilter, finalGradesList, studentsList, deletedColumnIds]);
 
   const attendanceAnalysis = useMemo(() => {
     if (!analysisClass) return [];
@@ -10566,7 +10717,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
         isOpen={isDeleteColumnModalOpen}
         onClose={() => setIsDeleteColumnModalOpen(false)}
         columns={[
-          ...assignmentsList.map((a) => ({
+          ...assignmentsList
+            .filter((a) => !deletedColumnIds.has(a.id))
+            .map((a) => ({
             id: a.id,
             title: a.materi || a.title || "Tugas",
             type: "assignment" as const,
@@ -10575,7 +10728,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
             targetClasses: a.targetClasses,
             kelasRef: a.kelasRef || a.kelas,
           })),
-          ...examsList.map((e) => ({
+          ...examsList
+            .filter((e) => !deletedColumnIds.has(e.id))
+            .map((e) => ({
             id: e.id,
             title: e.title || e.materi || "CBT",
             type: "exam" as const,
@@ -10599,7 +10754,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
         isOpen={isEditColumnModalOpen}
         onClose={() => setIsEditColumnModalOpen(false)}
         columns={[
-          ...assignmentsList.map((a) => ({
+          ...assignmentsList
+            .filter((a) => !deletedColumnIds.has(a.id))
+            .map((a) => ({
             id: a.id,
             title: a.materi || a.title || "Tugas",
             type: "assignment" as const,
@@ -10612,7 +10769,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
             description: a.description,
             rawDoc: a,
           })),
-          ...examsList.map((e) => ({
+          ...examsList
+            .filter((e) => !deletedColumnIds.has(e.id))
+            .map((e) => ({
             id: e.id,
             title: e.title || e.materi || "CBT",
             type: "exam" as const,

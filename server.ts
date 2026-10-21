@@ -9,6 +9,7 @@ process.on("uncaughtException", (error) => {
 });
 
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { initializeApp } from 'firebase-admin/app';
@@ -22,8 +23,8 @@ try {
   initializeApp({
     storageBucket: "gen-lang-client-0391947162.firebasestorage.app"
   });
-  db = getFirestore();
-  bucket = getStorage().bucket();
+  try { db = getFirestore(); } catch (e) { console.warn("[Firestore Admin] init error:", e); }
+  try { bucket = getStorage().bucket(); } catch (e) { console.warn("[Storage Admin] init error:", e); }
 } catch (e) {
   console.warn("[Firebase Admin] Initialization skipped or error:", e);
 }
@@ -66,7 +67,7 @@ async function generateContentWithFallback(params: {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
@@ -677,23 +678,54 @@ Instruksi Tambahan:
     });
   });
 
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
+  // Health check endpoints for Cloud Run & deployment probes
+  app.get("/health", (req, res) => {
+    res.status(200).send("OK");
+  });
+
+  app.get("/_health", (req, res) => {
+    res.status(200).send("OK");
+  });
+
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const isDevScript = process.env.npm_lifecycle_event === "dev";
+  const isExplicitDev = process.env.NODE_ENV === "development" && isDevScript;
+  const isProduction = process.env.NODE_ENV === "production" || !!process.env.K_SERVICE || (hasDist && !isExplicitDev);
+
+  if (!isProduction) {
+    try {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } catch (e) {
+      console.warn("Vite middleware failed or unavailable, falling back to static files:", e);
+      if (hasDist) {
+        app.use(express.static(distPath));
+        app.get('*', (req, res) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      }
+    }
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  const server = app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT} (mode: ${isProduction ? 'production' : 'development'})`);
+  });
+
+  server.on("error", (err: any) => {
+    console.error("[Server Listen Error]:", err);
   });
 }
 
-startServer();
+startServer().catch((err) => {
+  console.error("Critical failure during startServer:", err);
+  process.exit(1);
+});
