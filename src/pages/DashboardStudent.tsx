@@ -5755,10 +5755,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                       <td className="py-4 px-4 text-center whitespace-nowrap">
                                         {currentSubmission?.status === "ditolak" ? (
                                           <button 
-                                            onClick={() => setViewingTugas({ ...task, submission: currentSubmission })}
-                                            className="px-4 py-2 bg-rose-50 text-rose-600 font-black uppercase tracking-widest text-[10px] rounded-lg transition-all hover:bg-rose-100 border border-rose-200 cursor-pointer shadow-sm flex items-center justify-center gap-1.5 mx-auto"
+                                            onClick={() => {
+                                              setSelectedTugas(task);
+                                              setSelectedFile("");
+                                              setIsUploadModalOpen(true);
+                                            }}
+                                            className="px-4 py-2 bg-rose-600 text-white font-black uppercase tracking-widest text-[10px] rounded-lg transition-all hover:bg-rose-700 border border-rose-700 cursor-pointer shadow-md flex items-center justify-center gap-1.5 mx-auto animate-bounce"
                                           >
-                                            <span>Lihat Alasan ❌</span>
+                                            <span>Kumpulkan Ulang 🔄</span>
                                           </button>
                                         ) : isSubmitted ? (
                                           <button 
