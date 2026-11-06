@@ -15,7 +15,7 @@ import {
   where,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted } from "../lib/supabaseSync";
 import { OperationType, handleFirestoreError, getLocalCache, setLocalCache, clearTeacherCaches } from "../lib/firestoreUtils";
 import { googleSignIn } from "../lib/googleAuth";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
@@ -383,8 +383,7 @@ export default function DashboardTeacher() {
 
   useEffect(() => {
     const handleQuotaExceeded = (e: any) => {
-      const msg = e.detail?.message || "Kuota server harian (Firebase) telah habis. Aplikasi dapat digunakan kembali pada pukul 14.00 WIB atau jam 2 siang.";
-      showAlert("Batas Kuota Harian Habis", msg, "alert");
+      console.warn("Firestore quota notice in teacher dashboard: data is served smoothly via Supabase.", e?.detail?.message);
     };
     window.addEventListener('firestore-quota-exceeded', handleQuotaExceeded as EventListener);
     return () => {
@@ -2703,7 +2702,7 @@ export default function DashboardTeacher() {
   >("cek-tugas");
 
   useEffect(() => {
-    if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas") {
+    if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas" && !isFirebaseQuotaExhausted()) {
       const q = collection(db, "submissions");
       const unsubscribe = onSnapshot(
         q,

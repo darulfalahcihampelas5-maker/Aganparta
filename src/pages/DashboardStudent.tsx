@@ -9,7 +9,7 @@ import {
   doc,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted } from "../lib/supabaseSync";
 import { db, auth, storage } from "../lib/firebase";
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 import { getDriveImageUrl, getDrivePdfEmbedUrl } from "../lib/driveUtils";
@@ -597,9 +597,8 @@ export default function DashboardStudent() {
 
   useEffect(() => {
     const handleQuotaExceeded = () => {
-      // Siswa tidak perlu diganggu oleh pop-up modal error teknis kuota server Firebase.
-      // Dashboard siswa beralih secara mulus ke data cache lokal (offline cache).
-      setIsOffline(true);
+      // Data dilayani secara normal via Supabase dan cache lokal tanpa menampilkan banner hambatan
+      console.warn("Firestore quota notice: data is served smoothly via Supabase");
     };
     window.addEventListener('firestore-quota-exceeded', handleQuotaExceeded as EventListener);
     return () => {
@@ -673,23 +672,49 @@ export default function DashboardStudent() {
   const studentData = student;
   useEffect(() => {
     if (!student?.kelas) return;
-    import("firebase/firestore").then(({ doc, onSnapshot }) => {
-      const docRef = doc(db, "config", "simulasiBK");
-      const unsubscribe = onSnapshot(
+    let isMounted = true;
+    const docRef = doc(db, "config", "simulasiBK");
+
+    // Load config via getDoc (handles Supabase primary & local cache)
+    getDoc(docRef).then((snap: any) => {
+      if (!isMounted) return;
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        const activeClasses = data.activeClasses || [];
+        const classConfigs = data.classConfigs || {};
+        const isEnabled = activeClasses.includes(student.kelas);
+        setIsSimulasiEnabled(isEnabled);
+        if (isEnabled && classConfigs[student.kelas]) {
+          setSimConfig(classConfigs[student.kelas]);
+        } else {
+          setSimConfig({ active: isEnabled, chapters: ["dekomposisi", "pola", "abstraksi", "algoritma", "classic_sim", "modul_kuis"] });
+        }
+      } else {
+        setIsSimulasiEnabled(false);
+        setSimConfig(null);
+      }
+    }).catch((err) => {
+      console.warn("Failed loading simulasiBK config:", err);
+    });
+
+    if (isFirebaseQuotaExhausted()) return;
+
+    let unsubscribe: any = null;
+    import("firebase/firestore").then(({ onSnapshot }) => {
+      if (!isMounted) return;
+      unsubscribe = onSnapshot(
         docRef,
         (snap) => {
+          if (!isMounted) return;
           if (snap.exists()) {
             const data = snap.data();
             const activeClasses = data.activeClasses || [];
             const classConfigs = data.classConfigs || {};
-            
             const isEnabled = activeClasses.includes(student.kelas);
             setIsSimulasiEnabled(isEnabled);
-            
             if (isEnabled && classConfigs[student.kelas]) {
               setSimConfig(classConfigs[student.kelas]);
             } else {
-              // Default if old format or no specific config
               setSimConfig({ active: isEnabled, chapters: ["dekomposisi", "pola", "abstraksi", "algoritma", "classic_sim", "modul_kuis"] });
             }
           } else {
@@ -702,8 +727,12 @@ export default function DashboardStudent() {
           dispatchIfQuotaError(error);
         }
       );
-      return () => unsubscribe();
     });
+
+    return () => {
+      isMounted = false;
+      if (unsubscribe) unsubscribe();
+    };
   }, [student?.kelas]);
 
 
@@ -2166,7 +2195,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e: any) {
       console.warn(`SWR fetch error announcements:`, e.message);
       dispatchIfQuotaError(e);
-      setIsOffline(true);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || [];
     }
@@ -2193,7 +2222,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e: any) {
       console.warn(`SWR fetch error assignments:`, e.message);
       dispatchIfQuotaError(e);
-      setIsOffline(true);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || [];
     }
@@ -2234,7 +2263,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e: any) {
       console.warn(`SWR fetch error submissions:`, e.message);
       dispatchIfQuotaError(e);
-      setIsOffline(true);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || [];
     }
@@ -2257,7 +2286,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   });
 
   useEffect(() => {
-    if (!currentNisn) return;
+    if (!currentNisn || isFirebaseQuotaExhausted()) return;
     const cacheKey = `firas_cache_submissions_${currentNisn}`;
     const unpadded = currentNisn.replace(/^0+/, "");
     const padded = unpadded.padStart(10, "0");
@@ -2351,7 +2380,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e: any) {
       console.warn(`SWR fetch error final grades:`, e.message);
       dispatchIfQuotaError(e);
-      setIsOffline(true);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || [];
     }
@@ -2370,7 +2399,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   // Real-time listener for current student's final grades
   useEffect(() => {
-    if (!currentNisn) return;
+    if (!currentNisn || isFirebaseQuotaExhausted()) return;
     const cacheKey = `firas_cache_final_grades_${currentNisn}`;
     const unpadded = currentNisn.replace(/^0+/, "");
     const padded = unpadded.padStart(10, "0");
@@ -2494,7 +2523,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e: any) {
       console.warn(`SWR fetch error exams:`, e.message);
       dispatchIfQuotaError(e);
-      setIsOffline(true);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || MOCK_EXAMS;
     }

@@ -3,7 +3,26 @@ import { db } from "./firebase";
 import { doc, getDocs, collection, setDoc, getDoc, getDocsFromCache, getDocFromCache, deleteDoc } from "firebase/firestore";
 import { clearTeacherCaches } from "./firestoreUtils";
 
-let isFirebaseDisabled = false;
+let isFirebaseDisabled = typeof window !== 'undefined' && sessionStorage.getItem('firebase_quota_exhausted') === 'true';
+
+export function isFirebaseQuotaExhausted(): boolean {
+  if (isFirebaseDisabled) return true;
+  if (typeof window !== 'undefined') {
+    return sessionStorage.getItem('firebase_quota_exhausted') === 'true';
+  }
+  return false;
+}
+
+export function setFirebaseQuotaExhausted(val: boolean = true): void {
+  isFirebaseDisabled = val;
+  if (typeof window !== 'undefined') {
+    if (val) {
+      sessionStorage.setItem('firebase_quota_exhausted', 'true');
+    } else {
+      sessionStorage.removeItem('firebase_quota_exhausted');
+    }
+  }
+}
 
 /**
  * Service to sync & read high-volume data (Grades & CBT Exams) with Supabase
@@ -430,14 +449,12 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             remedialScore: d.remedial_score,
           }));
           const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          if (filtered.length > 0) {
-            const docs = filtered.map(item => ({
-              id: item.id,
-              exists: () => true,
-              data: () => item
-            }));
-            return wrapSnapshot(docs);
-          }
+          const docs = filtered.map(item => ({
+            id: item.id,
+            exists: () => true,
+            data: () => item
+          }));
+          return wrapSnapshot(docs);
         }
       } else if (collectionName === "exams") {
         const { data, error } = await supabase.from("exams").select("*").limit(1000);
@@ -454,19 +471,18 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             createdAt: d.created_at,
           }));
           const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          if (filtered.length > 0) {
-            const docs = filtered.map(item => ({
-              id: item.id,
-              exists: () => true,
-              data: () => item
-            }));
-            return wrapSnapshot(docs);
-          }
+          const docs = filtered.map(item => ({
+            id: item.id,
+            exists: () => true,
+            data: () => item
+          }));
+          return wrapSnapshot(docs);
         }
       } else {
         // Generic app_collections table (e.g. submissions, studentsByNisn, assignments)
         const _query = queryOrCollectionRef?._query;
         let fetchedData: any[] = [];
+        let isSupabaseSuccess = false;
 
         // Check if query contains a NISN filter for efficient querying
         let nisnFilter: any = null;
@@ -502,45 +518,54 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
           const uniqueVariants = Array.from(new Set(allNisnVariants.filter(Boolean)));
 
           if (uniqueVariants.length > 0) {
-            const { data } = await supabase
+            const { data, error } = await supabase
               .from("app_collections")
               .select("doc_id, data")
               .eq("collection_name", collectionName)
               .in("data->>nisn", uniqueVariants);
-            if (Array.isArray(data)) fetchedData = data;
+            if (!error && Array.isArray(data)) {
+              fetchedData = data;
+              isSupabaseSuccess = true;
+            }
           }
         } else {
           // Full collection query: Paginate to retrieve ALL records without 1000-row cap truncation
           let page = 0;
           const pageSize = 1000;
+          let hadError = false;
           while (true) {
             const { data, error } = await supabase
               .from("app_collections")
               .select("doc_id, data")
               .eq("collection_name", collectionName)
               .range(page * pageSize, (page + 1) * pageSize - 1);
-            if (error || !data || data.length === 0) break;
+            if (error) {
+              hadError = true;
+              break;
+            }
+            if (!data || data.length === 0) break;
             fetchedData.push(...data);
             if (data.length < pageSize) break;
             page++;
             if (page >= 10) break; // safety limit at 10,000 items
           }
+          if (!hadError) {
+            isSupabaseSuccess = true;
+          }
         }
 
-        if (fetchedData.length > 0) {
+        if (isSupabaseSuccess) {
           const formatted = fetchedData.map((item: any) => ({
             id: item.doc_id,
             ...item.data
           }));
           const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          if (filtered.length > 0) {
-            const docs = filtered.map(item => ({
-              id: item.id,
-              exists: () => true,
-              data: () => item
-            }));
-            return wrapSnapshot(docs);
-          }
+          const docs = filtered.map(item => ({
+            id: item.id,
+            exists: () => true,
+            data: () => item
+          }));
+          return wrapSnapshot(docs);
         }
       }
     } catch (err: any) {
@@ -548,15 +573,15 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
     }
   }
 
-  // 2. Fallback to Firestore (Secondary Source) or Offline Persistent Cache
+  // 2. Fallback to Firestore (Secondary Source) only if Firebase is active and not quota exhausted
   try {
     let snap: any = null;
-    if (!isFirebaseDisabled) {
+    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
       try {
         snap = await getDocs(queryOrCollectionRef);
       } catch (networkErr: any) {
         if (networkErr?.message?.includes("Quota") || networkErr?.code === "resource-exhausted" || networkErr?.code === "unavailable") {
-          isFirebaseDisabled = true;
+          setFirebaseQuotaExhausted(true);
         }
       }
     }
