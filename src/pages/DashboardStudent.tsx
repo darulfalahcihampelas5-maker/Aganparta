@@ -596,9 +596,10 @@ export default function DashboardStudent() {
   };
 
   useEffect(() => {
-    const handleQuotaExceeded = (e: any) => {
-      const msg = e.detail?.message || "Kuota server harian (Firebase) telah habis. Aplikasi dapat digunakan kembali pada pukul 14.00 WIB atau jam 2 siang.";
-      showAlert("Batas Kuota Harian Habis", msg, "alert");
+    const handleQuotaExceeded = () => {
+      // Siswa tidak perlu diganggu oleh pop-up modal error teknis kuota server Firebase.
+      // Dashboard siswa beralih secara mulus ke data cache lokal (offline cache).
+      setIsOffline(true);
     };
     window.addEventListener('firestore-quota-exceeded', handleQuotaExceeded as EventListener);
     return () => {
@@ -3572,10 +3573,18 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     }
   }, [announcementsList, student, viewedAnnouncement, readAnnIds]);
 
-  const handleDismissAnnouncement = (id: string) => {
-    const updated = [...readAnnIds, id];
-    setReadAnnIds(updated);
-    localStorage.setItem(`read_anns_${student.nisn}`, JSON.stringify(updated));
+  const handleDismissAnnouncement = (id?: string) => {
+    if (id) {
+      const updated = Array.from(new Set([...readAnnIds, id]));
+      setReadAnnIds(updated);
+      if (student?.nisn) {
+        try {
+          localStorage.setItem(`read_anns_${student.nisn}`, JSON.stringify(updated));
+        } catch (err) {
+          console.warn("Gagal menyimpan riwayat baca pengumuman:", err);
+        }
+      }
+    }
     setViewedAnnouncement(null);
   };
 
@@ -5571,7 +5580,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                           <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-100">
                             <Hourglass className="w-4.5 h-4.5" />
                           </div>
-                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Tertunda</span>
+                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Menunggu Penilaian Guru</span>
                         </div>
                         <div className="flex items-center justify-center gap-2 mt-3 leading-none">
                           <h4 className="text-3xl font-extrabold bg-gradient-to-r from-amber-500 via-orange-500 to-yellow-500 bg-clip-text text-transparent">{belumDikerjakanTasksCount}</h4>
@@ -5615,7 +5624,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                     <div className="flex flex-nowrap overflow-x-auto gap-2 pb-px custom-scrollbar">
                       {[
                         { id: "semua", label: "Semua" },
-                        { id: "tertunda", label: "Belum Dikerjakan" },
+                        { id: "tertunda", label: "Menunggu Penilaian Guru" },
                         { id: "selesai", label: "Dikumpulkan" },
                         { id: "terlambat", label: "Terlambat" }
                       ].map((tab, tabIdx) => {
@@ -5999,7 +6008,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                               <div className="flex justify-between items-center text-xs">
                                 <span className="flex items-center gap-2 text-slate-600 font-bold">
                                   <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shadow-sm shadow-amber-500/20"></span> 
-                                  Tertunda
+                                  Menunggu Penilaian Guru
                                 </span>
                                 <span className="font-extrabold text-amber-500">{belumDikerjakanTasksCount} ({belumDikerjakanPercentage}%)</span>
                               </div>
@@ -9319,7 +9328,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   </button>
                   <button
                     type="button"
-                    onClick={() => setViewedAnnouncement(null)}
+                    onClick={() => handleDismissAnnouncement(viewedAnnouncement.id)}
                     title="Tutup Modal"
                     className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
                   >
@@ -9368,7 +9377,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                 <div className="flex items-center gap-2 w-full sm:w-auto">
                   <button
                     type="button"
-                    onClick={() => setViewedAnnouncement(null)}
+                    onClick={() => handleDismissAnnouncement(viewedAnnouncement.id)}
                     className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-200 hover:bg-slate-300 active:scale-95 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer text-center"
                   >
                     Tutup
