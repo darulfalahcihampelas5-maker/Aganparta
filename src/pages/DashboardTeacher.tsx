@@ -7791,7 +7791,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                               <table className="min-w-full text-left">
                                 <thead>
                                   <tr className="bg-slate-50/50 border-b border-slate-100">
-                                    <th className="px-10 py-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">
+                                    <th className="px-10 py-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap sticky left-0 bg-slate-50 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       Identitas Siswa
                                     </th>
                                     <th className="px-10 py-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">
@@ -7879,7 +7879,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                           key={`sub-${sub.id || idx}-${idx}`}
                                           className={`group transition-all ${isResubmittedPending ? "bg-amber-50/60 hover:bg-amber-100/50 border-l-4 border-amber-500" : "hover:bg-slate-50/50"}`}
                                         >
-                                          <td className="px-10 py-8 whitespace-nowrap">
+                                          <td className="px-10 py-8 whitespace-nowrap sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                             <div className="flex items-center gap-4">
                                               {student?.profilePhotoUrl ? (
                                                 <button 
