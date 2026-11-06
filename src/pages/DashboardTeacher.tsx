@@ -1,5 +1,6 @@
 import { SimulasiBKSettings } from "../components/teacher/SimulasiBKSettings";
 import React, { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../AuthContext";
 import { db } from "../lib/firebase";
@@ -84,6 +85,9 @@ import {
   Edit3,
   Save,
   Maximize2,
+  Minimize2,
+  ZoomIn,
+  ZoomOut,
   Smartphone,
   Monitor,
   Upload,
@@ -755,6 +759,8 @@ export default function DashboardTeacher() {
 
   // --- Buku Nilai Table Inline Edit & Manual Column States ---
   const [isEditingRekapTable, setIsEditingRekapTable] = useState(false);
+  const [isFullScreenRekap, setIsFullScreenRekap] = useState(false);
+  const [isCompactRowRekap, setIsCompactRowRekap] = useState(false);
   const [editedRekapGrades, setEditedRekapGrades] = useState<Record<string, string>>({});
   const [isSavingRekapGrades, setIsSavingRekapGrades] = useState(false);
 
@@ -5560,7 +5566,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
         </div>
       </aside>
 
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden relative z-0 bg-white">
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
         {/* Floating pull-tab when sidebar is closed (both desktop and mobile) */}
         {!isSidebarOpen && (
           <button
@@ -6455,9 +6461,9 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                             <table className="w-full text-left border-collapse font-sans text-xs min-w-[800px]">
                               <thead className="sticky top-0 bg-slate-50 z-10">
                                 <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                                  <th className="py-3 px-3 border border-slate-200 text-center w-12 bg-slate-50">No</th>
+                                  <th className="py-3 px-3 border border-slate-200 text-center w-12 bg-slate-50 sticky left-0 z-20 shadow-[1px_0_0_0_#e2e8f0]">No</th>
                                   <th className="py-3 px-3 border border-slate-200 text-center w-24 bg-slate-50">Poto Siswa</th>
-                                  <th className="py-3 px-3 border border-slate-200 bg-slate-50 min-w-[180px]">Nama Lengkap Siswa</th>
+                                  <th className="py-3 px-3 border border-slate-200 bg-slate-50 min-w-[180px] sticky left-[48px] z-20 shadow-[1px_0_0_0_#e2e8f0]">Nama Lengkap Siswa</th>
                                   <th className="py-3 px-3 border border-slate-200 text-center w-36 bg-slate-50">NIS</th>
                                   <th className="py-3 px-3 border border-slate-200 text-center w-32 bg-slate-50">Kelas</th>
                                   <th className="py-3 px-3 border border-slate-200 text-center w-36 bg-slate-50">Kode Akses</th>
@@ -6493,12 +6499,12 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                   filteredStudents.map((student, idx) => (
                                   <tr key={`stu-dft-${student.id || student.nisn || idx}-${idx}`} className="hover:bg-slate-50/50 transition-colors">
                                     {/* 1. No */}
-                                    <td className="py-2.5 px-3 text-center border border-slate-200 font-medium text-slate-500">
+                                    <td className="py-2.5 px-3 text-center border border-slate-200 font-medium text-slate-500 sticky left-0 z-10 bg-white shadow-[1px_0_0_0_#e2e8f0]">
                                       {idx + 1}
                                     </td>
 
                                     {/* 2. Poto Siswa */}
-                                    <td className="py-2.5 px-3 border border-slate-200 text-center">
+                                    <td className="py-2.5 px-3 border border-slate-200 text-center sticky left-[52px] z-10 bg-white shadow-[1px_0_0_0_#e2e8f0]">
                                       <div className="flex justify-center items-center">
                                         <button 
                                           onClick={() => {
@@ -6528,7 +6534,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                     </td>
 
                                     {/* 3. Nama Lengkap Siswa */}
-                                    <td className="py-2.5 px-3 border border-slate-200 font-medium text-slate-900 leading-normal">
+                                    <td className="py-2.5 px-3 border border-slate-200 font-medium text-slate-900 leading-normal sticky left-[124px] z-10 bg-white shadow-[1px_0_0_0_#e2e8f0]">
                                       {student.displayName}
                                     </td>
 
@@ -8385,6 +8391,30 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                      <FileText className="w-3.5 h-3.5"/> 
                                      <span>Ekspor PDF</span>
                                    </button>
+                                   <button 
+                                     onClick={() => setIsCompactRowRekap(!isCompactRowRekap)} 
+                                     className={`px-3.5 py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center gap-1.5 active:scale-95 shadow-md cursor-pointer ${
+                                       isCompactRowRekap
+                                         ? "bg-purple-600 text-white hover:bg-purple-700 shadow-purple-600/20"
+                                         : "bg-slate-700 text-white hover:bg-slate-800 shadow-slate-700/20"
+                                     }`}
+                                     title="Tampilkan semua siswa dalam 1 layar tanpa jarak sel yang tinggi"
+                                   >
+                                     {isCompactRowRekap ? <ZoomOut className="w-3.5 h-3.5"/> : <ZoomIn className="w-3.5 h-3.5"/>} 
+                                     <span>{isCompactRowRekap ? "Ukuran Normal" : "Baris Padat"}</span>
+                                   </button>
+                                   <button 
+                                     onClick={() => setIsFullScreenRekap(!isFullScreenRekap)} 
+                                     className={`px-3.5 py-2.5 rounded-xl text-[10px] font-extrabold uppercase tracking-wider transition-all flex items-center gap-1.5 active:scale-95 shadow-md cursor-pointer ${
+                                       isFullScreenRekap
+                                         ? "bg-rose-600 text-white hover:bg-rose-700 shadow-rose-600/20"
+                                         : "bg-blue-600 text-white hover:bg-blue-700 shadow-blue-600/20"
+                                     }`}
+                                     title="Tampilkan Buku Nilai Full Screen (Layar Penuh Zoom)"
+                                   >
+                                     {isFullScreenRekap ? <Minimize2 className="w-3.5 h-3.5"/> : <Maximize2 className="w-3.5 h-3.5"/>} 
+                                     <span>{isFullScreenRekap ? "Tutup Layar Penuh" : "Layar Penuh"}</span>
+                                   </button>
                                  </div>
                                </div>
                              </div>
@@ -8437,7 +8467,313 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                </div>
                              )}
 
-                            <div className="overflow-auto custom-scrollbar max-h-[800px]">
+                             {isFullScreenRekap && createPortal(
+                               <div className="fixed inset-0 z-[9999999] bg-slate-950/98 backdrop-blur-2xl p-4 sm:p-6 flex flex-col w-screen h-screen overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                                 <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-slate-900/95 border border-slate-800 text-white shrink-0 mb-4 shadow-2xl relative z-[10000000]">
+                                   <div className="flex items-center gap-3">
+                                     <div className="w-10 h-10 rounded-2xl bg-[#85cc00]/20 text-[#85cc00] flex items-center justify-center font-bold border border-[#85cc00]/30 shadow-sm">
+                                       <Maximize2 className="w-5 h-5" />
+                                     </div>
+                                     <div>
+                                       <h3 className="font-black text-sm sm:text-base text-white flex items-center gap-2">
+                                         Buku Nilai — Mode Layar Penuh (Full Zoom)
+                                         <span className="px-2.5 py-0.5 rounded-full text-[10px] bg-[#85cc00] text-slate-950 font-black uppercase tracking-wider">
+                                           {selectedClassFilter || "Seluruh Kelas"}
+                                         </span>
+                                       </h3>
+                                       <p className="text-[11px] text-slate-400 font-medium">Tabel diperluas ke seluruh layar monitor agar semua data siswa & kolom nilai terlihat jelas dalam 1 layar.</p>
+                                     </div>
+                                   </div>
+                                   <div className="flex items-center gap-3 flex-wrap">
+                                     <button
+                                       onClick={() => setIsCompactRowRekap(!isCompactRowRekap)}
+                                       className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-lg active:scale-95 ${
+                                         isCompactRowRekap ? "bg-purple-600 text-white hover:bg-purple-700 ring-2 ring-purple-400/40" : "bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700"
+                                       }`}
+                                     >
+                                       {isCompactRowRekap ? <ZoomOut className="w-4 h-4"/> : <ZoomIn className="w-4 h-4"/>}
+                                       <span>{isCompactRowRekap ? "Ukuran Baris Normal" : "Mode Baris Padat"}</span>
+                                     </button>
+                                     <button
+                                       onClick={() => setIsEditingRekapTable(!isEditingRekapTable)}
+                                       className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-lg active:scale-95 ${
+                                         isEditingRekapTable ? "bg-amber-500 text-white hover:bg-amber-600 ring-2 ring-amber-300" : "bg-emerald-600 text-white hover:bg-emerald-700"
+                                       }`}
+                                     >
+                                       <Edit className="w-4 h-4"/>
+                                       <span>{isEditingRekapTable ? "Selesai Edit" : "Edit Nilai"}</span>
+                                     </button>
+                                     <button
+                                       onClick={() => setIsFullScreenRekap(false)}
+                                       className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black uppercase tracking-wider rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-xl ring-2 ring-rose-400/50 hover:scale-105 active:scale-95"
+                                       title="Kembali ke Mode Normal"
+                                     >
+                                       <Minimize2 className="w-4 h-4" />
+                                       <span>Tutup Layar Penuh</span>
+                                     </button>
+                                   </div>
+                                 </div>
+                                 <div className="flex-1 overflow-auto bg-white rounded-2xl border-2 border-black shadow-2xl custom-scrollbar">
+                                   <table className="min-w-full border-collapse text-left bg-white border-2 border-black shadow-lg">
+                                     <thead className="sticky top-0 z-30">
+                                       <tr className="bg-white">
+                                         <th
+                                           colSpan={7 + assignmentsList.length + examsList.length}
+                                           className="px-6 py-4 text-left text-sm font-black text-slate-900 border border-black"
+                                         >
+                                           Tanggal Update Nilai {new Date().toLocaleDateString("id-ID", { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).replace(",", "")}
+                                         </th>
+                                       </tr>
+                                       <tr className="bg-slate-100">
+                                         <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-0 top-0 border border-black whitespace-nowrap z-40 w-16 min-w-[64px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                           No
+                                         </th>
+                                         <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[64px] top-0 border border-black whitespace-nowrap z-40 min-w-[128px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                           NIS
+                                         </th>
+                                         <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[192px] top-0 w-80 min-w-[280px] border border-black whitespace-nowrap z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                           Nama Lengkap Siswa
+                                         </th>
+                                         <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 z-30 border border-black whitespace-nowrap">
+                                           Nilai Kehadiran
+                                         </th>
+                                         {rekapTableColumns.map((col, idx) => (
+                                             <th
+                                               key={`col-modal-${col.type}-${col.id || idx}-${idx}`}
+                                               className="px-5 py-4 text-center text-xs font-black text-slate-900 bg-slate-100 uppercase tracking-wider border border-black whitespace-nowrap sticky top-0 z-30 group"
+                                             >
+                                               <div className="flex flex-col text-center items-center justify-center relative min-w-[130px] px-1">
+                                                 <div className="flex items-center justify-between w-full mb-1.5 gap-2">
+                                                   <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-md ${
+                                                     col.type === "exam"
+                                                       ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                                       : "bg-blue-100 text-blue-800 border border-blue-300"
+                                                   }`}>
+                                                     {col.type === "exam" ? "CBT" : "Tugas"}
+                                                   </span>
+                                                   <div className="flex items-center gap-1">
+                                                     <button
+                                                       type="button"
+                                                       onClick={(e) => {
+                                                         e.stopPropagation();
+                                                         handleOpenEditColumnModal(col);
+                                                       }}
+                                                       className="p-1 rounded-md text-slate-400 hover:text-amber-600 hover:bg-amber-100 transition-colors cursor-pointer"
+                                                       title={`Edit identitas kolom ${col.type === "exam" ? "CBT" : "Tugas"}: "${col.title}"`}
+                                                     >
+                                                       <Pencil className="w-3.5 h-3.5" />
+                                                     </button>
+                                                     <button
+                                                       type="button"
+                                                       onClick={(e) => {
+                                                         e.stopPropagation();
+                                                         handlePromptDeleteRekapColumn(col.id, col.title, col.type);
+                                                       }}
+                                                       className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-100 transition-colors cursor-pointer"
+                                                       title={`Hapus kolom ${col.type === "exam" ? "CBT" : "Tugas"}: "${col.title}"`}
+                                                     >
+                                                       <Trash2 className="w-3.5 h-3.5" />
+                                                     </button>
+                                                   </div>
+                                                 </div>
+                                                 <span className="text-xs text-slate-800 font-bold whitespace-nowrap leading-snug flex items-center justify-center mb-1 max-w-[170px] truncate" title={col.title}>
+                                                   {col.title}
+                                                 </span>
+                                                 <span className="text-[10px] text-slate-600 font-semibold whitespace-nowrap">
+                                                   {col.date ? new Date(col.date).toLocaleDateString("id-ID", { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }).replace(",", "") : "-"}
+                                                 </span>
+                                               </div>
+                                             </th>
+                                         ))}
+                                         <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 border border-black whitespace-nowrap z-30">
+                                           Nilai Rapor
+                                         </th>
+                                         <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 border border-black whitespace-nowrap z-30">
+                                           Status
+                                         </th>
+                                       </tr>
+                                     </thead>
+                                     <tbody className="bg-white">
+                                       {studentsList
+                                         .filter((stu) => {
+                                           const matchClass = selectedClassFilter
+                                             ? isClassMatch(stu.kelas, selectedClassFilter)
+                                             : true;
+                                           const matchSearch = studentSearchQuery
+                                             ? (stu.displayName || stu.studentName || "").toLowerCase().includes(studentSearchQuery.toLowerCase()) ||
+                                               (stu.nisn || "").includes(studentSearchQuery)
+                                             : true;
+                                           return matchClass && matchSearch;
+                                         })
+                                         .sort((a, b) => {
+                                           const classA = (a.kelas || "").toString();
+                                           const classB = (b.kelas || "").toString();
+                                           const classComp = classA.localeCompare(classB, "id", { numeric: true, sensitivity: "base" });
+                                           if (classComp !== 0) return classComp;
+                                           return (a.displayName || a.studentName || "").localeCompare(
+                                             b.displayName || b.studentName || "",
+                                             "id",
+                                             { sensitivity: "base" }
+                                           );
+                                         })
+                                         .map((stu, index) => {
+                                           const studentSubs =
+                                             submissionsList.filter(
+                                               (s) => s.nisn === stu.nisn,
+                                             );
+                                           return (
+                                             <tr
+                                               key={`stu-modal-${stu.id || stu.nisn || index}-${index}`}
+                                               className="group hover:bg-slate-50/40 transition-colors"
+                                             >
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[64px]`}>
+                                                 {index + 1}
+                                               </td>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black sticky left-[64px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[128px]`}>
+                                                 {stu.nisn}
+                                               </td>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} whitespace-nowrap border border-black bg-white text-slate-900 font-medium sticky left-[192px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[280px]`}>
+                                                 <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-bold text-slate-900 whitespace-nowrap`}>
+                                                   {stu.displayName || stu.studentName}
+                                                 </span>
+                                               </td>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} text-center whitespace-nowrap border border-black bg-white text-slate-900 font-bold`}>
+                                                 {(() => {
+                                                   const { total, persentase } = getStudentAbsensiCounts(stu, absensiList, selectedClassFilter || stu.kelas);
+                                                   const presenceScore = total > 0 ? persentase : 100;
+                                                   return (
+                                                     <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-black text-slate-900`}>
+                                                       {presenceScore}%
+                                                     </span>
+                                                   );
+                                                 })()}
+                                               </td>
+                                               {rekapTableColumns.map((col, colIdx) => {
+                                                 const isColApplicable = col.type === "assignment"
+                                                   ? isAssignmentForClass(col.rawDoc || col, stu.kelas)
+                                                   : isExamForClass(col.rawDoc || col, stu.kelas);
+
+                                                 let score: any = "";
+                                                 const fGrade = finalGradesList.find(
+                                                   (f) =>
+                                                     (isSameNisn(f.nisn, stu.nisn) || isSameNisn(f.nis, stu.nisn)) &&
+                                                     (f.assignmentId === col.id ||
+                                                       f.examId === col.id ||
+                                                       f.alignmentId === col.id ||
+                                                       (f.id && (f.id === `${col.id}_${stu.nisn}` || f.id.startsWith(col.id))))
+                                                 );
+                                                 const sub = studentSubs.find(
+                                                   (s) =>
+                                                     (isSameNisn(s.nisn, stu.nisn) || isSameNisn(s.nis, stu.nisn)) &&
+                                                     (s.assignmentId === col.id || (s.id && s.id.includes(col.id)))
+                                                 );
+                                                 if (col.type === "assignment") {
+                                                   if (sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" && sub?.status === "sudah dinilai") {
+                                                     score = sub.nilai;
+                                                   } else if (fGrade?.nilai !== undefined && fGrade?.nilai !== null && fGrade?.nilai !== "") {
+                                                     score = fGrade.nilai;
+                                                   } else if (sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "") {
+                                                     score = sub.nilai;
+                                                   }
+                                                 } else {
+                                                   if (fGrade?.nilai !== undefined && fGrade?.nilai !== null && fGrade?.nilai !== "") {
+                                                     score = fGrade.nilai;
+                                                   } else if (fGrade?.score !== undefined && fGrade?.score !== null && fGrade?.score !== "") {
+                                                     score = fGrade.score;
+                                                   } else if (sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "") {
+                                                     score = sub.nilai;
+                                                   }
+                                                 }
+
+                                                 const cellKey = `${col.id}_${stu.nisn}`;
+                                                 const isEdited = editedRekapGrades[cellKey] !== undefined;
+                                                 const activeScoreStr = isEdited
+                                                   ? editedRekapGrades[cellKey]
+                                                   : (score !== undefined && score !== null && score !== "" ? String(score) : "");
+
+                                                 return (
+                                                   <td
+                                                     key={`col-modal-${col.type}-${col.id || colIdx}-${colIdx}`}
+                                                     className={`px-3 ${isCompactRowRekap ? "py-1 text-xs" : "py-2 text-sm"} text-center whitespace-nowrap border border-black font-bold transition-colors ${
+                                                       isEdited ? "bg-amber-100/90 text-amber-950" : "bg-white text-slate-900"
+                                                     }`}
+                                                   >
+                                                     {!isColApplicable && !activeScoreStr ? (
+                                                       <span className="text-slate-300 font-mono text-xs">-</span>
+                                                     ) : isEditingRekapTable ? (
+                                                       <input
+                                                         type="number"
+                                                         min="0"
+                                                         max="100"
+                                                         value={activeScoreStr}
+                                                         placeholder="0-100"
+                                                         onChange={(e) => {
+                                                           const val = e.target.value;
+                                                           setEditedRekapGrades((prev) => ({
+                                                             ...prev,
+                                                             [cellKey]: val,
+                                                           }));
+                                                         }}
+                                                         className={`w-16 ${isCompactRowRekap ? "h-6 text-[11px]" : "h-8 text-xs"} text-center font-mono font-black text-slate-900 bg-amber-50 border-2 border-amber-400 focus:bg-white focus:border-[#85cc00] focus:ring-2 focus:ring-[#85cc00]/20 rounded-md outline-none transition-all`}
+                                                       />
+                                                     ) : (
+                                                       <button
+                                                         type="button"
+                                                         onClick={() => setIsEditingRekapTable(true)}
+                                                         className="group/cell w-full h-full inline-flex items-center justify-center gap-1 hover:text-[#85cc00] cursor-pointer"
+                                                         title="Klik untuk mengedit nilai pada tabel"
+                                                       >
+                                                         {activeScoreStr !== "" && activeScoreStr !== undefined && activeScoreStr !== null ? (
+                                                           <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-black ${isEdited ? "text-amber-800" : "text-slate-900"}`}>
+                                                             {activeScoreStr}
+                                                           </span>
+                                                         ) : (
+                                                           <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-medium ${isEdited ? "text-amber-800" : "text-slate-300"}`}>
+                                                             -
+                                                           </span>
+                                                         )}
+                                                       </button>
+                                                     )}
+                                                   </td>
+                                                 );
+                                               })}
+                                               
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} text-center whitespace-nowrap bg-white border border-black text-slate-900 font-bold`}>
+                                                 {(() => {
+                                                   const roundedFinal = calculateNilaiRapor(stu);
+                                                   return (
+                                                     <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-black text-slate-900`}>
+                                                       {roundedFinal}
+                                                     </span>
+                                                   );
+                                                 })()}
+                                               </td>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} text-center whitespace-nowrap bg-white border border-black text-slate-900 font-bold`}>
+                                                 {(() => {
+                                                   const roundedFinal = calculateNilaiRapor(stu);
+                                                   const isPassed = roundedFinal >= 75;
+                                                   const statusColor = isPassed
+                                                     ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                                                     : "text-rose-700 bg-rose-50 border-rose-200";
+
+                                                   return (
+                                                     <span className={`inline-flex items-center justify-center px-2.5 ${isCompactRowRekap ? "py-0.5 text-[10px]" : "py-1 text-xs"} font-black uppercase tracking-wider rounded-xl border shadow-sm min-w-[90px] ${statusColor}`}>
+                                                       {isPassed ? "Tuntas" : "Belum Tuntas"}
+                                                     </span>
+                                                   );
+                                                 })()}
+                                               </td>
+                                             </tr>
+                                           );
+                                         })}
+                                     </tbody>
+                                   </table>
+                                 </div>
+                               </div>,
+                               document.body
+                             )}
+
+                             <div className="overflow-auto custom-scrollbar max-h-[800px]">
                               <table id="rekapTable" className="min-w-full border-collapse text-left bg-white border-2 border-black shadow-lg">
                                 <thead className="sticky top-0 z-30">
                                   <tr className="bg-white">
@@ -8449,13 +8785,13 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                     </th>
                                   </tr>
                                   <tr className="bg-slate-100">
-                                    <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 border border-black whitespace-nowrap z-30">
+                                    <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-0 top-0 border border-black whitespace-nowrap z-40 w-16 min-w-[64px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       No
                                     </th>
-                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 z-30 border border-black whitespace-nowrap">
+                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[64px] top-0 border border-black whitespace-nowrap z-40 min-w-[128px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       NIS
                                     </th>
-                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 z-30 w-80 border border-black whitespace-nowrap">
+                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[192px] top-0 w-80 min-w-[280px] border border-black whitespace-nowrap z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       Nama Lengkap Siswa
                                     </th>
                                     <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 z-30 border border-black whitespace-nowrap">
@@ -8574,23 +8910,23 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                           key={`stu-${stu.id || stu.nisn || index}-${index}`}
                                           className="group hover:bg-slate-50/40 transition-colors"
                                         >
-                                          <td className="px-6 py-5 text-sm font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center">
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[64px]`}>
                                             {index + 1}
                                           </td>
-                                          <td className="px-8 py-5 bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black text-sm">
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black sticky left-[64px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[128px]`}>
                                             {stu.nisn}
                                           </td>
-                                          <td className="px-8 py-5 whitespace-nowrap border border-black bg-white text-slate-900 font-medium">
-                                            <span className="text-sm font-bold text-slate-900 whitespace-nowrap">
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} whitespace-nowrap border border-black bg-white text-slate-900 font-medium sticky left-[192px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[280px]`}>
+                                            <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-bold text-slate-900 whitespace-nowrap`}>
                                               {stu.displayName || stu.studentName}
                                             </span>
                                           </td>
-                                          <td className="px-6 py-5 text-center whitespace-nowrap border border-black bg-white text-slate-900 font-bold">
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} text-center whitespace-nowrap border border-black bg-white text-slate-900 font-bold`}>
                                             {(() => {
                                               const { total, persentase } = getStudentAbsensiCounts(stu, absensiList, selectedClassFilter || stu.kelas);
                                               const presenceScore = total > 0 ? persentase : 100;
                                               return (
-                                                <span className="text-sm font-mono font-black text-slate-900">
+                                                <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-black text-slate-900`}>
                                                   {presenceScore}%
                                                 </span>
                                               );
@@ -8651,7 +8987,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                             return (
                                               <td
                                                 key={`col-${col.type}-${col.id || colIdx}-${colIdx}`}
-                                                className={`px-3 py-2 text-center whitespace-nowrap border border-black font-bold transition-colors ${
+                                                className={`px-3 ${isCompactRowRekap ? "py-1 text-xs" : "py-2 text-sm"} text-center whitespace-nowrap border border-black font-bold transition-colors ${
                                                   isEdited ? "bg-amber-100/90 text-amber-950" : "bg-white text-slate-900"
                                                 }`}
                                               >
@@ -8671,7 +9007,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                                         [cellKey]: val,
                                                       }));
                                                     }}
-                                                    className="w-16 h-8 text-center font-mono font-black text-xs text-slate-900 bg-amber-50 border-2 border-amber-400 focus:bg-white focus:border-[#85cc00] focus:ring-2 focus:ring-[#85cc00]/20 rounded-md outline-none transition-all"
+                                                    className={`w-16 ${isCompactRowRekap ? "h-6 text-[11px]" : "h-8 text-xs"} text-center font-mono font-black text-slate-900 bg-amber-50 border-2 border-amber-400 focus:bg-white focus:border-[#85cc00] focus:ring-2 focus:ring-[#85cc00]/20 rounded-md outline-none transition-all`}
                                                   />
                                                 ) : (
                                                   <button
@@ -8681,11 +9017,11 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                                     title="Klik untuk mengedit nilai pada tabel"
                                                   >
                                                     {activeScoreStr !== "" && activeScoreStr !== undefined && activeScoreStr !== null ? (
-                                                      <span className={`text-sm font-mono font-black ${isEdited ? "text-amber-800" : "text-slate-900"}`}>
+                                                      <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-black ${isEdited ? "text-amber-800" : "text-slate-900"}`}>
                                                         {activeScoreStr}
                                                       </span>
                                                     ) : (
-                                                      <span className={`text-sm font-mono font-medium ${isEdited ? "text-amber-800" : "text-slate-300"}`}>
+                                                      <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-medium ${isEdited ? "text-amber-800" : "text-slate-300"}`}>
                                                         -
                                                       </span>
                                                     )}
@@ -8695,17 +9031,17 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                             );
                                           })}
                                           
-                                          <td className="px-6 py-5 text-center whitespace-nowrap bg-white border border-black text-slate-900 font-bold">
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} text-center whitespace-nowrap bg-white border border-black text-slate-900 font-bold`}>
                                              {(() => {
                                                const roundedFinal = calculateNilaiRapor(stu);
                                                return (
-                                                 <span className="text-sm font-mono font-black text-slate-900">
+                                                 <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-mono font-black text-slate-900`}>
                                                    {roundedFinal}
                                                  </span>
                                                );
                                              })()}
                                            </td>
-                                           <td className="px-6 py-5 text-center whitespace-nowrap bg-white border border-black text-slate-900 font-bold">
+                                           <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} text-center whitespace-nowrap bg-white border border-black text-slate-900 font-bold`}>
                                              {(() => {
                                                const roundedFinal = calculateNilaiRapor(stu);
                                                const isPassed = roundedFinal >= 75;
@@ -8714,7 +9050,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                                  : "text-rose-700 bg-rose-50 border-rose-200";
 
                                                return (
-                                                 <span className={`inline-flex items-center justify-center px-3 py-1 text-xs font-black uppercase tracking-wider rounded-xl border shadow-sm min-w-[100px] ${statusColor}`}>
+                                                 <span className={`inline-flex items-center justify-center px-2.5 ${isCompactRowRekap ? "py-0.5 text-[10px]" : "py-1 text-xs"} font-black uppercase tracking-wider rounded-xl border shadow-sm min-w-[90px] ${statusColor}`}>
                                                    {isPassed ? "Tuntas" : "Belum Tuntas"}
                                                  </span>
                                                );
