@@ -8485,6 +8485,43 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                      </div>
                                    </div>
                                    <div className="flex items-center gap-3 flex-wrap">
+                                     {/* Dropdown Filter Kelas di Mode Layar Penuh */}
+                                     <div className="relative min-w-[160px]">
+                                       <select
+                                         value={selectedClassFilter}
+                                         onChange={(e) => setSelectedClassFilter(e.target.value)}
+                                         className="w-full bg-slate-800 border border-slate-700 text-white text-xs font-bold rounded-xl px-3.5 py-2.5 outline-none focus:border-[#85cc00] focus:ring-2 focus:ring-[#85cc00]/20 cursor-pointer appearance-none pr-8 shadow-sm"
+                                       >
+                                         <option value="" className="bg-slate-900 text-white">Semua Kelas</option>
+                                         {classesList.map((c, idx) => (
+                                           <option key={`fs-cls-${c.id || c.name || idx}-${idx}`} value={c.name} className="bg-slate-900 text-white">
+                                             {c.name}
+                                           </option>
+                                         ))}
+                                       </select>
+                                       <ChevronDown className="w-4 h-4 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                     </div>
+
+                                     {/* Textbox Pencarian Siswa di Mode Layar Penuh */}
+                                     <div className="relative min-w-[200px]">
+                                       <input
+                                         type="text"
+                                         placeholder="Cari nama atau NIS..."
+                                         value={studentSearchQuery}
+                                         onChange={(e) => setStudentSearchQuery(e.target.value)}
+                                         className="w-full bg-slate-800 border border-slate-700 text-white text-xs font-bold rounded-xl pl-9 pr-8 py-2.5 outline-none focus:border-[#85cc00] focus:ring-2 focus:ring-[#85cc00]/20 placeholder:text-slate-400 placeholder:font-normal shadow-sm"
+                                       />
+                                       <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                       {studentSearchQuery && (
+                                         <button
+                                           onClick={() => setStudentSearchQuery("")}
+                                           className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                                         >
+                                           <X className="w-4 h-4" />
+                                         </button>
+                                       )}
+                                     </div>
+
                                      <button
                                        onClick={() => setIsCompactRowRekap(!isCompactRowRekap)}
                                        className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-lg active:scale-95 ${
@@ -8494,15 +8531,39 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                        {isCompactRowRekap ? <ZoomOut className="w-4 h-4"/> : <ZoomIn className="w-4 h-4"/>}
                                        <span>{isCompactRowRekap ? "Ukuran Baris Normal" : "Mode Baris Padat"}</span>
                                      </button>
-                                     <button
-                                       onClick={() => setIsEditingRekapTable(!isEditingRekapTable)}
-                                       className={`px-4 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-lg active:scale-95 ${
-                                         isEditingRekapTable ? "bg-amber-500 text-white hover:bg-amber-600 ring-2 ring-amber-300" : "bg-emerald-600 text-white hover:bg-emerald-700"
-                                       }`}
-                                     >
-                                       <Edit className="w-4 h-4"/>
-                                       <span>{isEditingRekapTable ? "Selesai Edit" : "Edit Nilai"}</span>
-                                     </button>
+                                      {isEditingRekapTable ? (
+                                        <>
+                                          <div className="px-3.5 py-2 rounded-xl text-xs font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-2">
+                                            <Edit className="w-4 h-4 text-amber-400" />
+                                            <span>{Object.keys(editedRekapGrades).length} Nilai Diubah</span>
+                                          </div>
+                                          <button
+                                            onClick={handleSaveRekapGrades}
+                                            disabled={isSavingRekapGrades}
+                                            className="px-5 py-2.5 bg-[#85cc00] hover:brightness-110 text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#85cc00]/20 active:scale-95 disabled:opacity-50"
+                                          >
+                                            <Save className="w-4 h-4" />
+                                            <span>{isSavingRekapGrades ? "Menyimpan..." : "Simpan Nilai"}</span>
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              setEditedRekapGrades({});
+                                              setIsEditingRekapTable(false);
+                                            }}
+                                            className="px-4 py-2.5 bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+                                          >
+                                            Batal
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          onClick={() => setIsEditingRekapTable(true)}
+                                          className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black uppercase tracking-wider rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95"
+                                        >
+                                          <Edit className="w-4 h-4"/>
+                                          <span>Edit Nilai</span>
+                                        </button>
+                                      )}
                                      <button
                                        onClick={() => setIsFullScreenRekap(false)}
                                        className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-black uppercase tracking-wider rounded-xl flex items-center gap-2 transition-all cursor-pointer shadow-xl ring-2 ring-rose-400/50 hover:scale-105 active:scale-95"
