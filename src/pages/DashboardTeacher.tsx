@@ -6461,7 +6461,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                             <table className="w-full text-left border-collapse font-sans text-xs min-w-[800px]">
                               <thead className="sticky top-0 bg-slate-50 z-10">
                                 <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
-                                  <th className="py-3 px-3 border border-slate-200 text-center w-12 bg-slate-50 sticky left-0 z-20 shadow-[1px_0_0_0_#e2e8f0]">No</th>
+                                  <th className="py-3 px-3 border border-slate-200 text-center w-12 bg-slate-50 md:sticky md:left-0 z-20 shadow-[1px_0_0_0_#e2e8f0]">No</th>
                                   <th className="py-3 px-3 border border-slate-200 text-center w-24 bg-slate-50">Poto Siswa</th>
                                   <th className="py-3 px-3 border border-slate-200 bg-slate-50 min-w-[180px] sticky left-[48px] z-20 shadow-[1px_0_0_0_#e2e8f0]">Nama Lengkap Siswa</th>
                                   <th className="py-3 px-3 border border-slate-200 text-center w-36 bg-slate-50">NIS</th>
@@ -7797,7 +7797,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                               <table className="min-w-full text-left">
                                 <thead>
                                   <tr className="bg-slate-50/50 border-b border-slate-100">
-                                    <th className="px-10 py-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap sticky left-0 bg-slate-50 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                    <th className="px-10 py-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap bg-slate-50">
                                       Identitas Siswa
                                     </th>
                                     <th className="px-10 py-8 text-[11px] font-bold text-slate-400 uppercase tracking-widest whitespace-nowrap">
@@ -7885,7 +7885,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                           key={`sub-${sub.id || idx}-${idx}`}
                                           className={`group transition-all ${isResubmittedPending ? "bg-amber-50/60 hover:bg-amber-100/50 border-l-4 border-amber-500" : "hover:bg-slate-50/50"}`}
                                         >
-                                          <td className="px-10 py-8 whitespace-nowrap sticky left-0 bg-white z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                          <td className="px-10 py-8 whitespace-nowrap bg-white">
                                             <div className="flex items-center gap-4">
                                               {student?.profilePhotoUrl ? (
                                                 <button 
@@ -8586,13 +8586,13 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                          </th>
                                        </tr>
                                        <tr className="bg-slate-100">
-                                         <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-0 top-0 border border-black whitespace-nowrap z-40 w-16 min-w-[64px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                         <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider md:sticky md:left-0 top-0 border border-black whitespace-nowrap z-40 w-16 min-w-[64px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                            No
                                          </th>
-                                         <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[64px] top-0 border border-black whitespace-nowrap z-40 min-w-[128px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                         <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider md:sticky md:left-[64px] top-0 border border-black whitespace-nowrap z-40 min-w-[128px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                            NIS
                                          </th>
-                                         <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[192px] top-0 w-80 min-w-[280px] border border-black whitespace-nowrap z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                         <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider md:sticky md:left-[192px] top-0 w-80 min-w-[280px] border border-black whitespace-nowrap z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                            Nama Lengkap Siswa
                                          </th>
                                          <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 z-30 border border-black whitespace-nowrap">
@@ -8687,13 +8687,13 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                                key={`stu-modal-${stu.id || stu.nisn || index}-${index}`}
                                                className="group hover:bg-slate-50/40 transition-colors"
                                              >
-                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[64px]`}>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center md:sticky md:left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[64px]`}>
                                                  {index + 1}
                                                </td>
-                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black sticky left-[64px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[128px]`}>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black md:sticky md:left-[64px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[128px]`}>
                                                  {stu.nisn}
                                                </td>
-                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} whitespace-nowrap border border-black bg-white text-slate-900 font-medium sticky left-[192px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[280px]`}>
+                                               <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} whitespace-nowrap border border-black bg-white text-slate-900 font-medium md:sticky md:left-[192px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[280px]`}>
                                                  <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-bold text-slate-900 whitespace-nowrap`}>
                                                    {stu.displayName || stu.studentName}
                                                  </span>
@@ -8846,13 +8846,13 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                     </th>
                                   </tr>
                                   <tr className="bg-slate-100">
-                                    <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-0 top-0 border border-black whitespace-nowrap z-40 w-16 min-w-[64px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                    <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider md:sticky md:left-0 top-0 border border-black whitespace-nowrap z-40 w-16 min-w-[64px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       No
                                     </th>
-                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[64px] top-0 border border-black whitespace-nowrap z-40 min-w-[128px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider md:sticky md:left-[64px] top-0 border border-black whitespace-nowrap z-40 min-w-[128px] shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       NIS
                                     </th>
-                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky left-[192px] top-0 w-80 min-w-[280px] border border-black whitespace-nowrap z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
+                                    <th className="px-8 py-6 text-left text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider md:sticky md:left-[192px] top-0 w-80 min-w-[280px] border border-black whitespace-nowrap z-40 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)]">
                                       Nama Lengkap Siswa
                                     </th>
                                     <th className="px-6 py-6 text-center text-sm font-black text-slate-900 bg-slate-100 uppercase tracking-wider sticky top-0 z-30 border border-black whitespace-nowrap">
@@ -8971,13 +8971,13 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                           key={`stu-${stu.id || stu.nisn || index}-${index}`}
                                           className="group hover:bg-slate-50/40 transition-colors"
                                         >
-                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center sticky left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[64px]`}>
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} font-mono font-black text-slate-900 bg-white whitespace-nowrap border border-black text-center md:sticky md:left-0 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[64px]`}>
                                             {index + 1}
                                           </td>
-                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black sticky left-[64px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[128px]`}>
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} bg-white whitespace-nowrap text-slate-900 font-bold tracking-tight border border-black md:sticky md:left-[64px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[128px]`}>
                                             {stu.nisn}
                                           </td>
-                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} whitespace-nowrap border border-black bg-white text-slate-900 font-medium sticky left-[192px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[280px]`}>
+                                          <td className={`px-4 ${isCompactRowRekap ? "py-1 text-xs" : "py-4 text-sm"} whitespace-nowrap border border-black bg-white text-slate-900 font-medium md:sticky md:left-[192px] z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] min-w-[280px]`}>
                                             <span className={`${isCompactRowRekap ? "text-xs" : "text-sm"} font-bold text-slate-900 whitespace-nowrap`}>
                                               {stu.displayName || stu.studentName}
                                             </span>
