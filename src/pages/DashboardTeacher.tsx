@@ -977,6 +977,7 @@ export default function DashboardTeacher() {
   const [selectedAssignmentFilter, setSelectedAssignmentFilter] = useState("");
   const [selectedClassFilter, setSelectedClassFilter] = useState("");
   const [selectedStudentSearchFilter, setSelectedStudentSearchFilter] = useState("");
+  const [activeAuditSubTab, setActiveAuditSubTab] = useState<"tugas-baru" | "tugas-perbaikan" | "tugas-ditolak">("tugas-baru");
 
   // Grading State
   const [isGradingModalOpen, setIsGradingModalOpen] = useState(false);
@@ -7710,6 +7711,81 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                             </div>
                           </div>
 
+                          {/* Sub-Tabs untuk Kategori Audit Pengumpulan */}
+                          <div className="flex flex-wrap items-center gap-3 bg-white p-4 sm:p-5 rounded-3xl border border-slate-200 shadow-lg">
+                            {(() => {
+                              const countBaru = submissionsList.filter(s => {
+                                const isGraded = s.status === "sudah dinilai" || (s.nilai !== undefined && s.nilai !== null && s.nilai !== "");
+                                if (isGraded) return false;
+                                const isDitolak = s.status === "ditolak";
+                                const isPerbaikan = !isDitolak && (!!s.resubmittedAt || s.wasRejected === true || !!s.keterangan);
+                                return !isDitolak && !isPerbaikan;
+                              }).length;
+
+                              const countPerbaikan = submissionsList.filter(s => {
+                                const isGraded = s.status === "sudah dinilai" || (s.nilai !== undefined && s.nilai !== null && s.nilai !== "");
+                                if (isGraded) return false;
+                                const isDitolak = s.status === "ditolak";
+                                const isPerbaikan = !isDitolak && (!!s.resubmittedAt || s.wasRejected === true || !!s.keterangan);
+                                return isPerbaikan;
+                              }).length;
+
+                              const countDitolak = submissionsList.filter(s => {
+                                const isGraded = s.status === "sudah dinilai" || (s.nilai !== undefined && s.nilai !== null && s.nilai !== "");
+                                if (isGraded) return false;
+                                const isDitolak = s.status === "ditolak";
+                                return isDitolak;
+                              }).length;
+
+                              return (
+                                <>
+                                  <button
+                                    onClick={() => setActiveAuditSubTab("tugas-baru")}
+                                    className={`px-6 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                                      activeAuditSubTab === "tugas-baru"
+                                        ? "bg-[#85cc00] text-slate-950 shadow-md shadow-[#85cc00]/20"
+                                        : "bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200"
+                                    }`}
+                                  >
+                                    <FileText className="w-4 h-4" />
+                                    <span>Tugas Baru</span>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeAuditSubTab === "tugas-baru" ? "bg-slate-950 text-white" : "bg-slate-200 text-slate-700"}`}>
+                                      {countBaru}
+                                    </span>
+                                  </button>
+                                  <button
+                                    onClick={() => setActiveAuditSubTab("tugas-perbaikan")}
+                                    className={`px-6 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                                      activeAuditSubTab === "tugas-perbaikan"
+                                        ? "bg-amber-500 text-white shadow-md shadow-amber-500/20"
+                                        : "bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200"
+                                    }`}
+                                  >
+                                    <RefreshCw className="w-4 h-4" />
+                                    <span>Tugas Perbaikan</span>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeAuditSubTab === "tugas-perbaikan" ? "bg-white text-amber-900" : "bg-slate-200 text-slate-700"}`}>
+                                      {countPerbaikan}
+                                    </span>
+                                  </button>
+                                  <button
+                                    onClick={() => setActiveAuditSubTab("tugas-ditolak")}
+                                    className={`px-6 py-3.5 rounded-2xl text-xs font-black uppercase tracking-wider transition-all flex items-center gap-2 cursor-pointer shadow-sm ${
+                                      activeAuditSubTab === "tugas-ditolak"
+                                        ? "bg-rose-600 text-white shadow-md shadow-rose-600/20"
+                                        : "bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200"
+                                    }`}
+                                  >
+                                    <X className="w-4 h-4" />
+                                    <span>Tugas Ditolak</span>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${activeAuditSubTab === "tugas-ditolak" ? "bg-white text-rose-900" : "bg-slate-200 text-slate-700"}`}>
+                                      {countDitolak}
+                                    </span>
+                                  </button>
+                                </>
+                              );
+                            })()}
+                          </div>
+
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 sm:gap-8 bg-white p-8 sm:p-10 rounded-[2.5rem] border border-slate-200 shadow-xl shadow-slate-200/40">
                             <div className="space-y-4">
                               <label className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-1 flex items-center gap-2.5">
@@ -7821,6 +7897,16 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                         // Filter out already graded tasks
                                         const isGraded = sub.status === "sudah dinilai" || (sub.nilai !== undefined && sub.nilai !== null && sub.nilai !== "");
                                         if (isGraded) return false;
+                                        const isDitolak = sub.status === "ditolak";
+                                        const isPerbaikan = !isDitolak && (!!sub.resubmittedAt || sub.wasRejected === true || !!sub.keterangan);
+
+                                        if (activeAuditSubTab === "tugas-baru") {
+                                          if (isDitolak || isPerbaikan) return false;
+                                        } else if (activeAuditSubTab === "tugas-perbaikan") {
+                                          if (!isPerbaikan) return false;
+                                        } else if (activeAuditSubTab === "tugas-ditolak") {
+                                          if (!isDitolak) return false;
+                                        }
 
                                         const matchTask = selectedAssignmentFilter
                                           ? String(sub.assignmentId).trim() === String(selectedAssignmentFilter).trim()
@@ -7842,7 +7928,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                       .sort((a, b) => {
                                         const getPriority = (sub: any) => {
                                           const isPending = sub.status !== "sudah dinilai" && !sub.nilai;
-                                          const isResubmitted = !!sub.resubmittedAt && (sub.wasRejected === true || !!sub.keterangan || sub.status === "ditolak");
+                                          const isResubmitted = sub.status !== "ditolak" && (!!sub.resubmittedAt || sub.wasRejected === true || !!sub.keterangan);
                                           if (isResubmitted && isPending) return 1;
                                           if (isResubmitted) return 2;
                                           if (isPending) return 3;
@@ -7878,7 +7964,7 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                       const student = studentsList.find(s => isSameNisn(s.nisn, sub.nisn));
                                       const studentDisplayName = student?.displayName || student?.studentName || student?.name || sub.studentName || "Siswa";
                                       const studentKelas = student?.kelas || sub.kelas || "-";
-                                      const isTruePerbaikan = !!sub.resubmittedAt && (sub.wasRejected === true || !!sub.keterangan || sub.status === "ditolak");
+                                      const isTruePerbaikan = sub.status !== "ditolak" && (!!sub.resubmittedAt || sub.wasRejected === true || !!sub.keterangan);
                                       const isResubmittedPending = isTruePerbaikan && sub.status !== "sudah dinilai" && !sub.nilai;
                                       return (
                                         <tr
@@ -7970,25 +8056,15 @@ _Laporan dikirim secara berkala oleh Wali Kelas untuk memantau aktivitas & prest
                                               className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 font-bold text-[10px] uppercase tracking-widest border shadow-sm ${
                                                 sub.status === "sudah dinilai" || sub.nilai
                                                   ? "bg-emerald-50 text-emerald-600 border-emerald-100"
-                                                  : sub.status === "ditolak"
-                                                    ? "bg-rose-50 text-rose-600 border-rose-100"
-                                                    : "bg-amber-50 text-amber-600 border-amber-100 italic"
+                                                  : sub.status === "ditolak" ? "bg-rose-50 text-rose-600 border-rose-100" : "bg-amber-50 text-amber-600 border-amber-100 italic"
                                               }`}
                                             >
                                               <div className={`w-1.5 h-1.5 rounded-full ${
                                                 sub.status === "sudah dinilai" || sub.nilai
                                                   ? "bg-emerald-500"
-                                                  : sub.status === "ditolak"
-                                                    ? "bg-rose-500"
-                                                    : "bg-amber-500 animate-pulse"
+                                                  : sub.status === "ditolak" ? "bg-rose-500" : "bg-amber-500 animate-pulse"
                                               }`}></div>
-                                              {sub.status === "ditolak"
-                                                ? "Ditolak"
-                                                : sub.nilai || sub.status === "sudah dinilai"
-                                                  ? "Sudah Dinilai"
-                                                  : isTruePerbaikan
-                                                    ? "Kirim Ulang / Perbaikan"
-                                                    : "Menunggu Penilaian Guru"}
+                                              {sub.status === "ditolak" ? "Ditolak" : sub.nilai || sub.status === "sudah dinilai" ? "Sudah Dinilai" : "Menunggu Penilaian Guru"}
                                             </span>
                                           </td>
                                           <td className="px-10 py-8 text-right whitespace-nowrap">
