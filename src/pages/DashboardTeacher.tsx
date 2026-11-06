@@ -2714,6 +2714,10 @@ export default function DashboardTeacher() {
         },
         (error) => {
           console.warn("Gagal sinkron otomatis respon tugas realtime:", error);
+          const msg = error && (error as any).message ? (error as any).message.toLowerCase() : String(error).toLowerCase();
+          if (msg.includes('quota') || msg.includes('resource-exhausted') || msg.includes('exceeded')) {
+            window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+          }
         }
       );
       return () => unsubscribe();

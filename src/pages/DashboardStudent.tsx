@@ -156,10 +156,14 @@ interface FirestoreErrorInfo {
 }
 
 
-function dispatchIfQuotaError(e) {
+function dispatchIfQuotaError(e: any) {
   const msg = e && e.message ? e.message.toLowerCase() : String(e).toLowerCase();
   if (msg.includes('quota') || msg.includes('resource-exhausted') || msg.includes('exceeded')) {
-    window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
+    window.dispatchEvent(new CustomEvent('firestore-quota-exceeded', {
+      detail: {
+        message: "Batas kuota pembacaan harian Firebase (Free Tier) telah tercapai untuk hari ini. Kuota akan direset otomatis pada hari berikutnya, atau Anda dapat menaikkan paket/billing database di Firebase Console."
+      }
+    }));
   }
 }
 
@@ -670,26 +674,33 @@ export default function DashboardStudent() {
     if (!student?.kelas) return;
     import("firebase/firestore").then(({ doc, onSnapshot }) => {
       const docRef = doc(db, "config", "simulasiBK");
-      const unsubscribe = onSnapshot(docRef, (snap) => {
-        if (snap.exists()) {
-          const data = snap.data();
-          const activeClasses = data.activeClasses || [];
-          const classConfigs = data.classConfigs || {};
-          
-          const isEnabled = activeClasses.includes(student.kelas);
-          setIsSimulasiEnabled(isEnabled);
-          
-          if (isEnabled && classConfigs[student.kelas]) {
-            setSimConfig(classConfigs[student.kelas]);
+      const unsubscribe = onSnapshot(
+        docRef,
+        (snap) => {
+          if (snap.exists()) {
+            const data = snap.data();
+            const activeClasses = data.activeClasses || [];
+            const classConfigs = data.classConfigs || {};
+            
+            const isEnabled = activeClasses.includes(student.kelas);
+            setIsSimulasiEnabled(isEnabled);
+            
+            if (isEnabled && classConfigs[student.kelas]) {
+              setSimConfig(classConfigs[student.kelas]);
+            } else {
+              // Default if old format or no specific config
+              setSimConfig({ active: isEnabled, chapters: ["dekomposisi", "pola", "abstraksi", "algoritma", "classic_sim", "modul_kuis"] });
+            }
           } else {
-            // Default if old format or no specific config
-            setSimConfig({ active: isEnabled, chapters: ["dekomposisi", "pola", "abstraksi", "algoritma", "classic_sim", "modul_kuis"] });
+            setIsSimulasiEnabled(false);
+            setSimConfig(null);
           }
-        } else {
-          setIsSimulasiEnabled(false);
-          setSimConfig(null);
+        },
+        (error) => {
+          console.warn("Snapshot error fetching simulasiBK config:", error);
+          dispatchIfQuotaError(error);
         }
-      });
+      );
       return () => unsubscribe();
     });
   }, [student?.kelas]);
@@ -1237,6 +1248,7 @@ export default function DashboardStudent() {
 
   // Announcement interaction
   const [viewedAnnouncement, setViewedAnnouncement] = useState<any>(null);
+  const announcementContentRef = useRef<HTMLDivElement>(null);
 
   // Load exam history from localStorage
   const [examHistoryList, setExamHistoryList] = useState<any[]>([]);
@@ -2264,6 +2276,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       },
       (error) => {
         console.warn("Realtime student submissions snapshot error:", error);
+        dispatchIfQuotaError(error);
       }
     );
 
@@ -2376,6 +2389,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       },
       (error) => {
         console.warn("Realtime student final_grades snapshot error:", error);
+        dispatchIfQuotaError(error);
       }
     );
 
@@ -9249,28 +9263,33 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-slate-100/80 backdrop-blur-md"
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-md"
               onClick={() => handleDismissAnnouncement(viewedAnnouncement.id)}
             ></motion.div>
             <motion.div
               initial={{ opacity: 0, scale: 0.98, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: 10 }}
-              className="relative w-full max-w-2xl bg-white p-6 md:p-10 rounded-3xl shadow-2xl border border-slate-200 z-10 mx-4"
+              className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-slate-200 z-10 mx-4 max-h-[85vh] sm:max-h-[88vh] flex flex-col overflow-hidden"
             >
-              <div className="flex items-center gap-6 mb-8 border-b border-slate-100 pb-8">
-                 <div className="w-16 h-16 rounded-2xl bg-[#85cc00]/10 flex items-center justify-center text-[#85cc00]">
-                    <AlertCircle className="w-8 h-8" />
-                 </div>
-                 <div>
-                    <h3 className="text-2xl font-display font-black text-slate-900">{viewedAnnouncement.title || "Pengumuman"}</h3>
-                    <div className="flex items-center gap-3 mt-2 flex-wrap text-xs font-bold text-slate-500">
-                      <span className="bg-slate-100 px-2.5 py-1 rounded-lg border border-slate-200">
+              {/* Sticky Header */}
+              <div className="shrink-0 bg-white border-b border-slate-100 p-5 sm:p-6 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-[#85cc00]/15 flex items-center justify-center text-[#6fa800] shrink-0">
+                    <AlertCircle className="w-6 h-6 sm:w-7 sm:h-7" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-lg sm:text-xl font-display font-black text-slate-900 truncate">
+                      {viewedAnnouncement.title || "Pengumuman"}
+                    </h3>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap text-[11px] font-bold text-slate-500">
+                      <span className="bg-slate-100 px-2.5 py-0.5 rounded-lg border border-slate-200">
                         Pengirim: {viewedAnnouncement.author || "Guru"}
                       </span>
-                      <span className="bg-[#85cc00]/10 text-slate-900 px-2.5 py-1 rounded-lg border border-[#85cc00]/20 flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5 text-[#85cc00]" />
-                        <span>Tanggal Terbit: {(() => {
+                      <span className="bg-[#85cc00]/10 text-slate-900 px-2.5 py-0.5 rounded-lg border border-[#85cc00]/20 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#6fa800]" />
+                        <span>
+                          Tanggal Terbit: {(() => {
                             const dateStr = viewedAnnouncement.publishDate || viewedAnnouncement.createdAt;
                             if (!dateStr) return "-";
                             if (typeof dateStr === "string" && dateStr.includes("-") && dateStr.length === 10) {
@@ -9280,25 +9299,89 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                             }
                             const d = new Date(dateStr);
                             return isNaN(d.getTime()) ? dateStr : d.toLocaleDateString("id-ID", { day: 'numeric', month: 'long', year: 'numeric' });
-                        })()}</span>
+                          })()}
+                        </span>
                       </span>
                     </div>
-                 </div>
+                  </div>
+                </div>
+
+                {/* Quick actions at top right */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => announcementContentRef.current?.scrollTo({ top: announcementContentRef.current.scrollHeight, behavior: 'smooth' })}
+                    title="Gulir langsung ke Bawah"
+                    className="p-2 sm:px-3 sm:py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all flex items-center gap-1 cursor-pointer"
+                  >
+                    <ArrowDown className="w-4 h-4 text-[#6fa800]" />
+                    <span className="hidden sm:inline">Ke Bawah</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewedAnnouncement(null)}
+                    title="Tutup Modal"
+                    className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
-              
-              <div className="mb-12">
-                 <p className="text-slate-700 leading-relaxed font-semibold whitespace-pre-wrap text-lg">
-                   {viewedAnnouncement.content}
-                 </p>
+
+              {/* Scrollable Announcement Content Area */}
+              <div 
+                ref={announcementContentRef} 
+                className="p-5 sm:p-7 overflow-y-auto custom-scrollbar flex-1 space-y-4"
+              >
+                <div className="bg-slate-50/70 border border-slate-100 rounded-2xl p-4 sm:p-6">
+                  <p className="text-slate-800 leading-relaxed font-semibold whitespace-pre-wrap text-sm sm:text-base selection:bg-[#85cc00]/30">
+                    {viewedAnnouncement.content}
+                  </p>
+                </div>
               </div>
-              
-              <div className="flex gap-4">
-                 <button
+
+              {/* Sticky Bottom Actions & Scroll Controls */}
+              <div className="shrink-0 bg-slate-50 border-t border-slate-200/90 p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-3">
+                {/* Scroll Jump Navigation */}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => announcementContentRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+                    className="flex-1 sm:flex-none px-3.5 py-2.5 bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                    title="Gulir ke awal teks"
+                  >
+                    <ArrowUp className="w-4 h-4 text-slate-600" />
+                    <span>Scroll ke Atas</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => announcementContentRef.current?.scrollTo({ top: announcementContentRef.current.scrollHeight, behavior: 'smooth' })}
+                    className="flex-1 sm:flex-none px-3.5 py-2.5 bg-white hover:bg-slate-100 active:scale-95 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                    title="Gulir ke akhir teks"
+                  >
+                    <ArrowDown className="w-4 h-4 text-slate-600" />
+                    <span>Scroll ke Bawah</span>
+                  </button>
+                </div>
+
+                {/* Main Action Buttons */}
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => setViewedAnnouncement(null)}
+                    className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-200 hover:bg-slate-300 active:scale-95 text-slate-700 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer text-center"
+                  >
+                    Tutup
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleDismissAnnouncement(viewedAnnouncement.id)}
-                    className="w-full py-5 bg-[#85cc00] text-slate-900 rounded-xl text-sm font-black uppercase tracking-wider shadow-lg shadow-[#85cc00]/20 hover:brightness-110 transition-all flex justify-center items-center gap-3"
-                 >
-                    Tutup & Hapus Pengumuman
-                 </button>
+                    className="flex-1 sm:flex-none px-5 py-2.5 bg-[#85cc00] hover:brightness-105 active:scale-95 text-slate-900 rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-[#85cc00]/20 transition-all flex justify-center items-center gap-2 cursor-pointer text-center"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    <span>Tutup & Hapus Pengumuman</span>
+                  </button>
+                </div>
               </div>
             </motion.div>
           </div>
@@ -9518,18 +9601,28 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="relative w-full max-w-md bg-white p-6 sm:p-8 rounded-3xl shadow-2xl border border-slate-200 z-10 mx-auto"
+              className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200 z-10 mx-auto max-h-[85vh] flex flex-col overflow-hidden"
             >
-              <div className="flex items-center gap-4 mb-6 border-b border-slate-100 pb-5">
-                <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600">
-                  <Sparkles className="w-6 h-6" />
+              <div className="shrink-0 p-6 sm:p-7 pb-4 flex items-center justify-between border-b border-slate-100">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                    <Sparkles className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-display font-black text-slate-900 font-bold">SMA Negeri 1 Cililin</h3>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Profil Portal Akademik</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-lg font-display font-black text-slate-900 font-bold">SMA Negeri 1 Cililin</h3>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Profil Portal Akademik</p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsSchoolInfoOpen(false)}
+                  className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-all cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <div className="space-y-4 text-xs sm:text-sm text-slate-600 font-semibold leading-relaxed">
+
+              <div className="p-6 sm:p-7 overflow-y-auto custom-scrollbar flex-1 space-y-4 text-xs sm:text-sm text-slate-600 font-semibold leading-relaxed">
                 <p>
                   <strong>Portal Si Pinter</strong> adalah sistem akademik terintegrasi untuk siswa-siswi SMA Negeri 1 Cililin dalam memonitor kelengkapan tugas harian, nilai evaluasi, pengumuman, dan pengerjaan Ujian CBT mandiri.
                 </p>
@@ -9539,12 +9632,15 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   <p>💻 <strong>Sistem:</strong> Si Pinter CBT v2.5.0</p>
                 </div>
               </div>
-              <button
-                onClick={() => setIsSchoolInfoOpen(false)}
-                className="w-full mt-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md shadow-indigo-600/15 cursor-pointer"
-              >
-                Tutup Informasi
-              </button>
+
+              <div className="shrink-0 p-4 sm:p-6 pt-3 border-t border-slate-100 bg-slate-50">
+                <button
+                  onClick={() => setIsSchoolInfoOpen(false)}
+                  className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-widest transition-all shadow-md shadow-indigo-600/15 cursor-pointer"
+                >
+                  Tutup Informasi
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
