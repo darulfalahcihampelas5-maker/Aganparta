@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { ComputationalThinkingSimulation } from './ComputationalThinkingSimulation';
 import { GenericInformaticsSimulator, ComputerSystemSimulator, DataAnalysisSimulator, AlgoProgrammingSimulator } from './MiniSimulators';
-import { BookOpen, Gamepad2, Settings, ArrowLeft, Brain, Cpu, BarChart, Code, Network } from "lucide-react";
+import { AlgorithmVisualizer } from './AlgorithmVisualizer';
+import { BookOpen, Gamepad2, Settings, ArrowLeft, Brain, Cpu, BarChart, Code, Network, Binary } from "lucide-react";
 
 interface SimulasiChapterMenuProps {
   userRole: "student" | "teacher";
@@ -64,6 +65,14 @@ export const SimulasiChapterMenu: React.FC<SimulasiChapterMenuProps> = ({
       icon: Code,
       color: "bg-rose-500",
       isReady: true
+    },
+    {
+      id: "visualisasi_algoritma",
+      title: "Pencarian & Pengurutan",
+      description: "Simulasi Searching (Linear, Binary) dan Sorting (Bubble, Selection, dsb).",
+      icon: Binary,
+      color: "bg-indigo-500",
+      isReady: true
     }
   ];
 
@@ -88,6 +97,9 @@ export const SimulasiChapterMenu: React.FC<SimulasiChapterMenuProps> = ({
   }
   if (selectedChapter === "algoritma_pemrograman") {
     return <AlgoProgrammingSimulator onBack={() => setSelectedChapter(null)} />;
+  }
+  if (selectedChapter === "visualisasi_algoritma") {
+    return <AlgorithmVisualizer onBack={() => setSelectedChapter(null)} />;
   }
 
   const availableChapters = chapters.filter(chapter => {

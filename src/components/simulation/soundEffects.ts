@@ -112,6 +112,34 @@ class SoundEngine {
       osc.stop(ctx.currentTime + 0.04);
     } catch {}
   }
+
+  speak(text: string): Promise<void> {
+    return new Promise((resolve) => {
+      if (!this.enabled || typeof window === "undefined" || !window.speechSynthesis) {
+        resolve();
+        return;
+      }
+      
+      // Cancel any ongoing speech
+      window.speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'id-ID'; // Indonesian
+      utterance.rate = 0.9; // Steady pace for learning
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      utterance.onend = () => resolve();
+      utterance.onerror = () => resolve();
+
+      // Find an Indonesian voice if available
+      const voices = window.speechSynthesis.getVoices();
+      const idVoice = voices.find(v => v.lang.includes('id'));
+      if (idVoice) utterance.voice = idVoice;
+      
+      window.speechSynthesis.speak(utterance);
+    });
+  }
 }
 
 export const sound = new SoundEngine();
