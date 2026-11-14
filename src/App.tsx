@@ -17,15 +17,24 @@ const retryImport = <T,>(
 ): Promise<T> => {
   return new Promise((resolve, reject) => {
     fn()
-      .then(resolve)
+      .then((module) => {
+        // Clear reload trigger once a module loads successfully
+        try {
+          sessionStorage.removeItem('chunk_reload_triggered');
+        } catch (_) {}
+        resolve(module);
+      })
       .catch((error) => {
-        if (retriesLeft <= 1) {
-          const isChunkError =
-            error?.message?.includes('Failed to fetch dynamically imported module') ||
-            error?.message?.includes('Importing a module script failed') ||
-            error?.name === 'ChunkLoadError';
+        const errorMsg = String(error?.message || error || '');
+        const isChunkOrExportError =
+          errorMsg.includes('Failed to fetch dynamically imported module') ||
+          errorMsg.includes('Importing a module script failed') ||
+          errorMsg.includes('does not provide an export named') ||
+          error?.name === 'ChunkLoadError' ||
+          error instanceof SyntaxError;
 
-          if (isChunkError && !sessionStorage.getItem('chunk_reload_triggered')) {
+        if (retriesLeft <= 1) {
+          if (isChunkOrExportError && !sessionStorage.getItem('chunk_reload_triggered')) {
             sessionStorage.setItem('chunk_reload_triggered', 'true');
             window.location.reload();
             return;

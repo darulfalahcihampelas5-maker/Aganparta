@@ -1,5 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, Lock, Volume2, Keyboard, Printer, Search, Wifi, Battery, MessageSquare, Menu, LayoutGrid, FileText, Image as ImageIcon, Video, Chrome, Music, Calculator, CloudRain, Power, Loader2, Play, PowerOff, ShieldCheck, Zap, Brain, Code, Layers, Settings, Users, Check, RefreshCw, Cpu, Monitor, HardDrive, Mouse, MousePointer2, Database, X, Share2, Type, Box, Command, Terminal, Server } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Lock, Volume2, Keyboard, Printer, Search, Wifi, Battery, MessageSquare, Menu, LayoutGrid, FileText, Image as ImageIcon, Video, Music, Calculator, CloudRain, Power, Loader2, Play, PowerOff, ShieldCheck, Zap, Brain, Code, Layers, Settings, Users, Check, RefreshCw, Cpu, Monitor, HardDrive, Mouse, MousePointer2, Database, X, Share2, Type, Box, Command, Terminal, Server } from 'lucide-react';
+
+const Chrome = (props: React.SVGProps<SVGSVGElement>) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="10" />
+    <circle cx="12" cy="12" r="4" />
+    <line x1="21.17" x2="12" y1="8" y2="8" />
+    <line x1="3.95" x2="8.54" y1="6.06" y2="14" />
+    <line x1="10.88" x2="15.46" y1="21.94" y2="14" />
+  </svg>
+);
 
 interface SimulatorProps {
   onBack: () => void;
@@ -448,8 +458,8 @@ const AssemblyAndOSSimulator: React.FC<{onBack: () => void}> = ({ onBack }) => {
                <div className="w-full h-full flex flex-col bg-slate-100 p-2">
                   <div className="text-right text-3xl font-light text-slate-800 mb-4 p-2">0</div>
                   <div className="grid grid-cols-4 gap-1 flex-1">
-                     {['CE','C','BS','/','7','8','9','X','4','5','6','-','1','2','3','+','+/-','0','.','='].map(btn => (
-                        <button key={btn} className={`bg-white border border-slate-200 hover:bg-slate-200 text-slate-800 font-medium rounded-sm ${btn === '=' ? 'bg-blue-100 hover:bg-blue-200' : ''}`}>{btn}</button>
+                     {['CE','C','BS','/','7','8','9','X','4','5','6','-','1','2','3','+','+/-','0','.','='].map((btn, btnIdx) => (
+                        <button key={`calc-btn-${btn}-${btnIdx}`} className={`bg-white border border-slate-200 hover:bg-slate-200 text-slate-800 font-medium rounded-sm ${btn === '=' ? 'bg-blue-100 hover:bg-blue-200' : ''}`}>{btn}</button>
                      ))}
                   </div>
                </div>
@@ -477,11 +487,11 @@ const AssemblyAndOSSimulator: React.FC<{onBack: () => void}> = ({ onBack }) => {
                      <p className="text-slate-400 text-sm">Pasang semua komponen ke dalam Motherboard sebelum menyalakan PC.</p>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                     {bootSteps.map((step) => {
+                     {bootSteps.map((step, stepIdx) => {
                         const isInstalled = installed.includes(step.id);
                         return (
                            <button
-                              key={step.id}
+                              key={`boot-step-${step.id}-${stepIdx}`}
                               onClick={() => handleInstall(step.id)}
                               disabled={isInstalled}
                               className={`p-4 rounded-2xl border flex items-center gap-4 transition-all ${isInstalled ? 'bg-emerald-500/10 border-emerald-500/50 cursor-default opacity-60' : 'bg-slate-800 border-slate-600 hover:bg-slate-700 hover:scale-105 cursor-pointer shadow-lg'}`}
@@ -588,7 +598,7 @@ const AssemblyAndOSSimulator: React.FC<{onBack: () => void}> = ({ onBack }) => {
                         <div className="absolute inset-0 z-10 pointer-events-none p-4 pb-12 flex items-center justify-center">
                            {openedApps.map((app, index) => (
                               <div 
-                                 key={app.id} 
+                                 key={`open-app-${app.id}-${index}`} 
                                  className={`pointer-events-auto absolute bg-white rounded-md shadow-2xl border border-slate-300 flex flex-col overflow-hidden transition-all duration-200 ${activeApp === app.id ? 'z-20 scale-100' : 'z-10 scale-95 opacity-90'}`}
                                  style={{
                                     width: app.maximized ? '100%' : 'min(600px, 90%)',
@@ -695,9 +705,9 @@ const AssemblyAndOSSimulator: React.FC<{onBack: () => void}> = ({ onBack }) => {
                               </div>
                               {/* Taskbar App Icons */}
                               <div className="flex items-center h-full ml-2">
-                                 {openedApps.map(app => (
+                                 {openedApps.map((app, appIdx) => (
                                     <div 
-                                       key={app.id}
+                                       key={`taskbar-app-${app.id}-${appIdx}`}
                                        onClick={() => {
                                           if (activeApp === app.id) {
                                              setOpenedApps(openedApps.map(a => a.id === app.id ? {...a, maximized: !a.maximized} : a));
@@ -762,8 +772,8 @@ const HardwareExplorer: React.FC<{onBack: () => void}> = ({ onBack }) => {
          </div>
          <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
             <div className="md:w-64 w-full h-auto md:h-full bg-slate-800/50 md:border-r border-b border-slate-700 overflow-x-auto md:overflow-y-auto p-4 flex md:flex-col flex-row gap-2 flex-shrink-0">
-               {components.map(c => (
-                  <button key={c.id} onClick={() => setSelected(c.id)} className={`flex items-center gap-3 p-3 rounded-xl transition-all text-left flex-shrink-0 ${selected === c.id ? 'bg-emerald-600/20 border border-emerald-500/50 text-emerald-300 shadow-[inset_0_0_15px_rgba(16,185,129,0.1)]' : 'hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 border border-transparent'}`}>
+               {components.map((c, cIdx) => (
+                  <button key={`hw-btn-${c.id}-${cIdx}`} onClick={() => setSelected(c.id)} className={`flex items-center gap-3 p-3 rounded-xl transition-all text-left flex-shrink-0 ${selected === c.id ? 'bg-emerald-600/20 border border-emerald-500/50 text-emerald-300 shadow-[inset_0_0_15px_rgba(16,185,129,0.1)]' : 'hover:bg-slate-700/50 text-slate-400 hover:text-slate-200 border border-transparent'}`}>
                      <div className={`p-2 rounded-lg ${selected === c.id ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-700 text-slate-400'}`}>{c.icon}</div>
                      <span className="font-semibold text-sm whitespace-nowrap">{c.name}</span>
                   </button>
@@ -780,8 +790,8 @@ const HardwareExplorer: React.FC<{onBack: () => void}> = ({ onBack }) => {
                   </div>
                </div>
                <div className="h-48 bg-slate-800/80 border-t border-slate-700 p-6 flex flex-col justify-center backdrop-blur-md z-20">
-                  {components.filter(c => c.id === selected).map(c => (
-                     <div key={c.id} className="max-w-2xl">
+                  {components.filter(c => c.id === selected).map((c, cIdx) => (
+                     <div key={`hw-detail-${c.id}-${cIdx}`} className="max-w-2xl">
                         <div className="flex items-center gap-3 mb-2">
                            <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg">{c.icon}</div>
                            <h3 className="text-2xl font-black text-white">{c.name}</h3>
@@ -865,9 +875,9 @@ const SoftwareExplorer: React.FC<{onBack: () => void}> = ({ onBack }) => {
                <div className="w-full md:w-64 bg-slate-800/50 p-4 rounded-2xl border border-slate-700 flex flex-col gap-3 flex-shrink-0">
                   <h3 className="font-bold text-slate-300 mb-2 border-b border-slate-700 pb-2">Software Belum Disortir</h3>
                   <div className="flex flex-row md:flex-col gap-3 overflow-x-auto md:overflow-x-visible pb-2 md:pb-0">
-                     {items.map(item => (
+                     {items.map((item, itemIdx) => (
                         <div 
-                           key={item.id} 
+                           key={`sw-item-${item.id}-${itemIdx}`} 
                            draggable 
                            onDragStart={(e) => handleDragStart(e, item.id)}
                            className="bg-slate-700 hover:bg-slate-600 p-3 rounded-xl flex items-center gap-3 cursor-grab active:cursor-grabbing border border-slate-600 transition-colors shadow-md flex-shrink-0"
@@ -880,9 +890,9 @@ const SoftwareExplorer: React.FC<{onBack: () => void}> = ({ onBack }) => {
                </div>
                
                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {categories.map(cat => (
+                  {categories.map((cat, catIdx) => (
                      <div 
-                        key={cat.id}
+                        key={`sw-cat-${cat.id}-${catIdx}`}
                         onDragOver={(e) => e.preventDefault()}
                         onDrop={(e) => handleDrop(e, cat.id)}
                         className="bg-slate-800 border-2 border-dashed border-slate-600 hover:border-emerald-500 rounded-2xl p-6 flex flex-col items-center justify-center text-center transition-colors group"

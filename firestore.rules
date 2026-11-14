@@ -55,6 +55,10 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    match /exam_sessions/{sessionId} {
+      allow read, write: if true;
+    }
+
     match /materials/{materialId} {
       allow read, write: if true;
     }
@@ -68,6 +72,14 @@ service cloud.firestore {
     }
 
     match /assignments/{assignmentId}/submissions/{submissionId} {
+      allow read, write: if true;
+    }
+
+    match /aiChatLogs/{logId} {
+      allow read, write: if true;
+    }
+
+    match /aiViolations/{violationId} {
       allow read, write: if true;
     }
   }

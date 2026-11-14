@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   Pencil,
   X,
@@ -134,8 +135,6 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
     }
   }, [isOpen, initialSelectedId, columns]);
 
-  if (!isOpen) return null;
-
   const handleColumnSelectChange = (newId: string) => {
     const found = columns.find((c) => c.id === newId);
     if (found) {
@@ -202,10 +201,26 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
     allClassNames.length > 0 && selectedClasses.length === allClassNames.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white rounded-3xl shadow-2xl border border-slate-200/80 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="px-6 py-5 bg-gradient-to-r from-amber-900 via-slate-900 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={() => !isSaving && onClose()}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
+          >
+            {/* Header */}
+            <div className="px-6 py-5 bg-gradient-to-r from-amber-900 via-slate-900 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">
           <div className="flex items-center gap-3 relative z-10">
             <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400">
               <Pencil className="w-5 h-5" />
@@ -251,10 +266,10 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
               disabled={isSaving}
               className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all cursor-pointer"
             >
-              {columns.map((col) => {
+              {columns.map((col, idx) => {
                 const isExam = col.type === "exam";
                 return (
-                  <option key={`opt-col-${col.id}`} value={col.id}>
+                  <option key={`opt-col-${col.id || "col"}-${idx}`} value={col.id}>
                     [{isExam ? "CBT" : "TUGAS"}] {col.title} - {col.bab || "Umum"}
                   </option>
                 );
@@ -550,7 +565,9 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
             )}
           </button>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

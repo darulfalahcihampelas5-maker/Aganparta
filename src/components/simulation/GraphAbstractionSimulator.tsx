@@ -302,7 +302,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
 
         {/* SVG lines for edges */}
         <svg className="w-full h-80 max-w-3xl overflow-visible relative z-0">
-          {mission.edges.map((edge) => {
+          {mission.edges.map((edge, edgeIdx) => {
             const fromNode = mission.nodes.find((n) => n.id === edge.from)!;
             const toNode = mission.nodes.find((n) => n.id === edge.to)!;
 
@@ -324,7 +324,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
             const midY = (y1 + y2) / 2;
 
             return (
-              <g key={`edge-${edge.from}-${edge.to}`}>
+              <g key={`edge-${edge.from}-${edge.to}-${edgeIdx}`}>
                 <line
                   x1={x1}
                   y1={y1}
@@ -363,14 +363,14 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
 
         {/* Nodes layer on top */}
         <div className="w-full max-w-3xl h-80 relative -mt-80 z-10 pointer-events-none">
-          {mission.nodes.map((node) => {
+          {mission.nodes.map((node, nodeIdx) => {
             const isSelected = selectedPath.includes(node.id);
             const isCurrent = currentLastNode === node.id;
             const isClickable = availableNext.some((a) => a.to === node.id);
 
             return (
               <div
-                key={node.id}
+                key={`node-${node.id}-${nodeIdx}`}
                 style={{
                   left: `${node.x}%`,
                   top: `${node.y}%`,
@@ -415,7 +415,7 @@ export const GraphAbstractionSimulator: React.FC<GraphAbstractionSimulatorProps>
             </span>
             <div className="flex items-center gap-1 font-black text-xs text-slate-800">
               {selectedPath.map((node, i) => (
-                <React.Fragment key={node}>
+                <React.Fragment key={`path-${node}-${i}`}>
                   <span className="w-6 h-6 rounded-lg bg-sky-100 text-sky-800 flex items-center justify-center font-bold">
                     {node}
                   </span>

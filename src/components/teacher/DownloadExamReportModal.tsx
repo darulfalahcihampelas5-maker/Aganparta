@@ -1,5 +1,5 @@
 import React from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   FileText,
   X,
@@ -35,8 +35,6 @@ export const DownloadExamReportModal: React.FC<DownloadExamReportModalProps> = (
   studentsList,
   finalGradesList,
 }) => {
-  if (!isOpen || !exam) return null;
-
   const effectiveClass = selectedClass || "SEMUA_KELAS";
 
   // Filter students based on selected class
@@ -45,7 +43,7 @@ export const DownloadExamReportModal: React.FC<DownloadExamReportModalProps> = (
     : studentsList.filter((s) => s.kelas === effectiveClass);
 
   // Filter exam results for this exam
-  const examGrades = finalGradesList.filter((g) => g.assignmentId === exam.id || g.examId === exam.id);
+  const examGrades = exam ? finalGradesList.filter((g) => g.assignmentId === exam.id || g.examId === exam.id) : [];
   const studentsWithGrades = classStudents.map((stu) => {
     const grade = examGrades.find((g) => g.nisn === stu.nisn);
     return {
@@ -64,15 +62,26 @@ export const DownloadExamReportModal: React.FC<DownloadExamReportModalProps> = (
     : 0;
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 sm:p-6 select-none animate-in fade-in duration-200">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 15 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 15 }}
-        className="bg-white w-full max-w-2xl rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col border-2 border-slate-200"
-      >
-        {/* Header */}
-        <div className="bg-slate-50 px-8 py-6 flex justify-between items-center border-b border-slate-200 shrink-0">
+    <AnimatePresence>
+      {isOpen && exam && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6 select-none">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-2xl rounded-3xl overflow-hidden shadow-2xl flex flex-col border border-slate-200/80 ring-1 ring-slate-900/5"
+          >
+            {/* Header */}
+            <div className="bg-slate-50/80 px-8 py-6 flex justify-between items-center border-b border-slate-200/70 shrink-0">
           <div className="flex items-center gap-3.5">
             <div className="p-3 bg-blue-100 text-blue-700 rounded-2xl">
               <FileText className="w-6 h-6 stroke-[2.5]" />
@@ -131,7 +140,7 @@ export const DownloadExamReportModal: React.FC<DownloadExamReportModalProps> = (
             >
               <option value="SEMUA_KELAS">-- Semua Kelas (Gabungan Seluruh Siswa) --</option>
               {classesList.map((cls, idx) => (
-                <option key={`dl-cls-opt-${cls.id || idx}`} value={cls.name}>
+                <option key={`dl-cls-opt-${cls.id || cls.name || "cls"}-${idx}`} value={cls.name}>
                   Kelas {cls.name}
                 </option>
               ))}
@@ -213,7 +222,9 @@ export const DownloadExamReportModal: React.FC<DownloadExamReportModalProps> = (
             )}
           </button>
         </div>
-      </motion.div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

@@ -1,6 +1,6 @@
 import React from 'react';
 import { AlertCircle, CheckCircle, X, AlertTriangle, HelpCircle } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface NotificationModalProps {
   isOpen: boolean;
@@ -23,8 +23,6 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
   confirmText = 'Proses',
   cancelText = 'Batal'
 }) => {
-  if (!isOpen) return null;
-
   const getThemeDetails = () => {
     switch (type) {
       case 'danger':
@@ -64,74 +62,86 @@ export const NotificationModal: React.FC<NotificationModalProps> = ({
   const theme = getThemeDetails();
 
   return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
-      {/* Premium backdrop blur overlay */}
-      <div 
-        className="fixed inset-0 bg-slate-950/80 backdrop-blur-xl transition-all duration-300" 
-        onClick={onClose}
-      ></div>
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+          {/* Backdrop blur overlay */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
 
-      {/* Luxury container card */}
-      <div className="relative bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md overflow-hidden border border-slate-200 z-10 animate-in zoom-in-95 duration-200">
-        
-        {/* Subtle decorative mesh back */}
-        <div className="absolute top-0 right-0 p-8 opacity-[0.02] pointer-events-none">
-          <AlertCircle className="w-48 h-48 text-slate-900" />
-        </div>
-
-        {/* Minimal header strip */}
-        <div className="bg-slate-950 text-white p-5 px-8 flex justify-between items-center shrink-0 border-b border-white/10">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-[#85cc00] animate-ping"></span>
-            <span className="text-[10px] font-black uppercase tracking-widest text-[#85cc00]">
-              {theme.badgeText}
-            </span>
-          </div>
-          <button 
-            onClick={onClose} 
-            className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-all cursor-pointer"
+          {/* Container card */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-200/80 ring-1 ring-slate-900/5 z-10"
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+            {/* Subtle decorative mesh back */}
+            <div className="absolute top-0 right-0 p-8 opacity-[0.02] pointer-events-none">
+              <AlertCircle className="w-48 h-48 text-slate-900" />
+            </div>
 
-        {/* Card Contents */}
-        <div className="p-8 sm:p-10 flex flex-col items-center text-center">
-          
-          {/* Animated dynamic icon ring */}
-          <div className={`mb-6 p-5 rounded-[2rem] border-2 shadow-inner ${theme.bgColor} ${theme.borderColor}`}>
-            {theme.icon}
-          </div>
-          
-          <h3 className="text-2xl font-display font-black text-slate-950 mb-3 tracking-tight leading-snug">
-            {title}
-          </h3>
-          <p className="text-sm font-semibold text-slate-500 mb-8 leading-relaxed px-2 max-w-sm">
-            {message}
-          </p>
-          
-          {/* Action buttons list */}
-          <div className="flex w-full gap-3 pt-2">
-            {type === 'confirm' && (
+            {/* Header strip */}
+            <div className="bg-slate-950/95 text-white p-5 px-7 flex justify-between items-center shrink-0 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <span className="w-2 h-2 rounded-full bg-[#85cc00] animate-ping"></span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-[#85cc00]">
+                  {theme.badgeText}
+                </span>
+              </div>
               <button
                 onClick={onClose}
-                className="flex-1 h-14 bg-[#85cc00]/10 hover:bg-[#85cc00] border-2 border-[#85cc00]/20 text-slate-600 hover:text-slate-950 font-extrabold text-[11px] uppercase tracking-widest rounded-2xl active:scale-95 transition-all text-center flex items-center justify-center cursor-pointer"
+                className="w-8 h-8 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white flex items-center justify-center transition-all cursor-pointer"
               >
-                {cancelText}
+                <X className="w-4 h-4" />
               </button>
-            )}
-            <button
-              onClick={() => {
-                if (onConfirm) onConfirm();
-                onClose();
-              }}
-              className={`flex-1 h-14 font-extrabold text-[11px] uppercase tracking-widest rounded-2xl active:scale-95 transition-all text-center flex items-center justify-center cursor-pointer ${theme.buttonStyles}`}
-            >
-              {confirmText}
-            </button>
-          </div>
+            </div>
+
+            {/* Card Contents */}
+            <div className="p-8 sm:p-9 flex flex-col items-center text-center">
+              {/* Icon ring */}
+              <div className={`mb-5 p-4 rounded-3xl border-2 shadow-inner ${theme.bgColor} ${theme.borderColor}`}>
+                {theme.icon}
+              </div>
+
+              <h3 className="text-xl sm:text-2xl font-display font-black text-slate-950 mb-3 tracking-tight leading-snug">
+                {title}
+              </h3>
+              <p className="text-sm font-semibold text-slate-500 mb-7 leading-relaxed px-2 max-w-sm">
+                {message}
+              </p>
+
+              {/* Action buttons list */}
+              <div className="flex w-full gap-3 pt-1">
+                {type === 'confirm' && (
+                  <button
+                    onClick={onClose}
+                    className="flex-1 h-12 bg-[#85cc00]/10 hover:bg-[#85cc00] border border-[#85cc00]/25 text-slate-600 hover:text-slate-950 font-extrabold text-[11px] uppercase tracking-widest rounded-2xl active:scale-95 transition-all text-center flex items-center justify-center cursor-pointer"
+                  >
+                    {cancelText}
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    if (onConfirm) onConfirm();
+                    onClose();
+                  }}
+                  className={`flex-1 h-12 font-extrabold text-[11px] uppercase tracking-widest rounded-2xl active:scale-95 transition-all text-center flex items-center justify-center cursor-pointer ${theme.buttonStyles}`}
+                >
+                  {confirmText}
+                </button>
+              </div>
+            </div>
+          </motion.div>
         </div>
-      </div>
-    </div>
+      )}
+    </AnimatePresence>
   );
 };

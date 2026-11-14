@@ -300,9 +300,9 @@ export const LogicGatePatternSimulator: React.FC<LogicGatePatternSimulatorProps>
             <span className="text-xs text-slate-400 w-full text-center font-semibold mb-1">
               Pilihan Jawaban Pola:
             </span>
-            {puzzle.patternOptions.map((opt) => (
+            {puzzle.patternOptions.map((opt, optIdx) => (
               <button
-                key={opt}
+                key={`pat-opt-${opt}-${optIdx}`}
                 type="button"
                 onClick={() => {
                   sound.playClick();

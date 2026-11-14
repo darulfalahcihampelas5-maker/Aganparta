@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   X,
   User,
@@ -51,8 +52,6 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
     }
   }, [student, isOpen]);
 
-  if (!isOpen || !student) return null;
-
   const handleGenerateAccessCode = () => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let code = "";
@@ -97,18 +96,34 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
   const availableClasses = Array.from(
     new Set([
       ...classesList.map((c) => c.name || c.id),
-      student.kelas,
+      student?.kelas,
     ].filter(Boolean))
   ).sort();
 
   return (
-    <div
-      id="edit-student-modal"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-in fade-in duration-200"
-    >
-      <div className="bg-white w-full max-w-lg rounded-2xl md:rounded-3xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 bg-slate-50/80 flex items-center justify-between gap-3 shrink-0">
+    <AnimatePresence>
+      {isOpen && student && (
+        <div
+          id="edit-student-modal"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        >
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-lg rounded-3xl border border-slate-200/80 ring-1 ring-slate-900/5 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-200/70 bg-slate-50/80 flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-700 shrink-0">
               <User className="w-5 h-5" />
@@ -291,7 +306,9 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

@@ -677,7 +677,7 @@ export const GridRoverSimulator: React.FC<GridRoverSimulatorProps> = ({
                   const isCurrent = currentStep === idx;
                   return (
                     <div
-                      key={cmd.id || idx}
+                      key={`cmd-${cmd.id || "c"}-${idx}`}
                       className={`flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
                         isCurrent
                           ? "bg-amber-400 border-amber-500 text-slate-950 scale-[1.02] shadow-md shadow-amber-400/20"

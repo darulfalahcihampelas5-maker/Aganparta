@@ -195,7 +195,7 @@ export const FlowchartDecomposerSimulator: React.FC<FlowchartDecomposerSimulator
         <div className="flex items-center gap-1.5 bg-slate-900/80 p-1.5 rounded-2xl border border-slate-800">
           {FLOWCHART_PUZZLES.map((p, idx) => (
             <button
-              key={p.id}
+              key={`fc-p-${p.id}-${idx}`}
               type="button"
               onClick={() => handleSelectPuzzle(idx)}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
@@ -230,7 +230,7 @@ export const FlowchartDecomposerSimulator: React.FC<FlowchartDecomposerSimulator
 
           <div className="space-y-2.5">
             {userBlocks.map((block, idx) => (
-              <React.Fragment key={block.id}>
+              <React.Fragment key={`fc-blk-${block.id}-${idx}`}>
                 <div
                   className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition-all ${
                     block.type === "START"

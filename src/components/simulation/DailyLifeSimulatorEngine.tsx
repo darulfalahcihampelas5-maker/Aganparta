@@ -667,7 +667,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
           {/* List of Challenges */}
           <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1 custom-scrollbar">
-            {filteredSimulators.map((sim) => {
+            {filteredSimulators.map((sim, simIdx) => {
               const score = progress.scores[sim.id] || 0;
               const isAttempted = progress.attemptedIds.includes(sim.id);
               const isSuccess = isAttempted && score > 0;
@@ -686,7 +686,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
               return (
                 <button
-                  key={sim.id}
+                  key={`sim-list-${sim.id}-${simIdx}`}
                   type="button"
                   disabled={isLocked}
                   onClick={() => {
@@ -957,8 +957,8 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                     <div className="space-y-2">
                       <div className="font-bold text-emerald-900">Pengelompokan Benar:</div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {activeItem.categories?.map((cat) => (
-                          <div key={cat} className="p-2 rounded-lg bg-white/80 border border-emerald-200">
+                        {activeItem.categories?.map((cat, catIdx) => (
+                          <div key={`ans-cat-${cat}-${catIdx}`} className="p-2 rounded-lg bg-white/80 border border-emerald-200">
                             <span className="font-black text-emerald-950 block">{cat}:</span>
                             <span className="text-emerald-800">
                               {activeItem.items.filter((i) => i.category === cat).map((i) => i.label).join(", ")}
@@ -973,8 +973,8 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                     <div className="space-y-1.5">
                       <div className="font-bold text-indigo-950">Urutan Langkah Benar:</div>
                       <ol className="list-decimal list-inside space-y-1 bg-white/80 p-2.5 rounded-lg border border-indigo-200 text-emerald-900">
-                        {activeItem.targetSequence?.map((tid) => (
-                          <li key={tid} className="font-medium">
+                        {activeItem.targetSequence?.map((tid, tidIdx) => (
+                          <li key={`ans-seq-${tid}-${tidIdx}`} className="font-medium">
                             {activeItem.items.find((i) => i.id === tid)?.label}
                           </li>
                         ))}
@@ -986,8 +986,8 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                     <div className="space-y-2">
                       <div className="font-bold text-amber-950">Data Esensial yang Harus Dipilih:</div>
                       <ul className="list-disc list-inside space-y-1 bg-white/80 p-2.5 rounded-lg border border-amber-200 text-emerald-900">
-                        {activeItem.items.filter((i) => i.isEssential).map((i) => (
-                          <li key={i.id} className="font-medium">{i.label}</li>
+                        {activeItem.items.filter((i) => i.isEssential).map((i, iIdx) => (
+                          <li key={`ans-ess-${i.id}-${iIdx}`} className="font-medium">{i.label}</li>
                         ))}
                       </ul>
                     </div>
@@ -1019,11 +1019,11 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {activeItem.items.map((item) => {
+                  {activeItem.items.map((item, itemIdx) => {
                     const chosenCat = userCategorization[item.id];
                     return (
                       <div
-                        key={item.id}
+                        key={`cat-item-${item.id}-${itemIdx}`}
                         className="p-3.5 rounded-xl border border-emerald-200/50 bg-white hover:border-indigo-300 transition-all shadow-xs space-y-2.5"
                       >
                         <div className={`text-xs font-bold flex items-center justify-between ${
@@ -1045,11 +1045,11 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
                         {/* Category Buttons */}
                         <div className="flex flex-wrap gap-1.5 pt-1">
-                          {activeItem.categories?.map((cat) => {
+                          {activeItem.categories?.map((cat, catIdx) => {
                             const isSelected = chosenCat === cat;
                             return (
                               <button
-                                key={cat}
+                                key={`cat-opt-${cat}-${catIdx}`}
                                 onClick={() => setItemCategory(item.id, cat)}
                                 className={`text-[11px] px-2.5 py-1 rounded-md font-medium transition-all border ${
                                   isSelected
@@ -1087,7 +1087,7 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
 
                     return (
                       <div
-                        key={id}
+                        key={`user-seq-${id}-${index}`}
                         className={`flex items-center gap-3 p-3 rounded-xl border-2 transition-all shadow-xs ${
                           isAttempted 
                             ? (isPosCorrect ? "border-emerald-500 bg-emerald-50" : "border-rose-500 bg-rose-50 animate-shake") 
@@ -1144,11 +1144,11 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {activeItem.items.map((item) => {
+                  {activeItem.items.map((item, itemIdx) => {
                     const isSelected = userSelectedFilters.includes(item.id);
                     return (
                       <button
-                        key={item.id}
+                        key={`flt-item-${item.id}-${itemIdx}`}
                         onClick={() => toggleFilterItem(item.id)}
                         className={`p-4 rounded-xl text-left border transition-all flex items-start gap-3 ${
                           isSelected
@@ -1198,11 +1198,11 @@ export const DailyLifeSimulatorEngine: React.FC<DailyLifeSimulatorEngineProps> =
                 </div>
 
                 <div className="space-y-2.5">
-                  {activeItem.items.map((opt) => {
+                  {activeItem.items.map((opt, optIdx) => {
                     const isSelected = userSelectedPatternOpt === opt.id;
                     return (
                       <button
-                        key={opt.id}
+                        key={`pat-opt-${opt.id}-${optIdx}`}
                         onClick={() => {
                           if (progress.attemptedIds.includes(activeItem.id)) return;
                           sound.playClick();

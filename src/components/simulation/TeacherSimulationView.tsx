@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   DAILY_LIFE_SIMULATORS,
   SimulatorItem,
@@ -193,8 +194,8 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
                       </span>
                     </div>
                     <ul className="space-y-1.5 text-xs text-slate-700">
-                      {itemsInCat.map((item) => (
-                        <li key={item.id} className="flex items-start gap-1.5 font-medium">
+                      {itemsInCat.map((item, iIdx) => (
+                        <li key={`cat-item-${item.id || iIdx}-${iIdx}`} className="flex items-start gap-1.5 font-medium">
                           <span className="text-emerald-600 font-bold">•</span>
                           <span>{item.label}</span>
                         </li>
@@ -221,7 +222,7 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
                 const itm = sim.items.find((i) => i.id === itemId);
                 return (
                   <div
-                    key={itemId}
+                    key={`seq-${itemId}-${idx}`}
                     className="flex items-center gap-3 p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200"
                   >
                     <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-black text-xs shrink-0">
@@ -260,8 +261,8 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
                   </span>
                 </div>
                 <ul className="space-y-2 text-xs text-slate-800">
-                  {essentialItems.map((item) => (
-                    <li key={item.id} className="p-1.5 rounded-lg bg-white/70 border border-emerald-100">
+                  {essentialItems.map((item, eIdx) => (
+                    <li key={`ess-${item.id || eIdx}-${eIdx}`} className="p-1.5 rounded-lg bg-white/70 border border-emerald-100">
                       <span className="font-bold text-emerald-950 block">{item.label}</span>
                       {item.details && <span className="text-[11px] text-slate-500 block">{item.details}</span>}
                     </li>
@@ -277,8 +278,8 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
                   </span>
                 </div>
                 <ul className="space-y-2 text-xs text-slate-800">
-                  {noiseItems.map((item) => (
-                    <li key={item.id} className="p-1.5 rounded-lg bg-white/70 border border-rose-100">
+                  {noiseItems.map((item, nIdx) => (
+                    <li key={`noise-${item.id || nIdx}-${nIdx}`} className="p-1.5 rounded-lg bg-white/70 border border-rose-100">
                       <span className="font-medium text-slate-700 block line-through">{item.label}</span>
                       {item.details && <span className="text-[11px] text-rose-600 block italic">{item.details}</span>}
                     </li>
@@ -314,8 +315,8 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
               {sim.items
                 .filter((i) => !i.isCorrect)
-                .map((itm) => (
-                  <div key={itm.id} className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500">
+                .map((itm, wIdx) => (
+                  <div key={`wrong-${itm.id || wIdx}-${wIdx}`} className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-500">
                     <span className="font-bold block text-slate-600">{itm.label}</span>
                     <span className="text-[10px] text-rose-500 font-medium">Bukan jawaban yang tepat</span>
                   </div>
@@ -508,7 +509,7 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
                     filteredStudents.map((st, idx) => {
                       const isCompleteAll = st.completedCount >= 40;
                       return (
-                        <tr key={st.nisn} className="hover:bg-slate-50/80 transition-colors">
+                        <tr key={`sim-st-${st.nisn || "nisn"}-${idx}`} className="hover:bg-slate-50/80 transition-colors">
                           <td className="py-3.5 px-4 text-center font-bold text-slate-400">{idx + 1}</td>
                           <td className="py-3.5 px-4">
                             <div className="font-black text-slate-900">{st.studentName}</div>
@@ -583,19 +584,34 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
           </div>
 
           {/* Drawer / Modal: Detail Per-Level Siswa untuk Reset Spesifik */}
-          {selectedStudentForDetail && (
-            <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-              <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
-                <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
-                  <div>
-                    <h3 className="font-black text-slate-900 text-sm flex items-center gap-2">
-                      <RotateCcw className="w-4 h-4 text-indigo-600" />
-                      Detail &amp; Reset Tantangan Siswa: {selectedStudentForDetail.studentName}
-                    </h3>
-                    <p className="text-[11px] text-slate-500 font-semibold">
-                      NISN: {selectedStudentForDetail.nisn} • Selesai: {selectedStudentForDetail.completedCount}/40 Tantangan
-                    </p>
-                  </div>
+          <AnimatePresence>
+            {selectedStudentForDetail && (
+              <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+                  onClick={() => setSelectedStudentForDetail(null)}
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                  className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 overflow-hidden"
+                >
+                  <div className="p-5 border-b border-slate-200/70 flex items-center justify-between bg-slate-50/80">
+                    <div>
+                      <h3 className="font-black text-slate-900 text-sm flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-indigo-600" />
+                        Detail &amp; Reset Tantangan Siswa: {selectedStudentForDetail.studentName}
+                      </h3>
+                      <p className="text-[11px] text-slate-500 font-semibold">
+                        NISN: {selectedStudentForDetail.nisn} • Selesai: {selectedStudentForDetail.completedCount}/40 Tantangan
+                      </p>
+                    </div>
                   <button
                     onClick={() => setSelectedStudentForDetail(null)}
                     className="p-1.5 rounded-xl hover:bg-slate-200 text-slate-400 hover:text-slate-800 transition-colors cursor-pointer"
@@ -621,7 +637,7 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
 
                       return (
                         <div
-                          key={sim.id}
+                          key={`det-sim-${sim.id}-${index}`}
                           className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all ${
                             isCompleted ? "bg-emerald-50/40 border-emerald-200" : "bg-slate-50 border-slate-200"
                           }`}
@@ -689,97 +705,133 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
                     Selesai &amp; Tutup
                   </button>
                 </div>
-              </div>
+              </motion.div>
             </div>
-          )}
+            )}
+          </AnimatePresence>
 
           {/* Modal Konfirmasi: Reset Siswa Tunggal */}
-          {confirmResetStudent && (
-            <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
-                  <AlertTriangle className="w-6 h-6" />
-                </div>
-                <div className="text-center space-y-2">
-                  <h4 className="font-black text-slate-900 text-base">Konfirmasi Reset Progres Siswa</h4>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    Apakah Anda yakin ingin mereset seluruh progres dan riwayat jawaban untuk{" "}
-                    <strong>{confirmResetStudent.studentName}</strong> (NISN: {confirmResetStudent.nisn})?
-                  </p>
-                  <p className="text-[11px] text-amber-700 bg-amber-50 p-2 rounded-xl border border-amber-200">
-                    Siswa akan dapat mengulang simulasi dari awal dengan nilai baru.
-                  </p>
-                </div>
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setConfirmResetStudent(null)}
-                    className="py-2.5 rounded-xl border border-slate-200 font-bold text-xs text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleResetSingleStudent(confirmResetStudent)}
-                    className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-all cursor-pointer shadow-md shadow-rose-600/20"
-                  >
-                    Ya, Reset Sekarang
-                  </button>
-                </div>
+          <AnimatePresence>
+            {confirmResetStudent && (
+              <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+                  onClick={() => setConfirmResetStudent(null)}
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                  className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 space-y-4"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center mx-auto">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <h4 className="font-black text-slate-900 text-base">Konfirmasi Reset Progres Siswa</h4>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Apakah Anda yakin ingin mereset seluruh progres dan riwayat jawaban untuk{" "}
+                      <strong>{confirmResetStudent.studentName}</strong> (NISN: {confirmResetStudent.nisn})?
+                    </p>
+                    <p className="text-[11px] text-amber-700 bg-amber-50 p-2 rounded-xl border border-amber-200">
+                      Siswa akan dapat mengulang simulasi dari awal dengan nilai baru.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setConfirmResetStudent(null)}
+                      className="py-2.5 rounded-xl border border-slate-200 font-bold text-xs text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleResetSingleStudent(confirmResetStudent)}
+                      className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-all cursor-pointer shadow-md shadow-rose-600/20"
+                    >
+                      Ya, Reset Sekarang
+                    </button>
+                  </div>
+                </motion.div>
               </div>
-            </div>
-          )}
+            )}
+          </AnimatePresence>
 
           {/* Modal Konfirmasi: Reset Massal Semua Siswa */}
-          {isConfirmMassResetOpen && (
-            <div className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
-              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
-                <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
-                  <Trash2 className="w-6 h-6" />
-                </div>
-                <div className="text-center space-y-2">
-                  <h4 className="font-black text-slate-900 text-base">PERINGATAN: Reset Massal Seluruh Siswa</h4>
-                  <p className="text-xs text-slate-600 leading-relaxed">
-                    Tindakan ini akan menghapus nilai dan riwayat pengerjaan simulasi BK untuk <strong>SEMUA</strong> siswa di kelas ini.
-                  </p>
-                  <p className="text-[11px] text-rose-700 bg-rose-50 p-2 rounded-xl border border-rose-200">
-                    Ketik kata <strong>RESET</strong> di bawah ini untuk mengonfirmasi tindakan ini:
-                  </p>
-                </div>
+          <AnimatePresence>
+            {isConfirmMassResetOpen && (
+              <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                  className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+                  onClick={() => {
+                    setIsConfirmMassResetOpen(false);
+                    setMassResetConfirmText("");
+                  }}
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: 12 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96, y: 12 }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                  className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 space-y-4"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+                    <Trash2 className="w-6 h-6" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <h4 className="font-black text-slate-900 text-base">PERINGATAN: Reset Massal Seluruh Siswa</h4>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Tindakan ini akan menghapus nilai dan riwayat pengerjaan simulasi BK untuk <strong>SEMUA</strong> siswa di kelas ini.
+                    </p>
+                    <p className="text-[11px] text-rose-700 bg-rose-50 p-2 rounded-xl border border-rose-200">
+                      Ketik kata <strong>RESET</strong> di bawah ini untuk mengonfirmasi tindakan ini:
+                    </p>
+                  </div>
 
-                <div>
-                  <input
-                    type="text"
-                    value={massResetConfirmText}
-                    onChange={(e) => setMassResetConfirmText(e.target.value)}
-                    placeholder="Ketik RESET"
-                    className="w-full text-center font-black tracking-widest uppercase py-2.5 rounded-xl border-2 border-rose-300 focus:outline-none focus:border-rose-600"
-                  />
-                </div>
+                  <div>
+                    <input
+                      type="text"
+                      value={massResetConfirmText}
+                      onChange={(e) => setMassResetConfirmText(e.target.value)}
+                      placeholder="Ketik RESET"
+                      className="w-full text-center font-black tracking-widest uppercase py-2.5 rounded-xl border-2 border-rose-300 focus:outline-none focus:border-rose-600"
+                    />
+                  </div>
 
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsConfirmMassResetOpen(false);
-                      setMassResetConfirmText("");
-                    }}
-                    className="py-2.5 rounded-xl border border-slate-200 font-bold text-xs text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="button"
-                    disabled={massResetConfirmText.trim().toUpperCase() !== "RESET"}
-                    onClick={handleExecuteMassReset}
-                    className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-black text-xs transition-all cursor-pointer shadow-md shadow-rose-600/20"
-                  >
-                    Reset Semua Siswa
-                  </button>
-                </div>
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsConfirmMassResetOpen(false);
+                        setMassResetConfirmText("");
+                      }}
+                      className="py-2.5 rounded-xl border border-slate-200 font-bold text-xs text-slate-600 hover:bg-slate-50 transition-all cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      disabled={massResetConfirmText.trim().toUpperCase() !== "RESET"}
+                      onClick={handleExecuteMassReset}
+                      className="py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-black text-xs transition-all cursor-pointer shadow-md shadow-rose-600/20"
+                    >
+                      Reset Semua Siswa
+                    </button>
+                  </div>
+                </motion.div>
               </div>
-            </div>
-          )}
+            )}
+          </AnimatePresence>
         </div>
       )}
 
@@ -885,7 +937,7 @@ export const TeacherSimulationView: React.FC<TeacherSimulationViewProps> = ({
 
               return (
                 <div
-                  key={sim.id}
+                  key={`guide-sim-${sim.id}-${idx}`}
                   className={`bg-white rounded-3xl border transition-all overflow-hidden ${
                     isExpanded ? "border-indigo-300 shadow-md ring-2 ring-indigo-500/10" : "border-slate-200 shadow-xs"
                   }`}

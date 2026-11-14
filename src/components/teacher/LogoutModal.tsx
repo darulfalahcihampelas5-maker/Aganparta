@@ -1,6 +1,6 @@
 import React from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Power } from "lucide-react";
+import { LogOut, X } from "lucide-react";
 
 interface LogoutModalProps {
   isOpen: boolean;
@@ -15,7 +15,7 @@ export const LogoutModal: React.FC<LogoutModalProps> = ({
   onClose,
   onConfirm,
   title = "Konfirmasi Keluar",
-  description = "Apakah Anda yakin ingin keluar dari sesi guru ini?",
+  description = "Apakah Anda yakin ingin mengakhiri sesi guru ini?",
 }) => {
   return (
     <AnimatePresence>
@@ -25,40 +25,51 @@ export const LogoutModal: React.FC<LogoutModalProps> = ({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+            transition={{ duration: 0.18 }}
+            className="absolute inset-0 bg-slate-950/60 backdrop-blur-md"
             onClick={onClose}
           />
           <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 20 }}
-            className="relative w-full max-w-sm bg-white rounded-[2.5rem] p-8 shadow-2xl overflow-hidden border border-slate-200"
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative w-full max-w-[360px] bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden border border-slate-200/80 ring-1 ring-slate-900/5"
           >
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-rose-500 to-orange-500" />
-            <div className="flex flex-col items-center text-center">
-              <div className="w-20 h-20 rounded-full bg-rose-50 flex items-center justify-center mb-6 border border-rose-100 shadow-inner">
-                <Power className="w-10 h-10 text-rose-500" />
+            {/* Header close button */}
+            <button 
+              onClick={onClose}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-full transition-all"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="p-8 flex flex-col items-center text-center">
+              <div className="w-16 h-16 rounded-2xl bg-rose-50 flex items-center justify-center mb-6 shadow-sm border border-rose-100/50">
+                <LogOut className="w-8 h-8 text-rose-500" />
               </div>
-              <h3 className="text-2xl font-display font-black text-slate-900 tracking-tight mb-2">
+              
+              <h3 className="text-xl font-bold text-slate-900 tracking-tight mb-2">
                 {title}
               </h3>
-              <p className="text-slate-500 font-medium text-sm mb-8 leading-relaxed">
+              <p className="text-slate-500 font-medium text-sm mb-8 leading-relaxed px-2">
                 {description}
               </p>
-              <div className="flex w-full gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="flex-1 py-3.5 px-4 rounded-2xl border-2 border-slate-200 text-slate-700 font-bold hover:bg-slate-50 transition-colors cursor-pointer text-xs uppercase tracking-wider"
-                >
-                  Batal
-                </button>
+
+              <div className="flex flex-col w-full gap-2.5">
                 <button
                   type="button"
                   onClick={onConfirm}
-                  className="flex-1 py-3.5 px-4 rounded-2xl bg-rose-500 text-white font-bold hover:bg-rose-600 shadow-lg shadow-rose-500/30 transition-all cursor-pointer text-xs uppercase tracking-wider active:scale-95"
+                  className="w-full py-3.5 px-6 rounded-2xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition-all cursor-pointer text-sm shadow-lg shadow-slate-200 active:scale-[0.98]"
                 >
-                  Ya, Keluar
+                  Keluar Sekarang
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full py-3.5 px-6 rounded-2xl bg-slate-50 text-slate-500 font-bold hover:bg-slate-100 transition-all cursor-pointer text-sm active:scale-[0.98]"
+                >
+                  Batal
                 </button>
               </div>
             </div>

@@ -284,12 +284,17 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
             newSteps.push({ array: [...a], currentBase: i, minIdx: min, guideStepId: 1, explanation: `Cari angka terkecil mulai dari indeks ${i}.` });
             for (let j = i + 1; j < n; j++) {
                 newSteps.push({ array: [...a], compareIndices: [j], minIdx: min, explanation: `Bandingkan dengan angka di indeks ${j}.` });
-                if (a[j] < a[min]) { min = j; newSteps.push({ array: [...a], minIdx: min, explanation: `Ditemukan angka yang lebih kecil di indeks ${min}.` }); }
+                if (a[j] < a[min]) { 
+                    min = j; 
+                    newSteps.push({ array: [...a], minIdx: min, explanation: `Ditemukan angka yang lebih kecil baru di indeks ${min}, yaitu ${a[min]}.` }); 
+                }
             }
             if (min !== i) { 
-              newSteps.push({ array: [...a], currentBase: i, minIdx: min, swapped: true, guideStepId: 2, explanation: `Tukar angka terkecil di indeks ${min} dengan indeks ${i}.` });
               [a[i], a[min]] = [a[min], a[i]]; 
-            } else { newSteps.push({ array: [...a], currentBase: i, explanation: `Angka di indeks ${i} sudah merupakan yang terkecil.`, guideStepId: 4 }); }
+              newSteps.push({ array: [...a], currentBase: i, minIdx: i, swapped: true, guideStepId: 2, explanation: `Tukar angka terkecil yang ditemukan ke posisi depan (indeks ${i}).` });
+            } else { 
+              newSteps.push({ array: [...a], currentBase: i, explanation: `Angka di indeks ${i} sudah merupakan yang terkecil di sisa barisan.`, guideStepId: 4 }); 
+            }
         }
         newSteps.push({ explanation: "Hore data sudah berurutan", guideStepId: 4 });
         const d_s = ALGO_DETAILS.selection;
@@ -301,12 +306,14 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
         let a = [...data], n = a.length;
         for (let i = 1; i < n; i++) {
             let key = a[i], j = i - 1; 
-            newSteps.push({ array: [...a], activeIdx: i, guideStepId: 1, explanation: `Ambil angka di indeks ${i} sebagai kunci.` });
+            newSteps.push({ array: [...a], activeIdx: i, guideStepId: 1, explanation: `Ambil angka ${key} sebagai angka aktif untuk disisipkan.` });
             while (j >= 0 && a[j] > key) { 
-                newSteps.push({ array: [...a], activeIdx: j+1, compareIndices: [j], explanation: `Geser angka ${a[j]} ke kanan karena lebih besar dari kunci.` });
-                a[j+1] = a[j]; j--; 
+                a[j+1] = a[j]; 
+                newSteps.push({ array: [...a], activeIdx: j+1, compareIndices: [j], explanation: `Geser ${a[j]} ke kanan karena lebih besar dari ${key}.` });
+                j--; 
             }
-            a[j+1] = key; newSteps.push({ array: [...a], activeIdx: j+1, guideStepId: 4, explanation: `Sisipkan kunci di posisi yang benar, yaitu indeks ${j+1}.` });
+            a[j+1] = key; 
+            newSteps.push({ array: [...a], activeIdx: j+1, guideStepId: 4, explanation: `Sisipkan angka aktif ${key} ke posisi yang sudah kosong di indeks ${j+1}.` });
         }
         newSteps.push({ explanation: "Hore data sudah berurutan", guideStepId: 4 });
         const d_s = ALGO_DETAILS.insertion;
@@ -512,13 +519,12 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
     setIterationsCount(prev => prev + 1);
     
     if (selectedAlgo === 'insertion') {
-        // ... (Insertion logic remains same as previous turn) ...
         let i = manualSelection[0], j = manualSelection[1];
         let key = currentKey!;
         
         if (type === 'tukar') { // Geser
-            if (gameData[j] > key) {
-                const msg = `Angka ${gameData[j]} lebih besar, geser ke kanan.`;
+            if (j >= 0 && gameData[j] > key) {
+                const msg = `Angka ${gameData[j]} lebih besar dari ${key}, ayo kita geser ke kanan.`;
                 if (isVoiceEnabled) sound.speak(msg);
                 const newData = [...gameData];
                 newData[j+1] = newData[j];
@@ -527,23 +533,20 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
                 if (j > 0) {
                     setManualSelection([i, j - 1]);
                 } else {
-                    setGameData(d => { d[0] = key; return d; });
-                    const msg = "Sudah di ujung, sisipkan angka sekarang.";
-                    if (isVoiceEnabled) sound.speak(msg);
-                    let nextI = i + 1;
-                    if (nextI < gameData.length) {
-                        setCurrentKey(gameData[nextI]);
-                        setManualSelection([nextI, nextI - 1]);
-                    } else { endGame(true); }
+                    setManualSelection([i, -1]); // Ready to insert at index 0
+                    const readyMsg = "Bagus! Sudah sampai ujung kiri, sekarang silakan sisipkan angka aktifnya.";
+                    setGameMessage(readyMsg);
+                    if (isVoiceEnabled) sound.speak(readyMsg);
                 }
             } else { 
-                const msg = "Data tidak lebih besar, tidak bisa digeser.";
+                const msg = `Opps, angka ${gameData[j]} tidak lebih besar dari ${key}, jadi tidak perlu digeser. Coba sisipkan saja.`;
                 setLives(l => l - 1); setGameMessage(msg); 
                 if (isVoiceEnabled) sound.speak(msg);
+                if (lives <= 1) endGame(false);
             }
-        } else { // Sisipkan (Lanjut)
-            if (gameData[j] <= key) {
-                const msg = "Posisi tepat, angka berhasil disisipkan.";
+        } else { // Sisipkan
+            if (j === -1 || gameData[j] <= key) {
+                const msg = `Hebat! Posisi sudah tepat, angka ${key} berhasil kita sisipkan di sini.`;
                 if (isVoiceEnabled) sound.speak(msg);
                 const newData = [...gameData];
                 newData[j+1] = key;
@@ -551,22 +554,46 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
                 setScore(s => s + 30);
                 let nextI = i + 1;
                 if (nextI < gameData.length) {
-                    setCurrentKey(gameData[nextI]);
+                    setCurrentKey(newData[nextI]);
                     setManualSelection([nextI, nextI - 1]);
-                } else { endGame(true); }
+                    const nextMsg = `Sekarang ambil angka ${newData[nextI]} untuk kita sisipkan ke barisan terurut di kirinya.`;
+                    setGameMessage(nextMsg);
+                    if (isVoiceEnabled) sound.speak(nextMsg);
+                } else { 
+                    const finishMsg = "Luar biasa! Semua angka telah berhasil disisipkan dan sekarang sudah terurut sempurna.";
+                    setGameMessage(finishMsg);
+                    if (isVoiceEnabled) sound.speak(finishMsg);
+                    endGame(true); 
+                }
             } else { 
-                const msg = "Posisi belum tepat.";
+                const msg = `Belum tepat! Angka di sebelah kiri yaitu ${gameData[j]} masih lebih besar dari ${key}, geser dulu ya.`;
                 setLives(l => l - 1); setGameMessage(msg); 
                 if (isVoiceEnabled) sound.speak(msg);
+                if (lives <= 1) endGame(false);
             }
         }
     } else if (selectedAlgo === 'selection') {
-        if (type === 'tukar') { // Swap Min with Base
+        if (type === 'tukar') { // Pindahkan (Swap Min with Base)
+            const actualMin = Math.min(...gameData.slice(currentBase));
+            if (gameData[minIdx] !== actualMin) {
+                const msg = `Wah, angka ${gameData[minIdx]} bukan yang terkecil di sisa barisan ini. Cari lagi yang paling kecil ya!`;
+                setLives(l => l - 1); setGameMessage(msg);
+                if (isVoiceEnabled) sound.speak(msg);
+                if (lives <= 1) endGame(false);
+                return;
+            }
+
             const newData = [...gameData];
+            const oldVal = newData[currentBase];
+            const minVal = newData[minIdx];
             [newData[currentBase], newData[minIdx]] = [newData[minIdx], newData[currentBase]];
             setGameData(newData);
             setScore(s => s + 50);
-            const msg = `Tukar angka terkecil dengan posisi ${currentBase}.`;
+            
+            const msg = minIdx === currentBase 
+                ? `Angka ${minVal} memang sudah yang paling kecil di posisinya. Mari lanjut ke angka berikutnya.`
+                : `Bagus! Kita pindahkan angka terkecil ${minVal} ke posisi depan yaitu indeks ${currentBase}.`;
+            setGameMessage(msg);
             if (isVoiceEnabled) sound.speak(msg);
             
             let nextBase = currentBase + 1;
@@ -574,41 +601,62 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
                 setCurrentBase(nextBase);
                 setMinIdx(nextBase);
                 setManualSelection([nextBase]);
-                setGameMessage("Pilih angka terkecil!");
+                const nextMsg = `Sekarang cari lagi angka terkecil mulai dari indeks ${nextBase} sampai akhir.`;
+                if (isVoiceEnabled) sound.speak(nextMsg);
             } else { 
-                setGameMessage("Selesai!");
+                const finishMsg = "Selamat! Seluruh angka telah terurut dengan benar menggunakan metode Selection Sort.";
+                setGameMessage(finishMsg);
+                if (isVoiceEnabled) sound.speak(finishMsg);
                 endGame(true); 
             }
-        } else { // Lanjut - Just for interaction, doesn't do much in selection
-            setGameMessage("Tukar untuk menempatkan angka terkecil.");
+        } else { // Pilih (Confirm Min Selection)
+            const actualMin = Math.min(...gameData.slice(currentBase));
+            if (gameData[minIdx] === actualMin) {
+                const msg = `Tepat sekali! Angka ${gameData[minIdx]} adalah yang terkecil. Sekarang klik PINDAHKAN untuk menaruhnya di depan.`;
+                setScore(s => s + 20);
+                setGameMessage(msg);
+                if (isVoiceEnabled) sound.speak(msg);
+            } else {
+                const msg = `Maaf, angka ${gameData[minIdx]} bukan yang terkecil. Coba teliti lagi dan klik angka yang paling kecil.`;
+                setLives(l => l - 1);
+                setGameMessage(msg);
+                if (isVoiceEnabled) sound.speak(msg);
+                if (lives <= 1) endGame(false);
+            }
         }
     } else { // Bubble logic
         const i = manualSelection[0], j = manualSelection[1];
         const shouldSwap = gameData[i] > gameData[j];
         if ((type === 'tukar' && shouldSwap) || (type === 'lanjut' && !shouldSwap)) {
             if (type === 'tukar') {
-                const msg = `Benar! ${gameData[i]} lebih besar dari ${gameData[j]}, maka kita tukar.`;
+                const msg = `Benar! Karena ${gameData[i]} lebih besar dari ${gameData[j]}, maka kita tukar posisinya.`;
                 const newData = [...gameData]; [newData[i], newData[j]] = [newData[j], newData[i]];
                 setGameData(newData); setScore(s => s + 20); setGameMessage(msg);
                 if (isVoiceEnabled) sound.speak(msg);
             } else { 
-                const msg = "Benar! Posisi sudah sesuai urutan.";
+                const msg = `Pintar! Karena ${gameData[i]} sudah lebih kecil atau sama, urutannya sudah benar.`;
                 setScore(s => s + 10); setGameMessage(msg); 
                 if (isVoiceEnabled) sound.speak(msg);
             }
         } else { 
-            const msg = "Ups! Langkahmu kurang tepat.";
+            const msg = type === 'tukar' 
+                ? `Salah! Angka ${gameData[i]} tidak lebih besar dari ${gameData[j]}, jadi tidak perlu ditukar.`
+                : `Salah! Angka ${gameData[i]} lebih besar dari ${gameData[j]}, seharusnya ditukar posisinya.`;
             setLives(l => l - 1); setGameMessage(msg); 
             if (isVoiceEnabled) sound.speak(msg);
             if (lives <= 1) endGame(false); return; 
         }
         
         let nextI = i + 1;
-        if (nextI >= gameData.length - 1) nextI = 0;
+        if (nextI >= gameData.length - 1) {
+            nextI = 0;
+            const roundMsg = "Satu putaran selesai. Ayo kita periksa lagi dari awal.";
+            if (isVoiceEnabled) sound.speak(roundMsg);
+        }
         setManualSelection([nextI, nextI + 1]);
         const isSorted = gameData.every((v, k) => k === 0 || v >= gameData[k-1]);
         if (isSorted && type === 'lanjut') { 
-          const msg = "Selamat! Data yang acak telah anda urutkan dengan sempurna.";
+          const msg = "Selamat! Kamu berhasil mengurutkan seluruh data dengan metode Bubble Sort.";
           setScore(s => s + 200); 
           setCorrectFoundIndex(0);
           if (isVoiceEnabled) sound.speak(msg);
@@ -802,7 +850,7 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
         {activeTab === 'sorting' && (
             <div className="flex justify-center gap-2 shrink-0">
                 <button onClick={() => handleSortStep('tukar')} className="px-5 py-2 bg-rose-600 text-white rounded-lg font-black text-[9px] uppercase shadow">
-                  {selectedAlgo === 'insertion' ? 'GESER' : (selectedAlgo === 'selection' ? 'TUKAR' : 'TUKAR')}
+                  {selectedAlgo === 'insertion' ? 'GESER' : (selectedAlgo === 'selection' ? 'PINDAHKAN' : 'TUKAR')}
                 </button>
                 <button onClick={() => handleSortStep('lanjut')} className="px-5 py-2 bg-emerald-600 text-white rounded-lg font-black text-[9px] uppercase shadow">
                   {selectedAlgo === 'insertion' ? 'SISIPKAN' : (selectedAlgo === 'selection' ? 'PILIH' : 'LANJUT')}
@@ -815,7 +863,7 @@ export const AlgorithmVisualizer: React.FC<AlgorithmVisualizerProps> = ({ onBack
   };
 
   return (
-    <div className="flex flex-col h-[92vh] w-[95vw] sm:w-[90vw] md:w-[85vw] mx-auto bg-white rounded-[2rem] border border-slate-200 shadow-2xl overflow-hidden">
+    <div className="flex flex-col h-[96vh] w-[98vw] mx-auto bg-white rounded-[2.5rem] border border-slate-200 shadow-2xl overflow-hidden">
       <div className="p-4 sm:p-5 bg-slate-900 flex flex-col sm:flex-row items-center justify-between gap-3 border-b border-white/5 shrink-0">
         <div className="flex items-center gap-3 w-full sm:w-auto">
           <button onClick={onBack} className="p-2 bg-white/10 rounded-xl text-white group"><ArrowLeft className="w-5 h-5"/></button>

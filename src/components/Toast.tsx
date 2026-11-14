@@ -47,6 +47,7 @@ export const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
   return (
     <AnimatePresence>
       <motion.div
+        key="toast-banner"
         initial={{ opacity: 0, y: -20, scale: 0.95, x: '-50%' }}
         animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
         exit={{ opacity: 0, y: -20, scale: 0.95, x: '-50%' }}

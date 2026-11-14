@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   MessageCircle,
   X,
@@ -28,22 +28,20 @@ export const ShareCbtExamModal: React.FC<ShareCbtExamModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [targetPhone, setTargetPhone] = useState("");
 
-  if (!isOpen || !exam) return null;
-
-  const effectiveToken = customToken || exam.token || "TOKEN";
+  const effectiveToken = customToken || exam?.token || "TOKEN";
   const effectiveClassesStr = customClasses && customClasses.length > 0
     ? customClasses.join(", ")
-    : (exam.kelasRef || "Seluruh Kelas");
+    : (exam?.kelasRef || "Seluruh Kelas");
 
-  const durationMin = exam.duration ? exam.duration / 60 : 60;
-  const questionCount = exam.questions?.length || 0;
-  const kkmVal = exam.kkm || 75;
+  const durationMin = exam?.duration ? exam.duration / 60 : 60;
+  const questionCount = exam?.questions?.length || 0;
+  const kkmVal = exam?.kkm || 75;
   const appUrl = typeof window !== "undefined" ? window.location.origin : "https://app.sman1cililin.sch.id";
 
   const draftMessage = `📢 *PEMBERITAHUAN UJIAN CBT ONLINE (SMAN 1 CILILIN)*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-📚 *Mata Pelajaran:* ${exam.subject || "Informatika"}
-📝 *Judul Ujian:* ${exam.title}
+📚 *Mata Pelajaran:* ${exam?.subject || "Informatika"}
+📝 *Judul Ujian:* ${exam?.title || ""}
 🏫 *Kelas Sasaran:* Kelas ${effectiveClassesStr}
 ⏱️ *Durasi Waktu:* ${durationMin} Menit (${questionCount} Soal Pilihan Ganda)
 🎯 *Nilai KKM:* ${kkmVal}
@@ -75,15 +73,26 @@ _Junjung tinggi kejujuran dan semoga sukses!_`;
   };
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 sm:p-6 select-none animate-in fade-in duration-200">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 15 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 15 }}
-        className="bg-white w-full max-w-xl rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col border-2 border-slate-200"
-      >
-        {/* Header */}
-        <div className="bg-slate-50 px-8 py-6 flex justify-between items-center border-b border-slate-200 shrink-0">
+    <AnimatePresence>
+      {isOpen && exam && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6 select-none">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-xl rounded-3xl overflow-hidden shadow-2xl flex flex-col border border-slate-200/80 ring-1 ring-slate-900/5"
+          >
+            {/* Header */}
+            <div className="bg-slate-50/80 px-8 py-6 flex justify-between items-center border-b border-slate-200/70 shrink-0">
           <div className="flex items-center gap-3.5">
             <div className="p-3 bg-emerald-100 text-emerald-700 rounded-2xl">
               <MessageCircle className="w-6 h-6 stroke-[2.5]" />
@@ -189,7 +198,9 @@ _Junjung tinggi kejujuran dan semoga sukses!_`;
             Buka & Kirim di WhatsApp
           </button>
         </div>
-      </motion.div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

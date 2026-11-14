@@ -188,14 +188,14 @@ export const SimulasiBKSettings: React.FC<SimulasiBKSettingsProps> = ({ classesL
           </div>
           
           <div className="grid grid-cols-1 gap-3">
-            {classesList.map((cls) => {
+            {classesList.map((cls, idx) => {
               const config = classConfigs[cls.name] || { active: false, chapters: AVAILABLE_CHAPTERS.map(c => c.id) };
               const isActive = config.active;
               const isExpanded = expandedClass === cls.name;
 
               return (
                 <div 
-                  key={cls.id || cls.name}
+                  key={`sim-cls-${cls.id || cls.name || "cls"}-${idx}`}
                   className={`rounded-2xl border transition-all overflow-hidden ${
                     isActive 
                       ? "border-emerald-200 bg-emerald-50/30" 

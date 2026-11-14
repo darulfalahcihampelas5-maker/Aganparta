@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   RotateCcw,
   X,
@@ -34,11 +34,9 @@ export const ResetStudentExamModal: React.FC<ResetStudentExamModalProps> = ({
   const [selectedNisn, setSelectedNisn] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
-  if (!isOpen || !exam) return null;
-
   // Filter students in exam target class
-  const examRef = exam.kelasRef || "";
-  const targetClasses = Array.isArray(exam.targetClasses) && exam.targetClasses.length > 0
+  const examRef = exam?.kelasRef || "";
+  const targetClasses = Array.isArray(exam?.targetClasses) && exam.targetClasses.length > 0
     ? exam.targetClasses
     : examRef.split(",").map((s: string) => s.trim());
 
@@ -48,7 +46,7 @@ export const ResetStudentExamModal: React.FC<ResetStudentExamModalProps> = ({
   });
 
   // Check exam scores from final_grades
-  const examGrades = finalGradesList.filter((g) => g.assignmentId === exam.id || g.examId === exam.id);
+  const examGrades = exam ? finalGradesList.filter((g) => g.assignmentId === exam.id || g.examId === exam.id) : [];
   const studentsWithStatus = classStudents.map((stu) => {
     const grade = examGrades.find((g) => g.nisn === stu.nisn);
     return {
@@ -71,21 +69,33 @@ export const ResetStudentExamModal: React.FC<ResetStudentExamModalProps> = ({
   );
 
   const handleExecuteReset = async () => {
+    if (!exam) return;
     if (resetMode === "single" && !selectedNisn) return;
     const target = resetMode === "all" ? "ALL" : selectedNisn;
     await onConfirmReset(exam.id, target);
   };
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 sm:p-6 select-none animate-in fade-in duration-200">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 15 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 15 }}
-        className="bg-white w-full max-w-2xl rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col border-2 border-slate-200"
-      >
-        {/* Header */}
-        <div className="bg-slate-50 px-8 py-6 flex justify-between items-center border-b border-slate-200 shrink-0">
+    <AnimatePresence>
+      {isOpen && exam && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6 select-none">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-2xl rounded-3xl overflow-hidden shadow-2xl flex flex-col border border-slate-200/80 ring-1 ring-slate-900/5"
+          >
+            {/* Header */}
+            <div className="bg-slate-50/80 px-8 py-6 flex justify-between items-center border-b border-slate-200/70 shrink-0">
           <div className="flex items-center gap-3.5">
             <div className="p-3 bg-orange-100 text-orange-600 rounded-2xl">
               <RotateCcw className="w-6 h-6 stroke-[2.5]" />
@@ -210,11 +220,11 @@ export const ResetStudentExamModal: React.FC<ResetStudentExamModalProps> = ({
                   </div>
 
                   <div className="border border-slate-200 rounded-2xl divide-y divide-slate-100 max-h-[220px] overflow-y-auto custom-scrollbar">
-                    {filteredSubmittedStudents.map((stu) => {
+                    {filteredSubmittedStudents.map((stu, idx) => {
                       const isSelected = selectedNisn === stu.nisn;
                       return (
                         <div
-                          key={`rst-stu-${stu.nisn}`}
+                          key={`rst-stu-${stu.nisn || "nisn"}-${idx}`}
                           onClick={() => setSelectedNisn(stu.nisn)}
                           className={`p-3.5 flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                             isSelected ? "bg-orange-50/80 font-bold" : "hover:bg-slate-50"
@@ -297,7 +307,9 @@ export const ResetStudentExamModal: React.FC<ResetStudentExamModalProps> = ({
             )}
           </button>
         </div>
-      </motion.div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

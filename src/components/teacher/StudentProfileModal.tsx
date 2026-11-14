@@ -1,6 +1,6 @@
 import React from "react";
-import { motion } from "motion/react";
-import { User, X } from "lucide-react";
+import { motion, AnimatePresence } from "motion/react";
+import { User, X, FileText, MessageCircle } from "lucide-react";
 import { getDriveImageUrl } from "../../lib/driveUtils";
 import { isAssignmentForClass, isExamForClass } from "../../lib/gradeUtils";
 
@@ -14,6 +14,8 @@ interface StudentProfileModalProps {
   examsList: any[];
   finalGradesList: any[];
   getAssignmentPublishedAtForTeacher: (asg: any, kelas?: string) => string;
+  onDownloadRaporPdf?: (student: any) => void;
+  onShareWhatsApp?: (student: any) => void;
 }
 
 export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
@@ -26,20 +28,32 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
   examsList,
   finalGradesList,
   getAssignmentPublishedAtForTeacher,
+  onDownloadRaporPdf,
+  onShareWhatsApp,
 }) => {
-  if (!selectedStudentProfile) return null;
-
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-indigo-950/80 bg-white/95 p-4 sm:p-10 animate-in fade-in duration-500">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 30 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white w-full max-w-4xl rounded-[3.5rem] overflow-hidden shadow-2xl flex flex-col max-h-[90vh]"
-      >
-        {/* Header */}
-        <div className="bg-slate-50 p-10 text-black flex justify-between items-center shrink-0 relative overflow-hidden border-b border-slate-200">
-          <div className="flex items-center gap-6 relative z-10">
-            <div className="w-20 h-20 rounded-full border-4 border-[#85cc00] bg-[#85cc00]/10 flex items-center justify-center overflow-hidden shadow-md">
+    <AnimatePresence>
+      {selectedStudentProfile && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-8">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-4xl rounded-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh] border border-slate-200/80 ring-1 ring-slate-900/5"
+          >
+            {/* Header */}
+            <div className="bg-slate-50/80 p-6 sm:p-8 text-black flex flex-col md:flex-row md:justify-between md:items-center gap-4 shrink-0 relative overflow-hidden border-b border-slate-200/70">
+          <div className="flex items-center gap-5 relative z-10">
+            <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full border-4 border-[#85cc00] bg-[#85cc00]/10 flex items-center justify-center overflow-hidden shadow-md shrink-0">
               {selectedStudentProfile.profilePhotoUrl ? (
                 <img
                   loading="lazy"
@@ -53,7 +67,7 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
               )}
             </div>
             <div>
-              <h3 className="text-3xl font-display font-black tracking-tight text-slate-950">
+              <h3 className="text-2xl sm:text-3xl font-display font-black tracking-tight text-slate-950">
                 {selectedStudentProfile.displayName}
               </h3>
               <div className="flex flex-wrap gap-2 items-center mt-2">
@@ -69,12 +83,36 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
               </div>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-4 hover:bg-slate-200 rounded-2xl transition-all active:scale-95 group relative z-10 animate-pulse"
-          >
-            <X className="w-7 h-7 group-hover:rotate-90 transition-transform text-slate-500" />
-          </button>
+          <div className="flex items-center gap-2 self-end md:self-center relative z-10">
+            {onDownloadRaporPdf && (
+              <button
+                type="button"
+                onClick={() => onDownloadRaporPdf(selectedStudentProfile)}
+                className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+                title="Unduh Rapor & Rekap Presensi Siswa (PDF)"
+              >
+                <FileText className="w-4 h-4 text-[#85cc00]" />
+                <span>Rapor PDF</span>
+              </button>
+            )}
+            {onShareWhatsApp && (
+              <button
+                type="button"
+                onClick={() => onShareWhatsApp(selectedStudentProfile)}
+                className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-[11px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+                title="Kirim Ringkasan Nilai & Kehadiran ke Orang Tua via WhatsApp"
+              >
+                <MessageCircle className="w-4 h-4" />
+                <span>Kirim WA</span>
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2.5 hover:bg-slate-200/80 rounded-xl transition-all active:scale-95 group cursor-pointer"
+            >
+              <X className="w-6 h-6 group-hover:rotate-90 transition-transform text-slate-500" />
+            </button>
+          </div>
         </div>
 
         {/* Tabs */}
@@ -309,7 +347,9 @@ export const StudentProfileModal: React.FC<StudentProfileModalProps> = ({
             </div>
           )}
         </div>
-      </motion.div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

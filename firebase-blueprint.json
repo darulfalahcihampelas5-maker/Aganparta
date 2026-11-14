@@ -155,6 +155,58 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["kehadiran", "tugas", "uts", "uas"]
+    },
+    "AiChatLog": {
+      "title": "AiChatLog",
+      "description": "Log of student interactions with Si Pinter AI assistant",
+      "type": "object",
+      "properties": {
+        "studentName": { "type": "string" },
+        "questionText": { "type": "string" },
+        "durationMs": { "type": "number" },
+        "flagged": { "type": "boolean" },
+        "flaggedWord": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentName", "questionText", "durationMs", "timestamp"]
+    },
+    "AiViolation": {
+      "title": "AiViolation",
+      "description": "Log of profanity/digital ethics violations in Si Pinter chat",
+      "type": "object",
+      "properties": {
+        "studentName": { "type": "string" },
+        "questionText": { "type": "string" },
+        "flaggedWord": { "type": "string" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "resolvedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["studentName", "questionText", "flaggedWord", "status", "timestamp"]
+    },
+    "ExamSession": {
+      "title": "ExamSession",
+      "description": "Real-time live proctoring session status for an active CBT exam",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "examId": { "type": "string" },
+        "examTitle": { "type": "string" },
+        "nisn": { "type": "string" },
+        "studentName": { "type": "string" },
+        "kelas": { "type": "string" },
+        "status": { "type": "string", "enum": ["mengerjakan", "selesai", "melanggar"] },
+        "answeredCount": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "currentQuestion": { "type": "number" },
+        "violationCount": { "type": "number" },
+        "lastViolationReason": { "type": "string" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "lastActiveAt": { "type": "string", "format": "date-time" },
+        "finishedAt": { "type": "string", "format": "date-time" },
+        "score": { "type": "number" }
+      },
+      "required": ["examId", "nisn", "status", "answeredCount", "totalQuestions"]
     }
   },
   "firestore": {
@@ -194,6 +246,10 @@
       "schema": "Exam",
       "description": "Dynamic exams created by the teacher"
     },
+    "exam_sessions/{sessionId}": {
+      "schema": "ExamSession",
+      "description": "Real-time CBT exam proctoring sessions"
+    },
     "materials/{materialId}": {
       "schema": "Material",
       "description": "Learning materials collection"
@@ -205,6 +261,14 @@
     "assignment_chats/{chatMessageId}": {
       "schema": "ChatMessage",
       "description": "Chat messages between students and teachers about assignments"
+    },
+    "aiChatLogs/{logId}": {
+      "schema": "AiChatLog",
+      "description": "Logs of Si Pinter AI chat questions and response durations"
+    },
+    "aiViolations/{violationId}": {
+      "schema": "AiViolation",
+      "description": "Logs of detected digital ethics violations in Si Pinter AI chat"
     }
   }
 }

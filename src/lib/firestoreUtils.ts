@@ -75,16 +75,64 @@ export function getLocalCache<T>(key: string, maxAgeMs: number = 30 * 60 * 1000)
   }
 }
 
+const MAX_LOCAL_CACHE_CHARS = 450_000; // ~900 KB UTF-16 max per entry
+
+export function pruneStorageForQuota(): void {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (
+        key.startsWith("firestore_") ||
+        key.startsWith("firas_cache_") ||
+        key.startsWith("firas_student_")
+      ) {
+        keysToRemove.push(key);
+      }
+    }
+    keysToRemove.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        // ignore
+      }
+    });
+  } catch (e) {
+    console.warn("Error pruning localStorage:", e);
+  }
+}
+
 export function setLocalCache<T>(key: string, data: T): void {
   try {
     // Safety guard: Never cache an empty array
     if (Array.isArray(data) && data.length === 0) {
       return;
     }
-    localStorage.setItem(key, JSON.stringify({
+    const serialized = JSON.stringify({
       timestamp: Date.now(),
       data
-    }));
+    });
+    // Prevent huge payloads (e.g., exams with embedded base64 images) from filling the 5MB quota
+    if (serialized.length > MAX_LOCAL_CACHE_CHARS) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    try {
+      localStorage.setItem(key, serialized);
+    } catch {
+      // Evict stale caches + leftover Firestore storage keys and retry once
+      pruneStorageForQuota();
+      try {
+        localStorage.setItem(key, serialized);
+      } catch {
+        // Silently skip if storage remains tight so runtime never crashes
+      }
+    }
   } catch (e) {
     console.warn("Could not save to localStorage cache:", e);
   }
@@ -95,10 +143,10 @@ export function clearStudentCaches(nisn?: string, kelas?: string): void {
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && (key.startsWith("firas_cache_") || key.startsWith("firas_student_"))) {
+      if (key && (key.startsWith("firestore_") || key.startsWith("firas_cache_") || key.startsWith("firas_student_"))) {
         if (!nisn && !kelas) {
           keysToRemove.push(key);
-        } else if ((nisn && key.includes(nisn)) || (kelas && key.includes(kelas))) {
+        } else if (key.startsWith("firestore_") || (nisn && key.includes(nisn)) || (kelas && key.includes(kelas))) {
           keysToRemove.push(key);
         }
       }
@@ -114,7 +162,7 @@ export function clearTeacherCaches(): void {
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && key.startsWith("firas_cache_")) {
+      if (key && (key.startsWith("firestore_") || key.startsWith("firas_cache_"))) {
         keysToRemove.push(key);
       }
     }

@@ -21,6 +21,16 @@ export class ErrorBoundary extends React.Component<Props, State> {
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught Error in Component:", error, errorInfo);
+    const msg = String(error?.message || error || "");
+    if (
+      (msg.includes("Failed to fetch dynamically imported module") ||
+       msg.includes("does not provide an export named") ||
+       msg.includes("Importing a module script failed")) &&
+      !sessionStorage.getItem("eb_auto_reload")
+    ) {
+      sessionStorage.setItem("eb_auto_reload", "true");
+      window.location.reload();
+    }
   }
 
   public render() {
@@ -51,6 +61,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
               <button
                 onClick={() => {
                   this.setState({ hasError: false, error: null });
+                  try {
+                    sessionStorage.removeItem("eb_auto_reload");
+                    sessionStorage.removeItem("chunk_reload_triggered");
+                  } catch (_) {}
                   window.location.reload();
                 }}
                 className="flex-1 py-3 bg-[#85cc00] hover:bg-[#7bc000] text-slate-800 font-bold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md cursor-pointer"

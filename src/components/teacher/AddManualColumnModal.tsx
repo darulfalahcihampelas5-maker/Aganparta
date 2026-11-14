@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   PlusCircle,
   X,
@@ -65,8 +66,6 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
       }
     }
   }, [isOpen, chaptersList, classesList]);
-
-  if (!isOpen) return null;
 
   const handleToggleClass = (className: string) => {
     setSelectedClasses((prev) =>
@@ -154,10 +153,26 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
     classesList.length > 0 && selectedClasses.length === classesList.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200/80 w-full max-w-lg overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Header */}
-        <div className="px-6 py-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={() => !isSaving && onClose()}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-lg overflow-hidden flex flex-col max-h-[92vh]"
+          >
+            {/* Header */}
+            <div className="px-6 py-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">
           <div className="flex items-center gap-3 relative z-10">
             <div
               className={`w-10 h-10 rounded-xl flex items-center justify-center ${
@@ -225,9 +240,9 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
               Pilihan Cepat Judul Kolom ({type})
             </label>
             <div className="flex flex-wrap gap-1.5">
-              {currentQuickTitles.map((t) => (
+              {currentQuickTitles.map((t, tIdx) => (
                 <button
-                  key={t}
+                  key={`qt-${tIdx}-${t}`}
                   type="button"
                   onClick={() => setMateri(t)}
                   className={`px-2.5 py-1 text-xs font-medium rounded-lg border transition-all cursor-pointer ${
@@ -284,11 +299,11 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
                 <option value="" disabled>
                   -- Pilih Bab --
                 </option>
-                {chaptersList.map((ch: any) => {
+                {chaptersList.map((ch: any, idx: number) => {
                   const rawName = ch.name || ch.id || "";
                   const cleanName = rawName.replace(/^Bab\s*\d+\s*[-:.]\s*/i, "").trim();
                   return (
-                    <option key={ch.id || ch.name} value={cleanName}>
+                    <option key={`ch-opt-${ch.id || ch.name || "ch"}-${idx}`} value={cleanName}>
                       {cleanName}
                     </option>
                   );
@@ -334,12 +349,12 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
 
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {classesList.map((cls: any) => {
+                {classesList.map((cls: any, idx: number) => {
                   const cName = cls.name || cls.id;
                   const isChecked = selectedClasses.includes(cName);
                   return (
                     <label
-                      key={cName}
+                      key={`cls-chk-${cName || "cls"}-${idx}`}
                       className={`flex items-center gap-2.5 p-2.5 rounded-lg border text-xs font-bold transition-all cursor-pointer select-none ${
                         isChecked
                           ? "bg-white border-[#85cc00] text-slate-900 shadow-sm ring-1 ring-[#85cc00]/30"
@@ -446,7 +461,9 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

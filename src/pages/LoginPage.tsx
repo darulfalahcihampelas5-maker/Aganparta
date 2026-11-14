@@ -32,24 +32,24 @@ import {
   ExternalLink,
 } from "lucide-react";
 
+let hasShownSplashThisLoad = false;
+
 export default function LoginPage() {
   const navigate = useNavigate();
 
-  // Splash Screen State
-  const [showSplash, setShowSplash] = useState(() => {
-    return sessionStorage.getItem("splashShown") === "true" ? false : true;
-  });
+  // Splash Screen State (tampil setiap aplikasi dimuat/di-refresh)
+  const [showSplash, setShowSplash] = useState(() => !hasShownSplashThisLoad);
 
   useEffect(() => {
-    if (sessionStorage.getItem("splashShown") === "true") {
+    if (hasShownSplashThisLoad) {
       setShowSplash(false);
       return;
     }
 
     const timer = setTimeout(() => {
+      hasShownSplashThisLoad = true;
       setShowSplash(false);
-      sessionStorage.setItem("splashShown", "true");
-    }, 2500);
+    }, 2400);
 
     return () => {
       clearTimeout(timer);
@@ -105,6 +105,7 @@ export default function LoginPage() {
   }, []);
 
   const [activeTab, setActiveTab] = useState<"siswa" | "guru">("siswa");
+  const [showTeacherPortal, setShowTeacherPortal] = useState(false);
   const [nisn, setNisn] = useState("");
   const [studentAccessCode, setStudentAccessCode] = useState("");
   const [student, setStudent] = useState<any>(null);
@@ -128,30 +129,34 @@ export default function LoginPage() {
     setNisn("");
     setStudentAccessCode("");
     setStudent(null);
+    setNisnError("");
   };
 
   const variants = {
     enter: (direction: number) => ({
-      x: direction > 0 ? "100%" : "-100%",
+      x: direction > 0 ? 20 : -20,
       opacity: 0,
+      filter: "blur(4px)",
     }),
     center: {
       zIndex: 1,
       x: 0,
       opacity: 1,
+      filter: "blur(0px)",
     },
     exit: (direction: number) => ({
       zIndex: 0,
-      x: direction < 0 ? "100%" : "-100%",
+      x: direction < 0 ? 20 : -20,
       opacity: 0,
+      filter: "blur(4px)",
     }),
   };
 
   const springConfig = {
     type: "spring" as const,
-    stiffness: 180,
-    damping: 24,
-    mass: 1,
+    stiffness: 300,
+    damping: 30,
+    mass: 0.8,
   };
 
   const [dbTeacherPassword, setDbTeacherPassword] = useState<string | null>(() => {
@@ -429,436 +434,450 @@ export default function LoginPage() {
     }
   };
 
-  if (showSplash) {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#85cc00] font-sans p-6 overflow-hidden">
-        <div className="relative z-10 flex flex-col items-center max-w-md text-center">
-          {/* Logo container with luxurious scale-in & pulse animation */}
-          <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
-            className="w-28 h-28 md:w-32 md:h-32 flex items-center justify-center shrink-0 mb-8"
-          >
-            <img 
-              src={getDriveImageUrl("https://drive.google.com/file/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR/view?usp=sharing")}
-              alt="Logo SiPinter"
-              className="w-full h-full object-contain drop-shadow-xl"
-              referrerPolicy="no-referrer"
-            />
-          </motion.div>
-
-          {/* Application Name and description with staggered entry */}
-          <motion.h1
-            initial={{ y: 20, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.1, duration: 0.6 }}
-            className="text-3xl sm:text-4xl font-display font-black text-white tracking-tight leading-tight mb-2"
-          >
-            SiPinter Apps
-          </motion.h1>
-
-          <motion.p
-            initial={{ y: 15, opacity: 0 }}
-            animate={{ y: 0, opacity: 0.9 }}
-            transition={{ delay: 0.2, duration: 0.6 }}
-            className="text-[10px] sm:text-[11px] font-bold text-white/90 tracking-widest uppercase mb-6"
-          >
-            Cerdas Inovatif Terampil Responsif Agamis
-          </motion.p>
-
-          <motion.p
-            initial={{ y: 10, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            transition={{ delay: 0.3, duration: 0.6 }}
-            className="text-sm font-medium text-white/80 max-w-sm mb-10 leading-relaxed"
-          >
-            Sistem Informasi Penilaian Interaktif dan Tugas Evaluasi Rutin Siswa SMAN 1 Cililin
-          </motion.p>
-
-          {/* Premium Progress Bar */}
-          <div className="w-48 h-1 bg-white/30 rounded-full overflow-hidden relative shadow-inner">
-            <motion.div
-              initial={{ left: "-100%" }}
-              animate={{ left: "100%" }}
-              transition={{
-                repeat: Infinity,
-                duration: 1.5,
-                ease: "easeInOut"
-              }}
-              className="absolute top-0 bottom-0 w-1/2 bg-white rounded-full shadow-[0_0_8px_rgba(255,255,255,0.8)]"
-            />
-          </div>
-          
-          <motion.span
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4, duration: 0.4 }}
-            className="text-[10px] font-bold text-white/70 tracking-wider uppercase mt-3"
-          >
-            Menyiapkan Aplikasi...
-          </motion.span>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="relative min-h-screen w-full flex-1 flex flex-col lg:items-center lg:justify-center bg-slate-50/50 selection:bg-[#85cc00]/20 selection:text-slate-800 font-sans p-3 xs:p-4 sm:p-6 lg:p-12 xl:p-16 overflow-x-hidden">
+    <div className="relative min-h-screen w-full flex flex-col items-center justify-center bg-gradient-to-b from-slate-50 via-white to-slate-100/70 selection:bg-[#85cc00]/25 selection:text-slate-900 font-sans p-4 sm:p-6 lg:p-10 overflow-x-hidden">
+      <AnimatePresence>
+        {showSplash && (
+          <motion.div
+            key="sipinter-splash"
+            initial={{ opacity: 1 }}
+            exit={{ opacity: 0, scale: 1.02 }}
+            transition={{ duration: 0.4, ease: "easeInOut" }}
+            onClick={() => {
+              hasShownSplashThisLoad = true;
+              setShowSplash(false);
+            }}
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#85cc00] font-sans p-6 overflow-hidden cursor-pointer select-none"
+          >
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] h-[380px] rounded-full bg-white/25 blur-[90px]" />
+            </div>
+
+            <div className="relative z-10 flex flex-col items-center text-center">
+              <motion.div
+                initial={{ scale: 0.8, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="w-28 h-28 md:w-32 md:h-32 flex items-center justify-center shrink-0 mb-3 relative"
+              >
+                <div className="absolute inset-2 rounded-full bg-white/35 blur-xl pointer-events-none" />
+                <img
+                  src={getDriveImageUrl("https://drive.google.com/file/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR/view?usp=sharing")}
+                  alt="Logo SMA Negeri 1 Cililin"
+                  className="relative z-10 w-full h-full object-contain drop-shadow-[0_10px_24px_rgba(15,23,42,0.18)]"
+                  referrerPolicy="no-referrer"
+                />
+              </motion.div>
+
+              <motion.h1
+                initial={{ y: 12, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.1, duration: 0.45 }}
+                className="text-3xl sm:text-4xl font-display font-black text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.16)] tracking-wider uppercase leading-none"
+              >
+                SIPINTER APP
+              </motion.h1>
+
+              <motion.p
+                initial={{ y: 8, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.18, duration: 0.45 }}
+                className="text-xs sm:text-sm font-bold text-slate-600 tracking-[0.18em] uppercase leading-tight mt-0.5"
+              >
+                SMA NEGERI 1 CILILIN
+              </motion.p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <NotificationModal
         {...modalConfig}
         isOpen={modalConfig.isOpen}
         onClose={() => setModalConfig({ ...modalConfig, isOpen: false })}
       />
-      {/* Refined Ambient Glows */}
-      <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-[#85cc00]/5 blur-[120px]"></div>
-        <div className="absolute bottom-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-indigo-500/5 blur-[120px]"></div>
+
+      {/* Subtle ambient lighting gradients */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        <div className="absolute top-[-15%] left-1/2 -translate-x-1/2 w-[750px] h-[550px] rounded-full bg-[radial-gradient(ellipse_at_center,rgba(133,204,0,0.14),rgba(255,255,255,0)_70%)] blur-[90px]" />
+        <div className="absolute bottom-[-10%] right-[-5%] w-[500px] h-[500px] rounded-full bg-[radial-gradient(ellipse_at_center,rgba(133,204,0,0.08),rgba(255,255,255,0)_70%)] blur-[100px]" />
       </div>
 
-      <div className="w-full max-w-6xl mx-auto flex flex-col lg:items-center lg:justify-center relative z-10">
+      <div className="w-full max-w-[460px] mx-auto relative z-10 flex flex-col items-center">
         
-        {/* Main Columns Container */}
-        <div className="w-full flex flex-col lg:flex-row items-center justify-center gap-6 lg:gap-16 pt-4 pb-12 lg:py-16">
-          
-          {/* Branding Content */}
-          <section className="w-full max-w-[500px] text-center lg:text-left flex flex-col items-center lg:items-start select-none py-2 px-4">
+        {/* Main Authentication Card */}
+        <div className="w-full bg-white/85 backdrop-blur-2xl rounded-[2.5rem] border border-slate-200/80 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.06),0_0_1px_1px_rgba(0,0,0,0.03)] p-7 sm:p-10 relative overflow-hidden transition-all duration-300">
+          {/* Top Elegant Gradient Accent */}
+          <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-transparent via-[#85cc00] to-transparent" />
 
-            <h1 className="text-4xl lg:text-5xl font-display font-black text-[#85cc00] tracking-tight leading-tight mb-3 select-none">
-              SiPinter Apps
-            </h1>
-            
-            <div className="flex flex-row items-center justify-center lg:justify-start gap-2 mb-6 opacity-95 select-none flex-wrap w-full max-w-full">
-              <span className="text-[10px] sm:text-[11px] font-bold text-[#649c00] tracking-widest uppercase text-center lg:text-left">Cerdas Inovatif Terampil Responsif Agamis</span>
+          {/* School Emblem & Brand Identity */}
+          <div className="flex flex-col items-center text-center mb-7">
+            <div className="w-20 h-20 sm:w-24 sm:h-24 flex items-center justify-center mb-3 transition-transform duration-300 hover:scale-105">
+              <img 
+                src={getDriveImageUrl("https://drive.google.com/file/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR/view?usp=sharing")}
+                alt="Logo SiPinter SMAN 1 Cililin"
+                className="w-full h-full object-contain filter drop-shadow-sm"
+                referrerPolicy="no-referrer"
+              />
             </div>
-
-            <h2 className="text-xl sm:text-2xl font-display font-semibold text-slate-700 leading-snug mb-5 max-w-[480px]">
-              Sistem Informasi Penilaian Interaktif dan Tugas Evaluasi Rutin Siswa
-            </h2>
-            
-            <p className="text-slate-500 font-normal text-sm leading-relaxed max-w-[480px] mb-6">
-              Platform manajemen akademis yang akurat, real-time, dan terintegrasi untuk membangun kultur pembelajaran yang transparan dan disiplin di SMAN 1 Cililin.
+            <h1 className="text-2xl sm:text-3xl font-display font-black text-[#85cc00] tracking-wider uppercase leading-none">
+              SIPINTER APP
+            </h1>
+            <p className="text-xs sm:text-sm font-bold text-slate-800 uppercase tracking-[0.2em] leading-tight mt-0.5">
+              SMA NEGERI 1 CILILIN
             </p>
+            <p className="text-xs text-slate-500 font-medium max-w-[340px] mt-2 leading-relaxed">
+              Sistem Informasi Penilaian Interaktif dan Tugas Evaluasi Rutin Siswa
+            </p>
+          </div>
 
-
-
-
-          </section>
-
-          {/* Login Card Container */}
-          <section className="w-full max-w-[440px] lg:shrink-0 px-2 sm:px-0 flex flex-col gap-4">
-
-            <div className="bg-white rounded-[1.75rem] sm:rounded-[2rem] shadow-xl shadow-slate-100/80 border border-slate-200/60 p-5 sm:p-10 relative overflow-hidden transition-all duration-300 group">
-              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#85cc00]/80 to-emerald-500/80"></div>
-              
-              <div className="absolute top-10 right-10 opacity-[0.03] pointer-events-none group-hover:scale-110 transition-transform duration-700">
-                <Fingerprint className="w-20 h-20 text-slate-900" />
-              </div>
-
-              {/* Login Header */}
-              <div className="mb-6 text-center sm:text-left">
-                <h3 className="text-slate-800 font-display font-semibold text-2xl tracking-tight mb-1">
-                  Portal Masuk
-                </h3>
-                <p className="text-slate-400 text-xs font-normal">
-                  Masukkan kredensial Anda untuk melanjutkan ke sistem
-                </p>
-              </div>
-
-              {/* Tab Content Panels */}
-              <div className="relative overflow-hidden min-h-[280px]">
-                <AnimatePresence initial={false} custom={direction} mode="popLayout">
+          {/* Modern Role Switcher — tersembunyi secara default sampai footer "© Agan Parta,S.Kom." diklik */}
+          {showTeacherPortal && (
+            <div className="flex border-b border-slate-200/80 mb-7 relative select-none animate-in fade-in duration-200">
+              <button
+                type="button"
+                onClick={() => {
+                  handleTabChange("siswa");
+                  setShowTeacherPortal(false);
+                }}
+                className={`flex-1 pb-3.5 text-xs sm:text-sm font-bold uppercase tracking-wider transition-colors relative flex items-center justify-center gap-2 cursor-pointer bg-transparent ${
+                  activeTab === "siswa"
+                    ? "text-slate-900 font-extrabold"
+                    : "text-slate-400 hover:text-slate-600"
+                }`}
+              >
+                <GraduationCap className={`w-4 h-4 transition-colors ${activeTab === "siswa" ? "text-[#85cc00]" : "text-slate-400"}`} />
+                <span>Siswa</span>
+                {activeTab === "siswa" && (
                   <motion.div
-                    key={activeTab}
-                    custom={direction}
-                    variants={variants}
-                    initial="enter"
-                    animate="center"
-                    exit="exit"
-                    transition={{
-                      x: springConfig,
-                      opacity: { duration: 0.25 },
-                    }}
-                    className="w-full"
-                  >
-                    {activeTab === "siswa" ? (
-                      <div>
-                        {!student ? (
-                          <div className="space-y-5">
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2 ml-1">
-                                KODE AKSES SISWA
-                              </label>
-                              <div className="relative flex items-center bg-white border border-slate-300 rounded-lg px-4 py-3 focus-within:border-[#85cc00] focus-within:ring-2 focus-within:ring-[#85cc00]/20 transition-all duration-200">
-                                <KeyRound className="h-4 w-4 text-slate-400 mr-3 shrink-0" />
-                                <input
-                                  type={showStudentAccessCode ? "text" : "password"}
-                                  placeholder="CONTOH:IF1234567"
-                                  value={studentAccessCode}
-                                  onChange={(e) => setStudentAccessCode(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      checkNisn();
-                                    }
-                                  }}
-                                  className="w-full bg-transparent text-slate-700 font-medium focus:outline-none placeholder:text-slate-400/70 text-base font-sans tracking-tight"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => setShowStudentAccessCode(!showStudentAccessCode)}
-                                  className="text-slate-400 hover:text-[#649c00] transition-colors shrink-0 cursor-pointer ml-2"
-                                >
-                                  {showStudentAccessCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                </button>
-                              </div>
-                            </div>
+                    layoutId="activeRoleTabUnderline"
+                    className="absolute -bottom-[1px] inset-x-2 h-0.5 bg-[#85cc00] rounded-full shadow-[0_0_8px_rgba(133,204,0,0.4)]"
+                    transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                  />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTabChange("guru")}
+                className={`flex-1 pb-3.5 text-xs sm:text-sm font-bold uppercase tracking-wider transition-colors relative flex items-center justify-center gap-2 cursor-pointer bg-transparent ${
+                  activeTab === "guru"
+                    ? "text-slate-900 font-extrabold"
+                    : "text-slate-400 hover:text-slate-600"
+                }`}
+              >
+                <ShieldCheck className={`w-4 h-4 transition-colors ${activeTab === "guru" ? "text-[#85cc00]" : "text-slate-400"}`} />
+                <span>Guru / Admin</span>
+                {activeTab === "guru" && (
+                  <motion.div
+                    layoutId="activeRoleTabUnderline"
+                    className="absolute -bottom-[1px] inset-x-2 h-0.5 bg-[#85cc00] rounded-full shadow-[0_0_8px_rgba(133,204,0,0.4)]"
+                    transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                  />
+                )}
+              </button>
+            </div>
+          )}
 
-                            {nisnError && (
-                              <div className="p-3 bg-rose-50 border border-rose-100 rounded-md flex gap-3 items-center animate-in fade-in slide-in-from-top-2">
-                                <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                                <p className="text-xs font-medium text-rose-650 leading-tight">
-                                  {nisnError}
-                                </p>
-                              </div>
-                            )}
-
-                            <button
-                              onClick={checkNisn}
-                              disabled={isLoading}
-                              className="w-full py-3.5 bg-[#85cc00] hover:bg-[#7bc000] text-slate-800 font-semibold text-sm uppercase tracking-wider rounded-md transition-all shadow-md shadow-[#85cc00]/10 active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
-                            >
-                              {isLoading ? (
-                                <RefreshCw className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <>Akses Dashboard <ArrowRight className="w-3.5 h-3.5" /></>
-                              )}
-                            </button>
-
-                            <p 
-                              onClick={() => setShowForgotHelp(true)}
-                              className="text-slate-400 hover:text-[#649c00] font-medium text-xs text-center cursor-pointer mt-2 block hover:underline underline-offset-4 decoration-slate-200/40 transition-colors"
-                            >
-                              Bantuan Akses Sistem
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-6 animate-in fade-in duration-400">
-                            <div className="bg-slate-50/60 rounded-md p-6 border border-slate-200/50 text-center relative">
-                               <div className="absolute -top-3 -right-3 w-9 h-9 bg-[#85cc00] rounded-md flex items-center justify-center text-slate-850 shadow-md shadow-[#85cc00]/20">
-                                  <CheckCircle2 className="w-5 h-5" />
-                                </div>
-                               <h4 className="text-[9px] font-bold text-[#649c00] uppercase tracking-wider mb-2">Verifikasi Profil Anda</h4>
-                               <h3 className="text-xl font-display font-bold text-slate-800 mb-2">{student.displayName}</h3>
-                               <p className="text-[10px] text-slate-400 mb-4 font-medium italic">Pastikan data di bawah ini benar sebelum masuk ke dashboard.</p>
-                               <div className="grid grid-cols-2 gap-3">
-                                  <div className="bg-white p-3 rounded-md border border-slate-150 shadow-sm">
-                                     <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mb-0.5">NIS</p>
-                                     <p className="text-xs font-bold text-slate-700">{student.nisn}</p>
-                                  </div>
-                                  <div className="bg-white p-3 rounded-md border border-slate-150 shadow-sm">
-                                     <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest mb-0.5">Kelas Akademik</p>
-                                     <p className="text-xs font-bold text-slate-700">{student.kelas}</p>
-                                  </div>
-                               </div>
-                            </div>
-
-                            <div className="space-y-3">
-                              <button
-                                onClick={() => handleStudentLogin()}
-                                className="w-full py-3.5 bg-[#85cc00] hover:bg-[#7bc000] text-slate-800 font-semibold text-sm uppercase tracking-wider rounded-md transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
-                              >
-                                Konfirmasi & Masuk <ArrowRight className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => setStudent(null)}
-                                className="w-full py-2 text-[10px] font-bold text-slate-400 hover:text-slate-500 uppercase tracking-widest transition-colors cursor-pointer"
-                              >
-                                Batalkan Akses
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
+          {/* Form Content */}
+          <div className="relative overflow-hidden min-h-[220px]">
+            <AnimatePresence initial={false} custom={direction} mode="popLayout">
+              <motion.div
+                key={activeTab}
+                custom={direction}
+                variants={variants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={{
+                  x: springConfig,
+                  opacity: { duration: 0.22 },
+                }}
+                className="w-full"
+              >
+                {activeTab === "siswa" ? (
+                  <div>
+                    {!student ? (
                       <div className="space-y-5">
                         <div>
-                          <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2 ml-1">
-                            IDENTITAS GURU
+                          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 ml-1">
+                            Kode Akses Siswa
                           </label>
-                          <div className="relative flex items-center bg-slate-50 border border-slate-200 rounded-md px-4 py-3 focus-within:border-[#85cc00] focus-within:bg-white focus-within:ring-4 focus-within:ring-[#85cc00]/5 transition-all duration-200">
-                            <User className="h-4 w-4 text-slate-400 mr-3 shrink-0" />
+                          <div className="group/input relative flex items-center bg-slate-50/70 hover:bg-white border border-slate-200/90 rounded-2xl px-4 py-3.5 transition-all duration-300 focus-within:bg-white focus-within:border-[#85cc00] focus-within:ring-4 focus-within:ring-[#85cc00]/15 focus-within:shadow-md focus-within:shadow-[#85cc00]/5">
+                            <KeyRound className="h-4 w-4 text-slate-400 group-focus-within/input:text-[#85cc00] mr-3 shrink-0 transition-colors" />
                             <input
-                              type="text"
-                              placeholder="Masukkan username"
-                              value={username}
-                              onChange={(e) => setUsername(e.target.value)}
+                              type={showStudentAccessCode ? "text" : "password"}
+                              placeholder="IF654321"
+                              value={studentAccessCode}
+                              onChange={(e) => setStudentAccessCode(e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter") {
-                                  handleTeacherLogin();
+                                  checkNisn();
                                 }
                               }}
-                              className="w-full bg-transparent text-slate-700 font-medium focus:outline-none placeholder:text-slate-400/70 text-base font-sans tracking-tight"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-2 ml-1">
-                            KATA SANDI KEAMANAN
-                          </label>
-                          <div className="relative flex items-center bg-slate-50 border border-slate-200 rounded-md px-4 py-3 focus-within:border-[#85cc00] focus-within:bg-white focus-within:ring-4 focus-within:ring-[#85cc00]/5 transition-all duration-200">
-                            <ShieldCheck className="h-4 w-4 text-slate-400 mr-3 shrink-0" />
-                            <input
-                              type={showPassword ? "text" : "password"}
-                              placeholder="••••••••"
-                              value={password}
-                              onChange={(e) => setPassword(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  handleTeacherLogin();
-                                }
-                              }}
-                              className="w-full bg-transparent text-slate-700 font-medium focus:outline-none placeholder:text-slate-400/70 text-base font-sans tracking-tight"
+                              className="w-full bg-transparent text-slate-800 font-medium placeholder:text-slate-400 text-sm sm:text-base outline-none tracking-tight"
                             />
                             <button
                               type="button"
-                              onClick={() => setShowPassword(!showPassword)}
-                              className="text-slate-400 hover:text-slate-600 transition-colors shrink-0 cursor-pointer"
+                              onClick={() => setShowStudentAccessCode(!showStudentAccessCode)}
+                              className="text-slate-400 hover:text-slate-700 transition-colors shrink-0 cursor-pointer p-1 rounded-lg hover:bg-slate-100"
+                              title={showStudentAccessCode ? "Sembunyikan" : "Tampilkan"}
                             >
-                              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              {showStudentAccessCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           </div>
                         </div>
 
                         {nisnError && (
-                          <div className="p-3 bg-rose-50 border border-rose-100 rounded-md flex gap-3 items-center animate-in fade-in">
+                          <div className="p-3.5 bg-rose-50 border border-rose-200/80 rounded-2xl flex gap-3 items-center animate-in fade-in slide-in-from-top-1">
                             <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
-                            <p className="text-xs font-medium text-rose-650 leading-tight">
+                            <p className="text-xs font-semibold text-rose-700 leading-tight">
                               {nisnError}
                             </p>
                           </div>
                         )}
 
                         <button
-                          onClick={handleTeacherLogin}
+                          onClick={checkNisn}
                           disabled={isLoading}
-                          className="w-full mt-2 py-3.5 bg-[#85cc00] hover:bg-[#7bc000] text-slate-800 font-semibold text-sm uppercase tracking-wider rounded-md transition-all shadow-md active:scale-98 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                          className="w-full py-4 bg-gradient-to-r from-[#85cc00] via-[#85cc00] to-[#76b900] text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider rounded-2xl shadow-lg shadow-[#85cc00]/25 hover:shadow-xl hover:shadow-[#85cc00]/35 hover:brightness-105 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
                         >
                           {isLoading ? (
                             <RefreshCw className="w-4 h-4 animate-spin" />
                           ) : (
-                            <>Verifikasi & Masuk <ArrowRight className="w-3.5 h-3.5" /></>
+                            <>
+                              <span>Akses Dasbor</span>
+                              <ArrowRight className="w-4 h-4" />
+                            </>
                           )}
                         </button>
 
-                        <p 
-                          onClick={() => handleTabChange("siswa")}
-                          className="text-slate-400 hover:text-[#649c00] font-medium text-xs text-center cursor-pointer mt-5 block hover:underline underline-offset-4 decoration-slate-200/40 transition-colors"
+                        <div className="pt-1 text-center">
+                          <button 
+                            type="button"
+                            onClick={() => setShowForgotHelp(true)}
+                            className="text-slate-400 hover:text-[#76b900] font-medium text-xs transition-colors hover:underline underline-offset-4 cursor-pointer"
+                          >
+                            Lupa kode akses atau butuh bantuan?
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-6 animate-in fade-in duration-300">
+                        <div className="bg-gradient-to-b from-[#85cc00]/10 via-[#85cc00]/5 to-transparent rounded-3xl p-6 border border-[#85cc00]/30 text-center relative">
+                          <div className="w-12 h-12 bg-[#85cc00] text-slate-950 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-md shadow-[#85cc00]/25">
+                            <CheckCircle2 className="w-6 h-6 stroke-[2.5]" />
+                          </div>
+                          <span className="text-[10px] font-bold text-[#649c00] uppercase tracking-widest block mb-1">
+                            Identitas Terverifikasi
+                          </span>
+                          <h3 className="text-xl font-display font-black text-slate-900 mb-4">
+                            {student.displayName}
+                          </h3>
+                          
+                          <div className="grid grid-cols-2 gap-2.5 text-left">
+                            <div className="bg-white/90 p-3 rounded-2xl border border-slate-200/80 shadow-2xs">
+                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">NIS</span>
+                              <span className="text-xs font-extrabold text-slate-800">{student.nisn}</span>
+                            </div>
+                            <div className="bg-white/90 p-3 rounded-2xl border border-slate-200/80 shadow-2xs">
+                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Kelas</span>
+                              <span className="text-xs font-extrabold text-slate-800">{student.kelas}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2.5">
+                          <button
+                            onClick={() => handleStudentLogin()}
+                            className="w-full py-4 bg-gradient-to-r from-[#85cc00] via-[#85cc00] to-[#76b900] text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider rounded-2xl shadow-lg shadow-[#85cc00]/25 hover:shadow-xl hover:shadow-[#85cc00]/35 hover:brightness-105 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <span>Konfirmasi & Masuk</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setStudent(null)}
+                            className="w-full py-2.5 text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-wider transition-colors cursor-pointer"
+                          >
+                            Bukan Akun Saya? Ganti Kode
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 ml-1">
+                        Username Guru
+                      </label>
+                      <div className="group/input relative flex items-center bg-slate-50/70 hover:bg-white border border-slate-200/90 rounded-2xl px-4 py-3.5 transition-all duration-300 focus-within:bg-white focus-within:border-[#85cc00] focus-within:ring-4 focus-within:ring-[#85cc00]/15 focus-within:shadow-md focus-within:shadow-[#85cc00]/5">
+                        <User className="h-4 w-4 text-slate-400 group-focus-within/input:text-[#85cc00] mr-3 shrink-0 transition-colors" />
+                        <input
+                          type="text"
+                          placeholder="Masukkan username"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              handleTeacherLogin();
+                            }
+                          }}
+                          className="w-full bg-transparent text-slate-800 font-medium placeholder:text-slate-400 text-sm sm:text-base outline-none tracking-tight"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-2 ml-1">
+                        Password Keamanan
+                      </label>
+                      <div className="group/input relative flex items-center bg-slate-50/70 hover:bg-white border border-slate-200/90 rounded-2xl px-4 py-3.5 transition-all duration-300 focus-within:bg-white focus-within:border-[#85cc00] focus-within:ring-4 focus-within:ring-[#85cc00]/15 focus-within:shadow-md focus-within:shadow-[#85cc00]/5">
+                        <ShieldCheck className="h-4 w-4 text-slate-400 group-focus-within/input:text-[#85cc00] mr-3 shrink-0 transition-colors" />
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          placeholder="Masukkan kata sandi"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              handleTeacherLogin();
+                            }
+                          }}
+                          className="w-full bg-transparent text-slate-800 font-medium placeholder:text-slate-400 text-sm sm:text-base outline-none tracking-tight"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="text-slate-400 hover:text-slate-700 transition-colors shrink-0 cursor-pointer p-1 rounded-lg hover:bg-slate-100"
+                          title={showPassword ? "Sembunyikan" : "Tampilkan"}
                         >
-                          Akses Siswa
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {nisnError && (
+                      <div className="p-3.5 bg-rose-50 border border-rose-200/80 rounded-2xl flex gap-3 items-center animate-in fade-in slide-in-from-top-1">
+                        <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
+                        <p className="text-xs font-semibold text-rose-700 leading-tight">
+                          {nisnError}
                         </p>
                       </div>
                     )}
-                  </motion.div>
-                </AnimatePresence>
-              </div>
 
-            </div>
+                    <button
+                      onClick={handleTeacherLogin}
+                      disabled={isLoading}
+                      className="w-full mt-2 py-4 bg-gradient-to-r from-[#85cc00] via-[#85cc00] to-[#76b900] text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider rounded-2xl shadow-lg shadow-[#85cc00]/25 hover:shadow-xl hover:shadow-[#85cc00]/35 hover:brightness-105 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
+                    >
+                      {isLoading ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <span>Masuk Sebagai Guru</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
 
-
-          </section>
-
+                    <div className="pt-1 text-center">
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          handleTabChange("siswa");
+                          setShowTeacherPortal(false);
+                        }}
+                        className="text-slate-400 hover:text-[#76b900] font-medium text-xs transition-colors hover:underline underline-offset-4 cursor-pointer"
+                      >
+                        Bukan guru? Kembali ke akses siswa
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </div>
 
-        {/* Footer Area */}
-        <footer className="w-full border-t border-slate-200/40 mt-6 pt-6 pb-4 flex flex-col items-center justify-center text-center">
-          <div className="flex items-center gap-2 mb-1 bg-transparent">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#85cc00] opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-[#85cc00]"></span>
-            </span>
-            <span className="text-slate-600 font-semibold text-xs tracking-tight px-1 select-none">
-              App Development by <span 
-                onClick={() => handleTabChange("guru")} 
-                className="text-[#649c00] hover:underline underline-offset-2 cursor-pointer"
-              >Agan Parta,S.Kom.Gr</span>
-            </span>
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#85cc00] opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-[#85cc00]"></span>
-            </span>
-          </div>
-
-          <p className="text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-widest mb-1 select-none">
-            Kreativitas Tanpa Batas • Inovasi Tiada Henti
+        {/* Footer */}
+        <footer className="mt-8 text-center select-none space-y-1">
+          <p className="text-[11px] sm:text-xs font-bold text-slate-400 uppercase tracking-widest">
+            Cerdas Inovatif Terampil Responsif Agamis
           </p>
-
-          <p className="text-slate-400 font-medium text-xs leading-normal mb-2 select-none">
-            Transformasi Digital Pendidikan Untuk Generasi Emas yang Cerdas dan Berakhlak
+          <p className="text-xs font-semibold text-slate-500 tracking-wide">
+            <button
+              type="button"
+              onClick={() => {
+                setShowTeacherPortal(true);
+                handleTabChange("guru");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+              className="hover:text-[#649c00] transition-colors cursor-pointer bg-transparent font-semibold inline"
+              title="Akses Portal Guru"
+            >
+              ©Agan Parta,S.Kom.
+            </button>{" "}
+            | Sipinter App | SMA Negeri 1 Cililin
           </p>
-
-          <div className="flex items-center justify-center gap-4 text-[10px] font-semibold text-slate-400 tracking-wider uppercase select-none">
-            <span>V2.1.0</span>
-            <div className="w-1.5 h-1.5 rounded-full bg-[#85cc00]/80"></div>
-            <span className="text-[#85cc00] font-bold">Enterprise Cloud</span>
-            <div className="w-1.5 h-1.5 rounded-full bg-[#85cc00]/80"></div>
-            <span>STABLE</span>
-          </div>
-
-
         </footer>
 
       </div>
 
-      {/* --- Help Modals (Adds delightful interactivity to mockup links) --- */}
+      {/* --- Help Modal --- */}
       <AnimatePresence>
         {showForgotHelp && (
-          <div className="fixed inset-0 bg-slate-100/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-md max-w-md w-full p-6 shadow-2xl border border-slate-200"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="fixed inset-0 bg-slate-950/50 backdrop-blur-md"
+              onClick={() => setShowForgotHelp(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 12 }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              className="relative z-10 bg-white/95 backdrop-blur-xl rounded-[2.5rem] max-w-md w-full p-6 sm:p-8 shadow-2xl border border-slate-200/80"
             >
-              <div className="flex items-center justify-between mb-4 pb-2 border-b">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="w-5 h-5 text-[#649c00]" />
-                  <h4 className="text-slate-800 font-bold uppercase text-xs sm:text-sm tracking-wider">Lupa Kode Akses</h4>
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-2xl bg-[#85cc00]/15 text-[#649c00] flex items-center justify-center">
+                    <AlertCircle className="w-5 h-5" />
+                  </div>
+                  <h4 className="text-slate-900 font-extrabold text-sm tracking-tight">Bantuan Kode Akses Siswa</h4>
                 </div>
                 <button 
                   onClick={() => setShowForgotHelp(false)}
-                  className="rounded-full p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
+                  className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
               
-              <div className="space-y-4 text-xs sm:text-sm text-slate-600 font-medium leading-relaxed py-2">
-                <p className="text-slate-800 font-semibold leading-snug">
-                  Jika Anda terkendala masuk sistem karena lupa kode akses, silakan segera menemui Pak Agan Parta di ruangannya. Terima kasih.
+              <div className="space-y-4 text-xs sm:text-sm text-slate-600 font-medium leading-relaxed py-1">
+                <p className="text-slate-800 leading-relaxed">
+                  Jika Anda lupa kode akses siswa atau mengalami kendala saat masuk ke sistem, silakan menghubungi guru pembimbing atau menemui <strong>Pak Agan Parta</strong> di Ruang Guru/IT SMAN 1 Cililin.
                 </p>
-                <div className="bg-slate-50 p-3 rounded-md border border-slate-200/60 text-[10px] text-slate-400 font-mono tracking-wider space-y-1 select-none">
-                  <div>SYSTEM ACCESS ASSISTANCE DIRECTORY</div>
-                  <div>OFFICE: RUANG IT SMAN 1 CILILIN</div>
+                <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 text-[11px] text-slate-500 font-mono tracking-wider space-y-1 select-none">
+                  <div>LAYANAN BANTUAN AKADEMIK</div>
+                  <div>LOKASI: RUANG IT / GURU SMAN 1 CILILIN</div>
                 </div>
               </div>
 
               <div className="mt-6 flex justify-end">
                 <button
                   onClick={() => setShowForgotHelp(false)}
-                  className="px-5 py-2.5 bg-[#85cc00] hover:bg-[#7bc000] text-slate-800 font-semibold text-xs uppercase tracking-wider rounded-md transition-all shadow-md shadow-[#85cc00]/10 cursor-pointer"
+                  className="px-6 py-3 bg-[#85cc00] hover:bg-[#7bc000] text-slate-950 font-bold text-xs uppercase tracking-wider rounded-2xl transition-all shadow-md shadow-[#85cc00]/20 active:scale-95 cursor-pointer"
                 >
-                  Tutup
+                  Mengerti
                 </button>
               </div>
             </motion.div>
           </div>
         )}
-
-
-
-
-
       </AnimatePresence>
     </div>
   );

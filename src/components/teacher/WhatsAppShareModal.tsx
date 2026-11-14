@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { motion } from "motion/react";
+import React, { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { MessageCircle, X } from "lucide-react";
 
 interface WhatsAppShareModalProps {
@@ -18,19 +18,42 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
   const [waParentPhone, setWaParentPhone] = useState(waStudent?.parentPhone || "");
   const [copiedIndex, setCopiedIndex] = useState(false);
 
-  if (!isOpen || !waStudent) return null;
+  useEffect(() => {
+    if (isOpen) {
+      setWaParentPhone(waStudent?.parentPhone || "628");
+      setCopiedIndex(false);
+    }
+  }, [waStudent, isOpen]);
+
+  const cleanedPhone = waParentPhone.replace(/[^0-9]/g, "");
+  const finalPhone = cleanedPhone.startsWith("0")
+    ? "62" + cleanedPhone.slice(1)
+    : cleanedPhone;
+  const waUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(waDraftMessage)}`;
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-indigo-950/80 bg-white/95 p-4 sm:p-6 select-none">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white w-full max-w-xl rounded-[2.5rem] overflow-hidden shadow-2xl flex flex-col border-2 border-slate-200"
-      >
-        {/* Header */}
-        <div className="bg-slate-50 px-8 py-6 flex justify-between items-center border-b border-slate-200 shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="p-3 bg-emerald-100 text-emerald-700 rounded-2xl">
+    <AnimatePresence>
+      {isOpen && waStudent && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6 select-none">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+            onClick={onClose}
+          />
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96, y: 12 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-xl rounded-3xl overflow-hidden shadow-2xl flex flex-col border border-slate-200/80 ring-1 ring-slate-900/5"
+          >
+            {/* Header */}
+            <div className="bg-slate-50/80 px-8 py-6 flex justify-between items-center border-b border-slate-200/70 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-emerald-100 text-emerald-700 rounded-2xl">
               <MessageCircle className="w-6 h-6" />
             </div>
             <div>
@@ -97,22 +120,18 @@ export const WhatsAppShareModal: React.FC<WhatsAppShareModalProps> = ({
           >
             {copiedIndex ? "Tersalin!" : "Salin Teks"}
           </button>
-          <button
-            onClick={() => {
-              const cleanedPhone = waParentPhone.replace(/[^0-9]/g, "");
-              const finalPhone = cleanedPhone.startsWith("0")
-                ? "62" + cleanedPhone.slice(1)
-                : cleanedPhone;
-
-              const waUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(waDraftMessage)}`;
-              window.open(waUrl, "_blank", "noopener,noreferrer");
-            }}
-            className="flex-1 py-4 bg-emerald-600 text-white hover:bg-emerald-500 active:scale-95 transition-all text-center rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg shadow-emerald-600/25 cursor-pointer"
+          <a
+            href={waUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 py-4 bg-emerald-600 text-white hover:bg-emerald-500 active:scale-95 transition-all text-center rounded-2xl text-xs font-black uppercase tracking-wider shadow-lg shadow-emerald-600/25 cursor-pointer flex items-center justify-center"
           >
             Kirim via WhatsApp
-          </button>
+          </a>
         </div>
-      </motion.div>
-    </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };

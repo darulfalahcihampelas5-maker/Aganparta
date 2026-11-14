@@ -929,7 +929,7 @@ export async function syncAllFirebaseToSupabase(): Promise<{
     const studentMap = new Map<string, { displayName: string; kelas: string }>();
 
     // 1. Sync Students and Classes first to build metadata mapping
-    const metaCollections = ["studentsByNisn", "classes", "assignments", "submissions", "chapters", "announcements", "absensi", "materials"];
+    const metaCollections = ["studentsByNisn", "classes", "assignments", "submissions", "chapters", "announcements", "absensi", "materials", "config", "users"];
     for (const coll of metaCollections) {
       try {
         let snap: any = null;

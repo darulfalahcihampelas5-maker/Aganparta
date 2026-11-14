@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 // Process-level robust crash prevention
 process.on("unhandledRejection", (reason, promise) => {
@@ -16,9 +17,27 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import multer from 'multer';
+import {
+  buildCompactSystemInstruction,
+  extractFirstName,
+  formatFriendlyGeminiError,
+  getGeminiModelConfigs,
+  getSharedCachedReply,
+  isRetryableGeminiError,
+  matchLocalKnowledge,
+  normalizeGeminiTurns,
+  runWithGeminiQueue,
+  setSharedCachedReply,
+  streamTextViaSse,
+  checkProfanity,
+  getProfanityWarningMessage,
+} from "./api/_siPinterEngine.ts";
 
 let db: any = null;
 let bucket: any = null;
+const inMemoryAiLogs: any[] = [];
+const inMemoryAiViolations: any[] = [];
+let firestoreApiAvailable = true;
 try {
   initializeApp({
     storageBucket: "gen-lang-client-0391947162.firebasestorage.app"
@@ -30,14 +49,21 @@ try {
 }
 const upload = multer({ storage: multer.memoryStorage() });
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({ 
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    }
+  }
+});
 
 async function generateContentWithFallback(params: {
   contents: any;
   config?: any;
 }) {
-  // Use gemini-3.6-flash as default, fallback to gemini-3.1-flash-lite if rate-limited or busy
-  const models = ["gemini-3.6-flash", "gemini-3.1-flash-lite"];
+  // Use gemini-4-hydrogen as default, fallback to gemini-3.1-flash-lite if rate-limited or busy
+  const models = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
   let lastError: any = null;
 
   for (const model of models) {
@@ -61,8 +87,423 @@ async function generateContentWithFallback(params: {
 
   const cleanErrorMessage = lastError && lastError.message 
     ? lastError.message 
-    : "Kedua model Gemini (3.6-flash & 3.1-flash-lite) mengalami gangguan atau limit kuota.";
+    : "Kedua model Gemini (4-hydrogen & 3.1-flash-lite) mengalami gangguan atau limit kuota.";
   throw new Error(cleanErrorMessage);
+}
+
+async function recordAiChatLog(params: {
+  studentName?: string;
+  questionText: string;
+  durationMs: number;
+  flagged?: boolean;
+  flaggedWord?: string;
+}) {
+  try {
+    const logItem = {
+      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      studentName: params.studentName || "Siswa",
+      questionText: params.questionText,
+      flagged: Boolean(params.flagged),
+      ...(params.flaggedWord ? { flaggedWord: params.flaggedWord } : {}),
+      durationMs: Math.max(1, Math.round(params.durationMs)),
+      timestamp: new Date().toISOString(),
+    };
+    inMemoryAiLogs.push(logItem);
+    if (inMemoryAiLogs.length > 500) {
+      inMemoryAiLogs.shift();
+    }
+    if (db && firestoreApiAvailable) {
+      try {
+        await db.collection("aiChatLogs").add(logItem);
+      } catch (e: any) {
+        if (e?.message?.includes("PERMISSION_DENIED") || e?.code === 7) {
+          firestoreApiAvailable = false;
+        }
+      }
+    }
+  } catch {
+    // Non-blocking log
+  }
+}
+
+// API Route for Gemini Chat (3-Layer Quota-Saving Architecture)
+async function handleChatRequest(req: any, res: any) {
+  const reqStart = Date.now();
+  try {
+    const { messages, studentName, stream, debug, bypassLocal } = req.body;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "Pesan tidak boleh kosong." });
+    }
+
+    const firstName = extractFirstName(studentName);
+    const assistantName = "Si Pinter";
+
+    const contents = normalizeGeminiTurns(messages);
+    if (contents.length === 0 || contents[contents.length - 1].role !== "user") {
+      return res.status(400).json({ error: "Pesan tidak berisi teks pertanyaan yang valid." });
+    }
+
+    const lastMessage = contents[contents.length - 1];
+    const isStandaloneQuestion = contents.length === 1;
+    const questionText = lastMessage.parts[0].text;
+
+    // PROFANITY & DIGITAL ETHICS FILTER
+    const flaggedWord = checkProfanity(questionText);
+    if (flaggedWord) {
+      const warningReply = getProfanityWarningMessage(firstName, flaggedWord);
+      const durationMs = Date.now() - reqStart;
+      try {
+        const violationItem = {
+          id: `viol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          studentName: studentName || firstName,
+          questionText,
+          flaggedWord,
+          timestamp: new Date().toISOString(),
+          status: "Belum Ditindaklanjuti",
+        };
+        const logItem = {
+          id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          studentName: studentName || firstName,
+          questionText,
+          flagged: true,
+          flaggedWord,
+          durationMs,
+          timestamp: new Date().toISOString(),
+        };
+
+        inMemoryAiViolations.unshift(violationItem);
+        inMemoryAiLogs.push(logItem);
+
+        if (db && firestoreApiAvailable) {
+          try {
+            await db.collection("aiViolations").add(violationItem);
+            await db.collection("aiChatLogs").add(logItem);
+          } catch (e: any) {
+            if (e?.message?.includes("PERMISSION_DENIED") || e?.code === 7) {
+              firestoreApiAvailable = false;
+            }
+          }
+        }
+      } catch (logErr) {
+        // Suppress warning log
+      }
+
+      if (stream) {
+        return streamTextViaSse(res, warningReply, debug ? { source: "profanity-filter", flaggedWord } : undefined);
+      }
+      return res.json({ text: warningReply, ...(debug ? { source: "profanity-filter", flaggedWord } : {}) });
+    }
+
+    // LAPIS 1: Local Knowledge Base (App Guides + Informatics Bab 1-9) — 0 Gemini Quota
+    if (isStandaloneQuestion && !bypassLocal) {
+      const localReply = matchLocalKnowledge(questionText, firstName);
+      if (localReply) {
+        const durationMs = Date.now() - reqStart;
+        console.log(`[Chat API Lapis 1 Local Hit] ${durationMs}ms`);
+        void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
+        if (stream) {
+          return streamTextViaSse(res, localReply, debug ? { source: "local", ms: durationMs } : undefined);
+        }
+        return res.json({ text: localReply, ...(debug ? { source: "local", ms: durationMs } : {}) });
+      }
+    }
+
+    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated questions across all 300 students
+    if (isStandaloneQuestion) {
+      const cachedReply = getSharedCachedReply(questionText, firstName);
+      if (cachedReply) {
+        const durationMs = Date.now() - reqStart;
+        console.log(`[Chat API Lapis 2 Shared Cache Hit] ${durationMs}ms`);
+        void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
+        if (stream) {
+          return streamTextViaSse(res, cachedReply, debug ? { source: "cache", ms: durationMs } : undefined);
+        }
+        return res.json({ text: cachedReply, ...(debug ? { source: "cache", ms: durationMs } : {}) });
+      }
+    }
+
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "Kunci API Gemini belum terkonfigurasi di server." });
+    }
+
+    const systemInstruction = buildCompactSystemInstruction(firstName, studentName);
+    const modelConfigs = getGeminiModelConfigs(systemInstruction);
+    const attemptLogs: Array<{ model: string; ms: number; ok: boolean; err?: string }> = [];
+
+    if (stream) {
+      // Open SSE stream immediately so browser receives headers in <5ms
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      res.flushHeaders?.();
+      res.write(": stream-open\n\n");
+
+      let clientDisconnected = false;
+      res.on("close", () => {
+        if (!res.writableEnded) {
+          clientDisconnected = true;
+        }
+      });
+
+      const queueHeartbeat = setInterval(() => {
+        if (!clientDisconnected && !res.writableEnded) {
+          res.write(": queue-wait\n\n");
+        }
+      }, 4000);
+
+      try {
+        await runWithGeminiQueue(
+          async () => {
+            clearInterval(queueHeartbeat);
+            if (clientDisconnected) return;
+
+            // Double-check Lapis 2 cache after exiting queue (coalesces simultaneous identical requests)
+            if (isStandaloneQuestion) {
+              const queuedCacheHit = getSharedCachedReply(questionText, firstName);
+              if (queuedCacheHit) {
+                const durationMs = Date.now() - reqStart;
+                console.log(`[Chat API Lapis 2 Post-Queue Cache Hit] ${durationMs}ms`);
+                void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
+                res.write(`data: ${JSON.stringify({ text: queuedCacheHit })}\n\n`);
+                res.write(`data: ${JSON.stringify({ done: true, ...(debug ? { source: "cache-coalesced", ms: durationMs } : {}) })}\n\n`);
+                res.end();
+                return;
+              }
+            }
+
+            let lastError: any = null;
+            let hasEmittedAnyChunk = false;
+
+            for (const entry of modelConfigs) {
+              for (let attempt = 0; attempt < 2; attempt++) {
+                if (clientDisconnected) return;
+                const attemptStart = Date.now();
+                const attemptController = new AbortController();
+                let firstTokenTimer: NodeJS.Timeout | null = setTimeout(() => {
+                  if (!hasEmittedAnyChunk) {
+                    console.log(`[Chat API Stream] ${entry.model} attempt ${attempt + 1} reached ${entry.firstTokenTimeoutMs}ms, switching/recovering...`);
+                    attemptController.abort();
+                  }
+                }, entry.firstTokenTimeoutMs);
+
+                try {
+                  const responseStream = await ai.models.generateContentStream({
+                    model: entry.model,
+                    contents,
+                    config: {
+                      ...entry.config,
+                      abortSignal: attemptController.signal,
+                    },
+                  });
+
+                  let assembledText = "";
+                  for await (const chunk of responseStream) {
+                    if (clientDisconnected) {
+                      if (firstTokenTimer) clearTimeout(firstTokenTimer);
+                      return;
+                    }
+                    const chunkText = chunk.text || "";
+                    if (chunkText) {
+                      if (!hasEmittedAnyChunk) {
+                        if (firstTokenTimer) {
+                          clearTimeout(firstTokenTimer);
+                          firstTokenTimer = null;
+                        }
+                        hasEmittedAnyChunk = true;
+                        console.log(`[Chat API Stream] ${entry.model} TTFT: ${Date.now() - reqStart}ms`);
+                      }
+                      assembledText += chunkText;
+                      res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+                    }
+                  }
+
+                  if (firstTokenTimer) clearTimeout(firstTokenTimer);
+
+                  if (hasEmittedAnyChunk) {
+                    const durationMs = Date.now() - reqStart;
+                    attemptLogs.push({ model: entry.model, ms: Date.now() - attemptStart, ok: true });
+                    if (isStandaloneQuestion && assembledText.trim()) {
+                      setSharedCachedReply(questionText, assembledText, firstName, studentName);
+                    }
+                    void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
+                    res.write(
+                      `data: ${JSON.stringify({
+                        done: true,
+                        ...(debug ? { source: "gemini", attemptLogs, ms: durationMs } : {}),
+                      })}\n\n`
+                    );
+                    console.log(`[Chat API Stream] Completed ${entry.model} in ${durationMs}ms`);
+                    res.end();
+                    return;
+                  }
+
+                  throw new Error(`Model ${entry.model} mengembalikan respons kosong.`);
+                } catch (err: any) {
+                  if (firstTokenTimer) clearTimeout(firstTokenTimer);
+                  const errMsg = err?.message || String(err);
+                  attemptLogs.push({ model: entry.model, ms: Date.now() - attemptStart, ok: false, err: errMsg });
+                  console.log(`[Chat API Stream] Failover from ${entry.model} (attempt ${attempt + 1}) after ${Date.now() - reqStart}ms: ${errMsg}`);
+                  lastError = err;
+
+                  if (hasEmittedAnyChunk) {
+                    res.write(`data: ${JSON.stringify({ error: "Koneksi terputus di tengah jawaban. Silakan coba kirim ulang ya." })}\n\n`);
+                    res.end();
+                    return;
+                  }
+
+                  if (attempt === 0 && isRetryableGeminiError(err)) {
+                    await new Promise((r) => setTimeout(r, 300));
+                    continue;
+                  }
+                  break;
+                }
+              }
+            }
+
+            // Inline non-streaming safety fallback if all streaming calls stalled/aborted without emitting chunks
+            const lastErrStr = String(lastError?.message || "");
+            const isAuthErr =
+              lastErrStr.includes("403") ||
+              lastErrStr.includes("PERMISSION_DENIED") ||
+              lastErrStr.includes("API_KEY_INVALID");
+
+            if (!isAuthErr && !clientDisconnected) {
+              for (const entry of modelConfigs) {
+                if (clientDisconnected) return;
+                const attemptStart = Date.now();
+                const fallbackController = new AbortController();
+                const fallbackTimer = setTimeout(() => fallbackController.abort(), 16000);
+                try {
+                  const response = await ai.models.generateContent({
+                    model: entry.model,
+                    contents,
+                    config: {
+                      ...entry.config,
+                      abortSignal: fallbackController.signal,
+                    },
+                  });
+                  clearTimeout(fallbackTimer);
+
+                  if (response?.text?.trim()) {
+                    const durationMs = Date.now() - reqStart;
+                    attemptLogs.push({ model: `${entry.model}:sync-fallback`, ms: Date.now() - attemptStart, ok: true });
+                    if (isStandaloneQuestion) {
+                      setSharedCachedReply(questionText, response.text, firstName, studentName);
+                    }
+                    void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
+                    res.write(`data: ${JSON.stringify({ text: response.text })}\n\n`);
+                    res.write(
+                      `data: ${JSON.stringify({
+                        done: true,
+                        ...(debug ? { source: "gemini-sync-fallback", attemptLogs, ms: durationMs } : {}),
+                      })}\n\n`
+                    );
+                    res.end();
+                    return;
+                  }
+                } catch (syncErr: any) {
+                  clearTimeout(fallbackTimer);
+                  attemptLogs.push({ model: `${entry.model}:sync-fallback`, ms: Date.now() - attemptStart, ok: false, err: syncErr?.message || String(syncErr) });
+                  lastError = syncErr;
+                }
+              }
+            }
+
+            console.error("[Chat API Stream] All models and fallbacks failed:", lastError?.message || lastError);
+            const friendlyErr = formatFriendlyGeminiError(lastError, assistantName, firstName);
+            res.write(
+              `data: ${JSON.stringify({
+                error: friendlyErr,
+                ...(debug ? { source: "gemini", attemptLogs, details: lastError?.message } : {}),
+              })}\n\n`
+            );
+            res.end();
+          },
+          () => clientDisconnected
+        );
+      } catch (queueErr: any) {
+        clearInterval(queueHeartbeat);
+        if (!clientDisconnected && !res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ error: formatFriendlyGeminiError(queueErr, assistantName, firstName) })}\n\n`);
+          res.end();
+        }
+      } finally {
+        clearInterval(queueHeartbeat);
+      }
+      return;
+    }
+
+    // Standard JSON fallback (Lapis 3 queued)
+    const jsonResult = await runWithGeminiQueue(async () => {
+      if (isStandaloneQuestion) {
+        const queuedCacheHit = getSharedCachedReply(questionText, firstName);
+        if (queuedCacheHit) {
+          return { text: queuedCacheHit, source: "cache-coalesced" as const };
+        }
+      }
+
+      let lastError: any = null;
+      for (const entry of modelConfigs) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const attemptStart = Date.now();
+          const attemptController = new AbortController();
+          const attemptTimer = setTimeout(() => attemptController.abort(), 16000);
+          try {
+            const response = await ai.models.generateContent({
+              model: entry.model,
+              contents,
+              config: {
+                ...entry.config,
+                abortSignal: attemptController.signal,
+              },
+            });
+            clearTimeout(attemptTimer);
+
+            if (response?.text?.trim()) {
+              attemptLogs.push({ model: entry.model, ms: Date.now() - attemptStart, ok: true });
+              if (isStandaloneQuestion) {
+                setSharedCachedReply(questionText, response.text, firstName, studentName);
+              }
+              return { text: response.text, source: "gemini" as const };
+            }
+            throw new Error(`Model ${entry.model} returned empty text.`);
+          } catch (err: any) {
+            clearTimeout(attemptTimer);
+            const errMsg = err?.message || String(err);
+            attemptLogs.push({ model: entry.model, ms: Date.now() - attemptStart, ok: false, err: errMsg });
+            console.log(`[Chat API] Failover from ${entry.model} (attempt ${attempt + 1}): ${errMsg}`);
+            lastError = err;
+            if (attempt === 0 && isRetryableGeminiError(err)) {
+              await new Promise((r) => setTimeout(r, 300));
+              continue;
+            }
+            break;
+          }
+        }
+      }
+
+      throw lastError || new Error("All Gemini models failed");
+    });
+
+    void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs: Date.now() - reqStart });
+    return res.json({
+      text: jsonResult.text,
+      ...(debug ? { source: jsonResult.source, attemptLogs, ms: Date.now() - reqStart } : {}),
+    });
+  } catch (error: any) {
+    console.error("Chat API Error:", error);
+    const assistantName = "Si Pinter";
+    const fallbackName = extractFirstName(req.body?.studentName);
+    if (res.headersSent) {
+      res.write(`data: ${JSON.stringify({ error: formatFriendlyGeminiError(error, assistantName, fallbackName) })}\n\n`);
+      return res.end();
+    }
+    return res.status(500).json({
+      error: formatFriendlyGeminiError(error, assistantName, fallbackName),
+      ...(req.body?.debug ? { details: error?.message } : {}),
+    });
+  }
 }
 
 async function startServer() {
@@ -70,6 +511,119 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
+
+  app.use((req, res, next) => {
+    if (req.url.startsWith("/api")) {
+      console.log(`[API Request] ${req.method} ${req.url}`);
+    }
+    next();
+  });
+
+  app.post("/api/chat", handleChatRequest);
+
+  // AI Stats & Violations API
+  app.get("/api/ai-stats", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    try {
+      const logMap = new Map<string, any>();
+      inMemoryAiLogs.forEach((l) => {
+        if (l?.id) logMap.set(l.id, l);
+      });
+
+      const violMap = new Map<string, any>();
+      inMemoryAiViolations.forEach((v) => {
+        if (v?.id) violMap.set(v.id, v);
+      });
+
+      if (db && firestoreApiAvailable) {
+        try {
+          const logsSnap = await db.collection("aiChatLogs").get();
+          logsSnap.forEach((docSnap: any) => {
+            const data = docSnap.data();
+            const key = data?.id || docSnap.id;
+            logMap.set(key, { id: docSnap.id, ...data });
+          });
+        } catch (e: any) {
+          if (e?.message?.includes("PERMISSION_DENIED") || e?.code === 7) {
+            firestoreApiAvailable = false;
+          }
+        }
+
+        try {
+          const violSnap = await db.collection("aiViolations").orderBy("timestamp", "desc").limit(100).get();
+          violSnap.forEach((docSnap: any) => {
+            const data = docSnap.data();
+            const key = data?.id || docSnap.id;
+            violMap.set(key, { id: docSnap.id, ...data });
+          });
+        } catch (e: any) {
+          if (e?.message?.includes("PERMISSION_DENIED") || e?.code === 7) {
+            firestoreApiAvailable = false;
+          }
+        }
+      }
+
+      const allLogs = Array.from(logMap.values());
+      const totalQuestions = allLogs.length;
+      let totalDuration = 0;
+      let durationCount = 0;
+      allLogs.forEach((l) => {
+        if (typeof l.durationMs === "number" && l.durationMs > 0) {
+          totalDuration += l.durationMs;
+          durationCount++;
+        }
+      });
+      const avgDurationMs = durationCount > 0 ? Math.round(totalDuration / durationCount) : 0;
+
+      const violations = Array.from(violMap.values()).sort(
+        (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+      );
+
+      res.json({
+        totalQuestions,
+        avgDurationMs,
+        violations,
+        serverTimestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      let totalDur = 0;
+      inMemoryAiLogs.forEach((l) => (totalDur += l.durationMs || 0));
+      res.json({
+        totalQuestions: inMemoryAiLogs.length,
+        avgDurationMs: inMemoryAiLogs.length > 0 ? Math.round(totalDur / inMemoryAiLogs.length) : 0,
+        violations: inMemoryAiViolations,
+        serverTimestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  app.post("/api/ai-violations/:id/resolve", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const target = inMemoryAiViolations.find(v => v.id === id);
+      if (target) {
+        target.status = "Sudah Ditindaklanjuti";
+        target.resolvedAt = new Date().toISOString();
+      }
+      if (db && firestoreApiAvailable) {
+        try {
+          await db.collection("aiViolations").doc(id).update({
+            status: "Sudah Ditindaklanjuti",
+            resolvedAt: new Date().toISOString(),
+          });
+        } catch (e: any) {
+          if (e?.message?.includes("PERMISSION_DENIED") || e?.code === 7) {
+            firestoreApiAvailable = false;
+          }
+        }
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.json({ success: true });
+    }
+  });
 
   // API Route for Gemini Title Generation
   app.post("/api/generate-title", async (req, res) => {
@@ -97,16 +651,29 @@ async function startServer() {
   // API Route for Gemini Exam Generation with structured output (supports up to 3 PDFs and up to 3 YouTube links)
   app.post("/api/generate-exam", upload.any(), async (req, res) => {
     try {
-      const { subject, bab, count, tema, materi, description, pastedText, youtubeUrls } = req.body;
+      const { subject, bab, count, tema, materi, description, pastedText, youtubeUrls, questionFormat } = req.body;
       if (!subject || !bab) {
         return res.status(400).json({ error: "Mata pelajaran dan Bab wajib diisi" });
       }
 
       const questionCount = Number(count) || 5;
+      const formatMode = (questionFormat || "multiple_choice") as string;
+      let formatInstruction = `Setiap soal harus bertipe "multiple_choice" dengan tepat 5 pilihan opsi (A, B, C, D, E) yang masuk akal dan tentukan correctIndex (0..4).`;
+      if (formatMode === "short_answer") {
+        formatInstruction = `Setiap soal harus bertipe "short_answer" (Isian Singkat). Isi options sebagai array kosong [], correctIndex sebagai 0, dan isi correctAnswerText dengan kunci jawaban singkat yang tepat (bisa pisahkan variasi jawaban valid dengan tanda |, misal: "CPU|Central Processing Unit").`;
+      } else if (formatMode === "essay") {
+        formatInstruction = `Setiap soal harus bertipe "essay" (Uraian/Esai). Isi options sebagai array kosong [], correctIndex sebagai 0, dan isi correctAnswerText dengan poin-poin kunci jawaban/rubrik penilaian esai.`;
+      } else if (formatMode === "mixed") {
+        formatInstruction = `Buatlah variasi campuran soal yang proporsional (sekitar 60% "multiple_choice", 20% "short_answer", dan 20% "essay").
+- Untuk "multiple_choice": wajib memiliki tepat 5 opsi di options[] dan correctIndex (0..4), correctAnswerText kosong "".
+- Untuk "short_answer": options[] kosong [], correctIndex 0, dan correctAnswerText berisi jawaban singkat yang akurat (variasi dipisah |).
+- Untuk "essay": options[] kosong [], correctIndex 0, dan correctAnswerText berisi kunci jawaban/rubrik penilaian.`;
+      }
+
       let prompt = "";
 
       if (pastedText && pastedText.trim()) {
-        prompt = `Konversikan teks butir soal/materi kuis berikut menjadi tepat ${questionCount} soal pilihan ganda terstruktur dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}".
+        prompt = `Konversikan teks butir soal/materi kuis berikut menjadi tepat ${questionCount} soal terstruktur dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}".
 
 Teks Referensi Soal/Kuis:
 ---
@@ -114,12 +681,10 @@ ${pastedText}
 ---
 
 Instruksi Tambahan:
-1. Ekstrak pertanyaan, pilihan opsi, dan kunci jawaban dari teks di atas secara akurat.
-2. Setiap soal wajib memiliki tepat 5 opsi pilihan jawaban (A, B, C, D, E) yang bersih, profesional, dan masuk akal.
-3. Jika teks referensi tidak memiliki opsi jawaban lengkap, buatkan opsi tambahan yang logis.
-4. Tentukan kunci jawaban yang benar dan set correctIndex (0 = A, 1 = B, 2 = C, 3 = D, 4 = E).`;
+1. Ekstrak pertanyaan, tipe soal, pilihan opsi, dan kunci jawaban dari teks di atas secara akurat.
+2. ${formatInstruction}`;
       } else {
-        prompt = `Buatlah ${questionCount} soal pilihan ganda berkualitas tinggi (berstandar AKM/UTBK jika relevan) dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}"`;
+        prompt = `Buatlah ${questionCount} soal berkualitas tinggi (berstandar AKM/UTBK jika relevan) dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}"`;
         
         if (tema) {
           prompt += `, kategori/jenis ujian: "${tema}"`;
@@ -133,7 +698,7 @@ Instruksi Tambahan:
           prompt += `, deskripsi/instruksi tambahan khusus untuk soal: "${description}"`;
         }
         
-        prompt += `. Setiap soal harus memiliki tepat 5 pilihan opsi (jawaban A, B, C, D, E) yang masuk akal. Tentukan index jawaban yang benar pada correctIndex (0 untuk opsi pertama, 1 untuk opsi kedua, dst, maksimal 4).`;
+        prompt += `.\n\nAturan Format Soal:\n${formatInstruction}`;
       }
 
       // Handle YouTube URLs (up to 3 links)
@@ -181,10 +746,14 @@ Instruksi Tambahan:
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.ARRAY,
-            description: "Daftar pertanyaan ujian pilihan ganda",
+            description: "Daftar pertanyaan ujian CBT",
             items: {
               type: Type.OBJECT,
               properties: {
+                type: {
+                  type: Type.STRING,
+                  description: "Tipe soal: multiple_choice, short_answer, atau essay"
+                },
                 text: {
                   type: Type.STRING,
                   description: "Teks pertanyaan ujian kompetensi"
@@ -192,11 +761,15 @@ Instruksi Tambahan:
                 options: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING },
-                  description: "Tepat 5 pilihan opsi jawaban (A, B, C, D, E)"
+                  description: "5 pilihan opsi jawaban (A..E) untuk multiple_choice, atau array kosong [] untuk short_answer/essay"
                 },
                 correctIndex: {
                   type: Type.INTEGER,
-                  description: "Index pilihan jawaban yang benar (rentang 0 sampai 4)"
+                  description: "Index pilihan jawaban yang benar (0 sampai 4) untuk multiple_choice, atau 0 untuk non-PG"
+                },
+                correctAnswerText: {
+                  type: Type.STRING,
+                  description: "Kunci jawaban untuk short_answer (variasi dipisah |) atau rubrik kunci jawaban untuk essay"
                 }
               },
               required: ["text", "options", "correctIndex"]
@@ -206,7 +779,23 @@ Instruksi Tambahan:
       });
 
       const responseText = response.text ? response.text.trim() : "[]";
-      const questions = JSON.parse(responseText);
+      const rawQuestions = JSON.parse(responseText);
+      const questions = Array.isArray(rawQuestions) ? rawQuestions.map((q: any) => {
+        const qType = (q.type === "short_answer" || q.type === "essay" || q.type === "multiple_choice")
+          ? q.type
+          : (Array.isArray(q.options) && q.options.length > 0 ? "multiple_choice" : "essay");
+        return {
+          type: qType,
+          text: String(q.text || ""),
+          options: qType === "multiple_choice"
+            ? (Array.isArray(q.options) && q.options.length === 5
+                ? q.options.map(String)
+                : ["Opsi A", "Opsi B", "Opsi C", "Opsi D", "Opsi E"].map((def, idx) => String(q.options?.[idx] || def)))
+            : [],
+          correctIndex: typeof q.correctIndex === "number" ? q.correctIndex : 0,
+          correctAnswerText: String(q.correctAnswerText || ""),
+        };
+      }) : [];
       res.json({ questions });
     } catch (error: any) {
       console.error("Error generating exam questions:", error);
@@ -688,36 +1277,46 @@ Instruksi Tambahan:
   });
 
   const distPath = path.join(process.cwd(), 'dist');
-  const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+  const indexHtmlPath = path.join(distPath, 'index.html');
   const isDevScript = process.env.npm_lifecycle_event === "dev";
   const isExplicitDev = process.env.NODE_ENV === "development" && isDevScript;
-  const isProduction = process.env.NODE_ENV === "production" || !!process.env.K_SERVICE || (hasDist && !isExplicitDev);
 
-  if (!isProduction) {
+  // Use Vite middleware in dev or when dist/index.html does not exist yet
+  if (isExplicitDev || !fs.existsSync(indexHtmlPath)) {
     try {
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
       });
       app.use(vite.middlewares);
+      console.log("[Server] Vite middleware mounted for dynamic development/fallback mode.");
     } catch (e) {
-      console.warn("Vite middleware failed or unavailable, falling back to static files:", e);
-      if (hasDist) {
+      console.warn("[Server] Vite middleware failed to initialize:", e);
+      if (fs.existsSync(indexHtmlPath)) {
         app.use(express.static(distPath));
         app.get('*', (req, res) => {
-          res.sendFile(path.join(distPath, 'index.html'));
+          res.sendFile(indexHtmlPath);
+        });
+      } else {
+        app.get('*', (req, res) => {
+          res.status(503).send("System build in progress. Please refresh shortly.");
         });
       }
     }
   } else {
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (fs.existsSync(indexHtmlPath)) {
+        res.sendFile(indexHtmlPath);
+      } else {
+        res.status(404).send("Index file not found");
+      }
     });
   }
 
   const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT} (mode: ${isProduction ? 'production' : 'development'})`);
+    console.log(`Server running on http://0.0.0.0:${PORT} (mode: ${process.env.NODE_ENV || 'development'})`);
+    console.log(`[Startup] Gemini API Key configured: ${!!process.env.GEMINI_API_KEY}`);
   });
 
   server.on("error", (err: any) => {
