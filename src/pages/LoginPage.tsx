@@ -46,39 +46,87 @@ const checkTeacherSessionActive = () => {
   }
 };
 
+const checkStudentSessionActive = () => {
+  try {
+    const raw = localStorage.getItem("current_student");
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return Boolean(parsed && (parsed.nisn || parsed.id));
+  } catch {
+    return false;
+  }
+};
+
+const checkSplashSeenInSession = () => {
+  try {
+    return sessionStorage.getItem("sipinter_splash_seen") === "true";
+  } catch {
+    return false;
+  }
+};
+
+const markSplashSeenInSession = () => {
+  try {
+    sessionStorage.setItem("sipinter_splash_seen", "true");
+  } catch {
+    // ignore storage errors
+  }
+};
+
 export default function LoginPage() {
   const navigate = useNavigate();
   const hasTeacherSession = checkTeacherSessionActive();
+  const hasStudentSession = checkStudentSessionActive();
 
-  // Splash Screen State (hanya tampil saat aplikasi pertama dibuka dan belum ada sesi guru aktif)
+  // Splash Screen hijau hanya tampil saat aplikasi pertama kali dibuka (belum ada di sessionStorage & belum login)
   const [showSplash, setShowSplash] = useState(
-    () => !hasShownSplashThisLoad && !hasTeacherSession
+    () =>
+      !hasShownSplashThisLoad &&
+      !hasTeacherSession &&
+      !hasStudentSession &&
+      !checkSplashSeenInSession()
+  );
+
+  // Jika halaman di-refresh pada sesi yang sudah pernah dibuka, tampilkan loading maskot 500ms
+  const [isInitialReloading, setIsInitialReloading] = useState(
+    () =>
+      !hasShownSplashThisLoad &&
+      !hasTeacherSession &&
+      !hasStudentSession &&
+      checkSplashSeenInSession()
   );
 
   useEffect(() => {
     if (hasTeacherSession) {
       hasShownSplashThisLoad = true;
+      markSplashSeenInSession();
       setShowSplash(false);
+      setIsInitialReloading(false);
       navigate("/dashboard/teacher", { replace: true });
       return;
     }
 
     if (hasShownSplashThisLoad) {
       setShowSplash(false);
+      setIsInitialReloading(false);
       return;
     }
 
+    markSplashSeenInSession();
+
+    const durationMs = showSplash ? 2000 : 1000;
     const timer = setTimeout(() => {
       hasShownSplashThisLoad = true;
       setShowSplash(false);
-    }, 500);
+      setIsInitialReloading(false);
+    }, durationMs);
 
     return () => {
       clearTimeout(timer);
     };
   }, [hasTeacherSession, navigate]);
 
-  // Auto-login if student session exists in localStorage (waits for splash screen to complete)
+  // Auto-login if student session exists in localStorage (langsung masuk tanpa menahan splash hijau)
   useEffect(() => {
     if (showSplash || hasTeacherSession) return;
     try {
@@ -150,7 +198,7 @@ export default function LoginPage() {
     setNisnError("");
     setTimeout(() => {
       setIsPageRefreshing(false);
-    }, 500);
+    }, 1000);
   };
 
   const handleTabChange = (tab: "siswa" | "guru") => {
@@ -465,7 +513,7 @@ export default function LoginPage() {
     }
   };
 
-  if (hasTeacherSession) {
+  if (hasTeacherSession || hasStudentSession) {
     return <CuteLoadingScreen fullScreen={true} />;
   }
 
@@ -526,7 +574,7 @@ export default function LoginPage() {
         )}
 
         {/* Dashboard Login Refresh Overlay */}
-        {isPageRefreshing && (
+        {(isPageRefreshing || isInitialReloading) && (
           <CuteLoadingScreen
             key="login-refresh-overlay"
             fullScreen={true}

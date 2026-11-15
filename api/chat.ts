@@ -13,13 +13,20 @@ import {
   streamTextViaSse,
   checkProfanity,
   getProfanityWarningMessage,
-} from "./_siPinterEngine";
+} from "./_siPinterEngine.js";
 
 // Reuse client across warm Vercel serverless invocations
 const cachedApiKey = process.env.GEMINI_API_KEY || "";
 const sharedAi = cachedApiKey ? createGeminiClient(cachedApiKey) : null;
 
+// Stay comfortably under Vercel's default 10s serverless execution limit
+const MAX_SERVERLESS_BUDGET_MS = 8500;
+
 export default async function handler(req: any, res: any) {
+  const requestStartTime = Date.now();
+  const getRemainingBudgetMs = () =>
+    Math.max(1500, MAX_SERVERLESS_BUDGET_MS - (Date.now() - requestStartTime));
+
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -34,6 +41,9 @@ export default async function handler(req: any, res: any) {
 
   try {
     let body = req.body;
+    if (typeof Buffer !== "undefined" && Buffer.isBuffer(body)) {
+      body = body.toString("utf8");
+    }
     if (typeof body === "string") {
       try {
         body = JSON.parse(body);
@@ -80,7 +90,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated questions across all 300 students
+    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated questions
     if (isStandaloneQuestion) {
       const cachedReply = getSharedCachedReply(questionText, firstName);
       if (cachedReply) {
@@ -93,7 +103,15 @@ export default async function handler(req: any, res: any) {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: "Kunci API Gemini (GEMINI_API_KEY) belum dikonfigurasi di server." });
+      const friendlyMissingKey = formatFriendlyGeminiError(
+        new Error("PERMISSION_DENIED: GEMINI_API_KEY belum dikonfigurasi"),
+        assistantName,
+        firstName
+      );
+      if (stream) {
+        return streamTextViaSse(res, friendlyMissingKey);
+      }
+      return res.status(200).json({ text: friendlyMissingKey });
     }
 
     const ai = sharedAi || createGeminiClient(apiKey);
@@ -105,10 +123,35 @@ export default async function handler(req: any, res: any) {
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
       res.setHeader("X-Accel-Buffering", "no");
-      res.flushHeaders?.();
-      res.write(": stream-open\n\n");
+      try {
+        res.flushHeaders?.();
+      } catch {
+        // Ignore if headers already flushed
+      }
 
       let clientDisconnected = false;
+      const safeWrite = (payload: string) => {
+        if (clientDisconnected || res.writableEnded || res.destroyed) return;
+        try {
+          res.write(payload);
+        } catch {
+          clientDisconnected = true;
+        }
+      };
+      const safeEnd = () => {
+        if (res.writableEnded || res.destroyed) return;
+        try {
+          res.end();
+        } catch {
+          // Ignore close errors
+        }
+      };
+
+      safeWrite(": stream-open\n\n");
+
+      req.on?.("aborted", () => {
+        clientDisconnected = true;
+      });
       res.on?.("close", () => {
         if (!res.writableEnded) {
           clientDisconnected = true;
@@ -116,23 +159,24 @@ export default async function handler(req: any, res: any) {
       });
 
       const queueHeartbeat = setInterval(() => {
-        if (!clientDisconnected && !res.writableEnded) {
-          res.write(": queue-wait\n\n");
-        }
-      }, 4000);
+        safeWrite(": queue-wait\n\n");
+      }, 3500);
 
       try {
         await runWithGeminiQueue(
           async () => {
             clearInterval(queueHeartbeat);
-            if (clientDisconnected) return;
+            if (clientDisconnected) {
+              safeEnd();
+              return;
+            }
 
             if (isStandaloneQuestion) {
               const queuedCacheHit = getSharedCachedReply(questionText, firstName);
               if (queuedCacheHit) {
-                res.write(`data: ${JSON.stringify({ text: queuedCacheHit })}\n\n`);
-                res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                res.end();
+                safeWrite(`data: ${JSON.stringify({ text: queuedCacheHit })}\n\n`);
+                safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                safeEnd();
                 return;
               }
             }
@@ -141,14 +185,22 @@ export default async function handler(req: any, res: any) {
             let hasEmittedAnyChunk = false;
 
             for (const entry of modelConfigs) {
+              if (Date.now() - requestStartTime >= MAX_SERVERLESS_BUDGET_MS) break;
+
               for (let attempt = 0; attempt < 2; attempt++) {
-                if (clientDisconnected) return;
+                if (clientDisconnected) {
+                  safeEnd();
+                  return;
+                }
+                if (Date.now() - requestStartTime >= MAX_SERVERLESS_BUDGET_MS) break;
+
                 const attemptController = new AbortController();
+                const attemptTimeout = Math.min(entry.firstTokenTimeoutMs, getRemainingBudgetMs());
                 let firstTokenTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
                   if (!hasEmittedAnyChunk) {
                     attemptController.abort();
                   }
-                }, entry.firstTokenTimeoutMs);
+                }, attemptTimeout);
 
                 try {
                   const responseStream = await ai.models.generateContentStream({
@@ -164,6 +216,7 @@ export default async function handler(req: any, res: any) {
                   for await (const chunk of responseStream) {
                     if (clientDisconnected) {
                       if (firstTokenTimer) clearTimeout(firstTokenTimer);
+                      safeEnd();
                       return;
                     }
                     const chunkText = chunk.text || "";
@@ -176,7 +229,7 @@ export default async function handler(req: any, res: any) {
                         hasEmittedAnyChunk = true;
                       }
                       assembledText += chunkText;
-                      res.write(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
+                      safeWrite(`data: ${JSON.stringify({ text: chunkText })}\n\n`);
                     }
                   }
 
@@ -186,8 +239,8 @@ export default async function handler(req: any, res: any) {
                     if (isStandaloneQuestion && assembledText.trim()) {
                       setSharedCachedReply(questionText, assembledText, firstName, studentName);
                     }
-                    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                    res.end();
+                    safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                    safeEnd();
                     return;
                   }
 
@@ -196,12 +249,16 @@ export default async function handler(req: any, res: any) {
                   if (firstTokenTimer) clearTimeout(firstTokenTimer);
                   lastError = err;
                   if (hasEmittedAnyChunk) {
-                    res.write(`data: ${JSON.stringify({ error: "Koneksi terputus di tengah jawaban. Silakan coba kirim ulang ya." })}\n\n`);
-                    res.end();
+                    safeWrite(`data: ${JSON.stringify({ error: "Koneksi terputus di tengah jawaban. Silakan coba kirim ulang ya." })}\n\n`);
+                    safeEnd();
                     return;
                   }
-                  if (attempt === 0 && isRetryableGeminiError(err)) {
-                    await new Promise((r) => setTimeout(r, 300));
+                  if (
+                    attempt === 0 &&
+                    isRetryableGeminiError(err) &&
+                    Date.now() - requestStartTime < MAX_SERVERLESS_BUDGET_MS - 2000
+                  ) {
+                    await new Promise((r) => setTimeout(r, 250));
                     continue;
                   }
                   break;
@@ -215,11 +272,23 @@ export default async function handler(req: any, res: any) {
               lastErrStr.includes("PERMISSION_DENIED") ||
               lastErrStr.includes("API_KEY_INVALID");
 
-            if (!isAuthErr && !clientDisconnected) {
+            if (
+              !isAuthErr &&
+              !clientDisconnected &&
+              Date.now() - requestStartTime < MAX_SERVERLESS_BUDGET_MS - 1500
+            ) {
               for (const entry of modelConfigs) {
-                if (clientDisconnected) return;
+                if (clientDisconnected) {
+                  safeEnd();
+                  return;
+                }
+                if (Date.now() - requestStartTime >= MAX_SERVERLESS_BUDGET_MS) break;
+
                 const fallbackController = new AbortController();
-                const fallbackTimer = setTimeout(() => fallbackController.abort(), 16000);
+                const fallbackTimer = setTimeout(
+                  () => fallbackController.abort(),
+                  getRemainingBudgetMs()
+                );
                 try {
                   const response = await ai.models.generateContent({
                     model: entry.model,
@@ -235,9 +304,9 @@ export default async function handler(req: any, res: any) {
                     if (isStandaloneQuestion) {
                       setSharedCachedReply(questionText, response.text, firstName, studentName);
                     }
-                    res.write(`data: ${JSON.stringify({ text: response.text })}\n\n`);
-                    res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-                    res.end();
+                    safeWrite(`data: ${JSON.stringify({ text: response.text })}\n\n`);
+                    safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
+                    safeEnd();
                     return;
                   }
                 } catch (syncErr: any) {
@@ -247,23 +316,28 @@ export default async function handler(req: any, res: any) {
               }
             }
 
-            res.write(
+            safeWrite(
               `data: ${JSON.stringify({
                 error: formatFriendlyGeminiError(lastError, assistantName, firstName),
               })}\n\n`
             );
-            res.end();
+            safeEnd();
           },
           () => clientDisconnected
         );
       } catch (queueErr: any) {
         clearInterval(queueHeartbeat);
-        if (!clientDisconnected && !res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ error: formatFriendlyGeminiError(queueErr, assistantName, firstName) })}\n\n`);
-          res.end();
+        if (!clientDisconnected) {
+          safeWrite(
+            `data: ${JSON.stringify({
+              error: formatFriendlyGeminiError(queueErr, assistantName, firstName),
+            })}\n\n`
+          );
         }
+        safeEnd();
       } finally {
         clearInterval(queueHeartbeat);
+        safeEnd();
       }
       return;
     }
@@ -276,13 +350,21 @@ export default async function handler(req: any, res: any) {
 
       let lastError: any = null;
       for (const entry of modelConfigs) {
+        if (Date.now() - requestStartTime >= MAX_SERVERLESS_BUDGET_MS) break;
         for (let attempt = 0; attempt < 2; attempt++) {
+          if (Date.now() - requestStartTime >= MAX_SERVERLESS_BUDGET_MS) break;
+          const attemptController = new AbortController();
+          const attemptTimer = setTimeout(() => attemptController.abort(), getRemainingBudgetMs());
           try {
             const response = await ai.models.generateContent({
               model: entry.model,
               contents,
-              config: entry.config,
+              config: {
+                ...entry.config,
+                abortSignal: attemptController.signal,
+              },
             });
+            clearTimeout(attemptTimer);
 
             if (response?.text?.trim()) {
               if (isStandaloneQuestion) {
@@ -292,9 +374,14 @@ export default async function handler(req: any, res: any) {
             }
             throw new Error(`Model ${entry.model} returned empty text.`);
           } catch (err: any) {
+            clearTimeout(attemptTimer);
             lastError = err;
-            if (attempt === 0 && isRetryableGeminiError(err)) {
-              await new Promise((r) => setTimeout(r, 300));
+            if (
+              attempt === 0 &&
+              isRetryableGeminiError(err) &&
+              Date.now() - requestStartTime < MAX_SERVERLESS_BUDGET_MS - 2000
+            ) {
+              await new Promise((r) => setTimeout(r, 250));
               continue;
             }
             break;
@@ -309,8 +396,15 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     const fallbackName = extractFirstName(req.body?.studentName);
     if (res.headersSent) {
-      res.write(`data: ${JSON.stringify({ error: formatFriendlyGeminiError(error, "Si Pinter", fallbackName) })}\n\n`);
-      return res.end();
+      try {
+        if (!res.writableEnded) {
+          res.write(`data: ${JSON.stringify({ error: formatFriendlyGeminiError(error, "Si Pinter", fallbackName) })}\n\n`);
+          res.end();
+        }
+      } catch {
+        // ignore socket write error
+      }
+      return;
     }
     return res.status(500).json({
       error: formatFriendlyGeminiError(error, "Si Pinter", fallbackName),

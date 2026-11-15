@@ -13,12 +13,15 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="SiPinter" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&display=swap" rel="stylesheet" />
     <title>SiPinter Apps - SMAN 1 Cililin</title>
   </head>
   <body>
     <div id="root">
       <style>
-        @keyframes cuteBounceInit { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+        @keyframes cuteBounceInit { 0%, 100% { transform: translateY(0) scaleX(1.06) scaleY(0.94); } 45% { transform: translateY(-22px) scaleX(0.98) scaleY(1.03); } }
         @keyframes cuteWaveInit { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(18deg); } }
         @keyframes cuteTasselInit { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(20deg); } }
         .init-brand-splash {
@@ -107,7 +110,8 @@
           pointer-events: none;
         }
         .init-mascot {
-          animation: cuteBounceInit 2.2s ease-in-out infinite;
+          animation: cuteBounceInit 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) infinite;
+          transform-origin: center bottom;
           width: 150px;
           height: 150px;
           filter: drop-shadow(0 4px 6px rgba(15, 23, 42, 0.08));
@@ -120,10 +124,31 @@
           animation: cuteTasselInit 1.6s ease-in-out infinite;
           transform-origin: 80px 37px;
         }
+        .init-brand-cute {
+          font-family: 'Fredoka', ui-rounded, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          font-size: 30px;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+          line-height: 1.1;
+          margin-top: 12px;
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          filter: drop-shadow(0 2px 10px rgba(133, 204, 0, 0.22));
+        }
+        .init-brand-cute-si {
+          color: #1e293b;
+        }
+        .init-brand-cute-pinter {
+          background: linear-gradient(135deg, #68a300 0%, #85cc00 50%, #10b981 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
         .init-sub {
-          font-size: 15px;
-          color: #334155;
-          margin-top: 16px;
+          font-size: 14px;
+          color: #475569;
+          margin-top: 6px;
           font-weight: 600;
           text-align: center;
           max-width: 340px;
@@ -175,6 +200,12 @@
               <path d="M 72 95 Q 80 106 88 95" stroke="#0f172a" stroke-width="3.2" stroke-linecap="round" fill="#e11d48" />
             </g>
           </svg>
+          <div class="init-brand-cute">
+            <span class="init-brand-cute-si">Si</span><span class="init-brand-cute-pinter">Pinter</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style="margin-top: -12px; margin-left: 1px;">
+              <path d="M12 2L14.2 9.2L21.5 11.5L14.2 13.8L12 21L9.8 13.8L2.5 11.5L9.8 9.2L12 2Z" fill="#facc15" />
+            </svg>
+          </div>
           <div class="init-sub">Tunggu Sebentar Yaaa. Sedang Memuat Halaman Dulu</div>
         </div>
       </div>
@@ -183,7 +214,9 @@
           try {
             var isDash = window.location.pathname.indexOf('/dashboard') === 0;
             var hasTeacher = sessionStorage.getItem('is_teacher_auth') === 'true' || localStorage.getItem('is_teacher_auth') === 'true';
-            if (isDash || hasTeacher) {
+            var hasStudent = !!localStorage.getItem('current_student');
+            var hasSeenSplash = sessionStorage.getItem('sipinter_splash_seen') === 'true';
+            if (isDash || hasTeacher || hasStudent || hasSeenSplash) {
               var b = document.getElementById('init-brand-splash');
               var m = document.getElementById('init-mascot-loader');
               if (b) b.style.display = 'none';

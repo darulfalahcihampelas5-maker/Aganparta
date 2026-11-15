@@ -2336,16 +2336,15 @@ export default function DashboardTeacher() {
         })(),
       ]);
     } finally {
-      setIsLoadingInitialData(false);
       setTimeout(() => setIsRefreshingTeacherData(false), 500);
     }
   };
 
   useEffect(() => {
-    // Batasi tampilan loading maskot maksimal 500ms agar dasbor langsung terbuka
+    // Tampilkan maskot SiPinter loncat-loncat tepat 1 detik saat memuat halaman guru
     const maxLoadingTimer = setTimeout(() => {
       setIsLoadingInitialData(false);
-    }, 500);
+    }, 1000);
 
     // Initial fetch on mount with cache support
     fetchTeacherData(false);

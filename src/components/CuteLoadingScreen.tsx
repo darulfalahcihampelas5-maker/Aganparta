@@ -9,9 +9,10 @@ interface CuteLoadingScreenProps {
   onDismiss?: () => void;
 }
 
-export const CuteMascotSvg: React.FC<{ size?: number; className?: string }> = ({
+export const CuteMascotSvg: React.FC<{ size?: number; className?: string; hop?: boolean }> = ({
   size = 140,
   className = "",
+  hop = false,
 }) => {
   return (
     <div
@@ -59,7 +60,7 @@ export const CuteMascotSvg: React.FC<{ size?: number; className?: string }> = ({
           rx="36"
           ry="6"
           fill="rgba(15, 23, 42, 0.16)"
-          className="animate-pulse"
+          className={hop ? "animate-cute-shadow" : "animate-pulse"}
         />
 
         {/* Floating Sparkles & Stars */}
@@ -84,7 +85,7 @@ export const CuteMascotSvg: React.FC<{ size?: number; className?: string }> = ({
         </g>
 
         {/* Bouncing Mascot Character */}
-        <g className="animate-cute-bounce" filter="url(#cuteMascotGlow)">
+        <g className={hop ? "animate-cute-hop" : "animate-cute-bounce"} filter="url(#cuteMascotGlow)">
           {/* Feet */}
           <ellipse cx="62" cy="140" rx="10" ry="6" fill="#4d7c0f" />
           <ellipse cx="98" cy="140" rx="10" ry="6" fill="#4d7c0f" />
@@ -283,8 +284,27 @@ export const CuteLoadingScreen: React.FC<CuteLoadingScreenProps> = ({
       </div>
 
       <div className="relative z-10 flex flex-col items-center text-center max-w-sm mx-auto">
-        <CuteMascotSvg size={150} className="drop-shadow-sm" />
-        <p className="text-sm sm:text-base font-semibold text-slate-700 mt-4 leading-relaxed">
+        <CuteMascotSvg size={150} hop={true} className="drop-shadow-sm" />
+        <div className="mt-3 inline-flex items-center gap-0.5 font-[Fredoka,'Plus_Jakarta_Sans',ui-rounded,sans-serif] text-3xl sm:text-[34px] font-bold tracking-tight leading-none drop-shadow-[0_2px_10px_rgba(133,204,0,0.22)]">
+          <span className="text-slate-800">Si</span>
+          <span className="bg-gradient-to-r from-[#68a300] via-[#85cc00] to-emerald-500 bg-clip-text text-transparent">
+            Pinter
+          </span>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            className="-mt-3 ml-0.5 text-amber-400 animate-pulse"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 2L14.2 9.2L21.5 11.5L14.2 13.8L12 21L9.8 13.8L2.5 11.5L9.8 9.2L12 2Z"
+              fill="currentColor"
+            />
+          </svg>
+        </div>
+        <p className="text-sm sm:text-[15px] font-semibold text-slate-600 mt-1.5 leading-relaxed">
           {subtitle}
         </p>
       </div>

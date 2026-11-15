@@ -770,11 +770,17 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
           `Jadi buat pertanyaan bebas yang perlu mikir panjang, aku istirahat dulu sebentar sampai kuotanya ke-reset lagi ya. Tapi santai aja, kamu masih bisa buka tab **Panduan Aplikasi** di atas atau tanya seputar **cara upload tugas, info nilai/CBT, sama rangkuman materi Informatika Bab 1–9**—itu masih aman dan langsung aku bantu kok! 😊`;
       } else if (
         lowerMsg.includes("500") ||
+        lowerMsg.includes("502") ||
+        lowerMsg.includes("504") ||
+        lowerMsg.includes("function_invocation_failed") ||
+        lowerMsg.includes("a server error has occurred") ||
+        lowerMsg.includes("<!doctype") ||
+        lowerMsg.includes("<html") ||
         lowerMsg.includes("kunci api") ||
         lowerMsg.includes("permission_denied")
       ) {
         naturalChatReply =
-          `Eh ${firstName}, kayaknya akses AI aku di server lagi ada kendala teknis sebentar nih 🙏 Nanti kabarin Pak Agan ya biar dicek. Sementara itu, kamu masih bisa tanya soal cara kirim tugas, aturan CBT, atau rangkuman materi Bab 1–9 di sini!`;
+          `Eh ${firstName}, kayaknya akses AI aku di server lagi ada kendala teknis sebentar nih 🙏 Coba kirim ulang pertanyaannya sebentar lagi ya, atau kabarin Pak Agan kalau masih berlanjut. Sementara itu, kamu masih bisa tanya soal cara kirim tugas, aturan CBT, atau rangkuman materi Informatika Bab 1–9 di sini!`;
       }
 
       setError(null);
