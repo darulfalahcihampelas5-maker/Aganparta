@@ -4408,10 +4408,24 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     );
   }, []);
 
-  // Teacher announcements are listed inside Menu Informasi per user preferences.
   useEffect(() => {
     // Keep announcements state synced without auto-popping modal on Beranda load
   }, [announcementsList, student, readAnnIds]);
+
+  useEffect(() => {
+    if (isSchoolInfoOpen && announcementsList.length > 0 && student?.nisn) {
+      const allIds = announcementsList
+        .filter((ann: any) => ann.kelasRef === student?.kelas || ann.kelasRef === "SEMUA_KELAS")
+        .map((ann: any) => ann.id);
+      const newRead = Array.from(new Set([...readAnnIds, ...allIds]));
+      if (newRead.length > readAnnIds.length) {
+        setReadAnnIds(newRead);
+        try {
+          localStorage.setItem(`read_anns_${student.nisn}`, JSON.stringify(newRead));
+        } catch (e) {}
+      }
+    }
+  }, [isSchoolInfoOpen, announcementsList, student?.nisn, student?.kelas, readAnnIds]);
 
   const handleDismissAnnouncement = (id?: string) => {
     if (id) {
@@ -5389,11 +5403,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         <p className="text-xs font-bold text-emerald-700 tracking-wider">
                           {student?.nisn || "-"}
                         </p>
-                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-                          {academicPeriod.academicYear} | {academicPeriod.semester}
-                        </p>
-                        <p className="text-xs font-bold text-slate-500 tracking-wider">
-                          {student?.kelas || "-"}
+                        <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                          {academicPeriod.academicYear} | {student?.kelas || "-"} | {academicPeriod.semester}
                         </p>
                         <p className="text-xs sm:text-sm font-medium italic text-slate-600 mt-2.5 px-4 leading-relaxed max-w-md mx-auto">
                           &ldquo;{motivationalQuote}&rdquo;

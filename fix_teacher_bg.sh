@@ -1,1 +1,0 @@
-sed -i 's/<div className="flex h-screen overflow-hidden bg-\[#050810\] font-sans text-slate-100">/<div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-700 relative">/g' src/pages/DashboardTeacher.tsx
