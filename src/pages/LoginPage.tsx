@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { OperationType, handleFirestoreError } from "../lib/firestoreUtils";
 import { getDriveImageUrl } from "../lib/driveUtils";
 import { NotificationModal } from "../components/NotificationModal";
+import { CuteLoadingScreen, CuteMascotSvg } from "../components/CuteLoadingScreen";
 import { motion, AnimatePresence } from "motion/react";
 import {
   GraduationCap,
@@ -121,6 +122,15 @@ export default function LoginPage() {
   // States for interactive help modals mimicking screenshot links
   const [showRegisterHelp, setShowRegisterHelp] = useState(false);
   const [showForgotHelp, setShowForgotHelp] = useState(false);
+  const [isPageRefreshing, setIsPageRefreshing] = useState(false);
+
+  const handleManualRefresh = () => {
+    setIsPageRefreshing(true);
+    setNisnError("");
+    setTimeout(() => {
+      setIsPageRefreshing(false);
+    }, 1300);
+  };
 
   const handleTabChange = (tab: "siswa" | "guru") => {
     if (tab === activeTab) return;
@@ -447,47 +457,40 @@ export default function LoginPage() {
               hasShownSplashThisLoad = true;
               setShowSplash(false);
             }}
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#85cc00] font-sans p-6 overflow-hidden cursor-pointer select-none"
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-50 bg-gradient-to-br from-emerald-50/60 via-slate-50 to-[#85cc00]/15 font-sans p-6 overflow-hidden cursor-pointer select-none"
           >
             <div className="absolute inset-0 pointer-events-none overflow-hidden">
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] h-[380px] rounded-full bg-white/25 blur-[90px]" />
+              <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-gradient-to-br from-[#85cc00]/15 to-emerald-400/5 blur-3xl" />
+              <div className="absolute bottom-1/4 right-1/4 w-96 h-96 rounded-full bg-gradient-to-tr from-emerald-500/15 to-[#85cc00]/5 blur-3xl" />
             </div>
 
-            <div className="relative z-10 flex flex-col items-center text-center">
+            <div className="relative z-10 flex flex-col items-center text-center max-w-sm mx-auto">
               <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
+                initial={{ scale: 0.85, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.5, ease: "easeOut" }}
-                className="w-28 h-28 md:w-32 md:h-32 flex items-center justify-center shrink-0 mb-3 relative"
+                transition={{ duration: 0.4, ease: "easeOut" }}
               >
-                <div className="absolute inset-2 rounded-full bg-white/35 blur-xl pointer-events-none" />
-                <img
-                  src={getDriveImageUrl("https://drive.google.com/file/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR/view?usp=sharing")}
-                  alt="Logo SMA Negeri 1 Cililin"
-                  className="relative z-10 w-full h-full object-contain drop-shadow-[0_10px_24px_rgba(15,23,42,0.18)]"
-                  referrerPolicy="no-referrer"
-                />
+                <CuteMascotSvg size={150} className="drop-shadow-sm" />
               </motion.div>
 
-              <motion.h1
-                initial={{ y: 12, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.1, duration: 0.45 }}
-                className="text-3xl sm:text-4xl font-display font-black text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.16)] tracking-wider uppercase leading-none"
-              >
-                SIPINTER APP
-              </motion.h1>
-
               <motion.p
-                initial={{ y: 8, opacity: 0 }}
+                initial={{ y: 6, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.18, duration: 0.45 }}
-                className="text-xs sm:text-sm font-bold text-slate-600 tracking-[0.18em] uppercase leading-tight mt-0.5"
+                transition={{ delay: 0.12, duration: 0.4 }}
+                className="text-sm sm:text-base font-semibold text-slate-700 mt-4 leading-relaxed"
               >
-                SMA NEGERI 1 CILILIN
+                Sedang memuat data tunggu sebentar yaa
               </motion.p>
             </div>
           </motion.div>
+        )}
+
+        {/* Dashboard Login Refresh Overlay */}
+        {isPageRefreshing && (
+          <CuteLoadingScreen
+            key="login-refresh-overlay"
+            fullScreen={true}
+          />
         )}
       </AnimatePresence>
 
@@ -509,6 +512,16 @@ export default function LoginPage() {
         <div className="w-full bg-white/85 backdrop-blur-2xl rounded-[2.5rem] border border-slate-200/80 shadow-[0_20px_60px_-15px_rgba(0,0,0,0.06),0_0_1px_1px_rgba(0,0,0,0.03)] p-7 sm:p-10 relative overflow-hidden transition-all duration-300">
           {/* Top Elegant Gradient Accent */}
           <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-transparent via-[#85cc00] to-transparent" />
+
+          {/* Refresh Page Button */}
+          <button
+            type="button"
+            onClick={handleManualRefresh}
+            title="Muat Ulang Halaman"
+            className="absolute top-4 right-4 p-2 rounded-xl text-slate-400 hover:text-[#85cc00] hover:bg-slate-100/80 transition-all duration-200 cursor-pointer active:scale-95 group z-20"
+          >
+            <RefreshCw className="w-4 h-4 transition-transform duration-500 group-hover:rotate-180" />
+          </button>
 
           {/* School Emblem & Brand Identity */}
           <div className="flex flex-col items-center text-center mb-7">

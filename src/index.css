@@ -241,4 +241,140 @@
   z-index: 10;
 }
 
+/* Cute Mascot Animations for Loading Screen & Refresh */
+@keyframes cuteBounce {
+  0%, 100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translateY(-8px) rotate(-2deg) scale(1.02);
+  }
+  50% {
+    transform: translateY(-14px) rotate(1.5deg) scale(1.04);
+  }
+  75% {
+    transform: translateY(-4px) rotate(-1deg) scale(0.99);
+  }
+}
+
+@keyframes cuteWave {
+  0%, 100% {
+    transform: rotate(0deg);
+    transform-origin: 28px 110px;
+  }
+  25% {
+    transform: rotate(22deg);
+    transform-origin: 28px 110px;
+  }
+  50% {
+    transform: rotate(-8deg);
+    transform-origin: 28px 110px;
+  }
+  75% {
+    transform: rotate(18deg);
+    transform-origin: 28px 110px;
+  }
+}
+
+@keyframes cuteTassel {
+  0%, 100% {
+    transform: rotate(0deg);
+    transform-origin: 80px 37px;
+  }
+  50% {
+    transform: rotate(24deg);
+    transform-origin: 80px 37px;
+  }
+}
+
+@keyframes cuteBlink {
+  0%, 92%, 100% {
+    transform: scaleY(1);
+  }
+  95% {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes cuteFloatSparkle {
+  0% {
+    transform: translateY(0px) scale(0.6) rotate(0deg);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.95;
+  }
+  70% {
+    opacity: 0.85;
+  }
+  100% {
+    transform: translateY(-28px) scale(1.15) rotate(45deg);
+    opacity: 0;
+  }
+}
+
+@keyframes cuteShimmerBar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+@keyframes cuteDotJump {
+  0%, 80%, 100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  40% {
+    transform: translateY(-6px);
+    opacity: 1;
+  }
+}
+
+.animate-cute-bounce {
+  animation: cuteBounce 2.4s ease-in-out infinite;
+}
+
+.animate-cute-wave {
+  animation: cuteWave 1.3s ease-in-out infinite;
+}
+
+.animate-cute-tassel {
+  animation: cuteTassel 1.6s ease-in-out infinite;
+}
+
+.animate-cute-blink {
+  animation: cuteBlink 3.2s ease-in-out infinite;
+  transform-origin: center;
+}
+
+.animate-cute-sparkle-1 {
+  animation: cuteFloatSparkle 2s ease-in-out infinite;
+}
+
+.animate-cute-sparkle-2 {
+  animation: cuteFloatSparkle 2.4s ease-in-out 0.6s infinite;
+}
+
+.animate-cute-sparkle-3 {
+  animation: cuteFloatSparkle 2.2s ease-in-out 1.2s infinite;
+}
+
+.animate-cute-shimmer {
+  animation: cuteShimmerBar 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-dot-1 {
+  animation: cuteDotJump 1.2s ease-in-out infinite;
+}
+.animate-dot-2 {
+  animation: cuteDotJump 1.2s ease-in-out 0.2s infinite;
+}
+.animate-dot-3 {
+  animation: cuteDotJump 1.2s ease-in-out 0.4s infinite;
+}
+
+
 

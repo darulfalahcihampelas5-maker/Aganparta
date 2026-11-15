@@ -16,7 +16,112 @@
     <title>SiPinter Apps - SMAN 1 Cililin</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <style>
+        @keyframes cuteBounceInit { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-12px); } }
+        @keyframes cuteWaveInit { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(18deg); } }
+        @keyframes cuteTasselInit { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(20deg); } }
+        .init-splash-wrap {
+          position: fixed;
+          inset: 0;
+          z-index: 9999;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          background-color: #f8fafc;
+          background-image: linear-gradient(to bottom right, rgba(236, 253, 245, 0.6), #f8fafc, rgba(133, 204, 0, 0.15));
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+          color: #334155;
+          padding: 24px;
+          overflow: hidden;
+          box-sizing: border-box;
+          user-select: none;
+        }
+        .init-glow-1 {
+          position: absolute;
+          top: 25%;
+          left: 25%;
+          width: 384px;
+          height: 384px;
+          border-radius: 50%;
+          background: linear-gradient(to bottom right, rgba(133, 204, 0, 0.15), rgba(52, 211, 153, 0.05));
+          filter: blur(64px);
+          pointer-events: none;
+        }
+        .init-glow-2 {
+          position: absolute;
+          bottom: 25%;
+          right: 25%;
+          width: 384px;
+          height: 384px;
+          border-radius: 50%;
+          background: linear-gradient(to top right, rgba(16, 185, 129, 0.15), rgba(133, 204, 0, 0.05));
+          filter: blur(64px);
+          pointer-events: none;
+        }
+        .init-mascot {
+          animation: cuteBounceInit 2.2s ease-in-out infinite;
+          width: 150px;
+          height: 150px;
+          filter: drop-shadow(0 4px 6px rgba(15, 23, 42, 0.08));
+        }
+        .init-wave {
+          animation: cuteWaveInit 1.3s ease-in-out infinite;
+          transform-origin: 28px 110px;
+        }
+        .init-tassel {
+          animation: cuteTasselInit 1.6s ease-in-out infinite;
+          transform-origin: 80px 37px;
+        }
+        .init-sub {
+          font-size: 15px;
+          color: #334155;
+          margin-top: 16px;
+          font-weight: 600;
+          text-align: center;
+          max-width: 340px;
+          line-height: 1.5;
+        }
+      </style>
+      <div class="init-splash-wrap">
+        <div class="init-glow-1"></div>
+        <div class="init-glow-2"></div>
+        <div style="position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; text-align: center;">
+          <svg class="init-mascot" viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <ellipse cx="80" cy="148" rx="36" ry="6" fill="rgba(15, 23, 42, 0.14)" />
+            <g>
+              <ellipse cx="62" cy="140" rx="10" ry="6" fill="#4d7c0f" />
+              <ellipse cx="98" cy="140" rx="10" ry="6" fill="#4d7c0f" />
+              <ellipse cx="118" cy="98" rx="7" ry="5.5" fill="#76b900" />
+              <g class="init-wave">
+                <ellipse cx="32" cy="98" rx="8" ry="6" fill="#76b900" />
+                <circle cx="26" cy="92" r="3.5" fill="#85cc00" />
+              </g>
+              <ellipse cx="80" cy="96" rx="44" ry="43" fill="#85cc00" />
+              <ellipse cx="80" cy="104" rx="30" ry="26" fill="#f4fee0" />
+              <ellipse cx="80" cy="50" rx="22" ry="7" fill="#0f172a" />
+              <polygon points="80,24 122,37 80,50 38,37" fill="#1e293b" />
+              <ellipse cx="80" cy="37" rx="4.5" ry="3" fill="#334155" />
+              <g class="init-tassel">
+                <path d="M 80 37 Q 100 40 106 54" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" fill="none" />
+                <ellipse cx="106" cy="57" rx="3.5" ry="5.5" fill="#fbbf24" />
+              </g>
+              <circle cx="64" cy="86" r="9" fill="#0f172a" />
+              <circle cx="61.5" cy="83.5" r="3.2" fill="#ffffff" />
+              <circle cx="66.5" cy="88.5" r="1.4" fill="#ffffff" />
+              <circle cx="96" cy="86" r="9" fill="#0f172a" />
+              <circle cx="93.5" cy="83.5" r="3.2" fill="#ffffff" />
+              <circle cx="98.5" cy="88.5" r="1.4" fill="#ffffff" />
+              <ellipse cx="50" cy="96" rx="6.5" ry="4" fill="#ff6b8b" />
+              <ellipse cx="110" cy="96" rx="6.5" ry="4" fill="#ff6b8b" />
+              <path d="M 72 95 Q 80 106 88 95" stroke="#0f172a" stroke-width="3.2" stroke-linecap="round" fill="#e11d48" />
+            </g>
+          </svg>
+          <div class="init-sub">Sedang memuat data tunggu sebentar yaa</div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {

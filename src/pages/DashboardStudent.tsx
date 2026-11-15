@@ -16,6 +16,7 @@ import { initAuth, googleSignIn, getAccessToken } from "../lib/googleAuth";
 import { uploadFileToDrive, uploadFileToDriveWithToken } from "../lib/driveUpload";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
 import { Toast } from "../components/Toast";
+import { CuteLoadingScreen, SipinterAvatar } from "../components/CuteLoadingScreen";
 import { getLocalCache, setLocalCache, clearStudentCaches } from "../lib/firestoreUtils";
 import { saveFinalGrade } from "../lib/supabaseSync";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
@@ -4627,15 +4628,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   if (isLoadingInitialData) {
     return (
-      <div className="flex h-screen items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center gap-4">
-          <div className="relative w-16 h-16">
-            <div className="absolute inset-0 rounded-full border-4 border-slate-200"></div>
-            <div className="absolute inset-0 rounded-full border-4 border-[#85cc00] border-t-transparent animate-spin"></div>
-          </div>
-          <p className="text-xs font-black text-slate-400 uppercase tracking-widest animate-pulse">Menyiapkan Dasbor...</p>
-        </div>
-      </div>
+      <CuteLoadingScreen
+        fullScreen={true}
+      />
     );
   }
 
@@ -11365,8 +11360,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                 className="flex flex-col items-center justify-center gap-1 py-1 px-1.5 text-[#85cc00] transition-all cursor-pointer group active:scale-95"
                 title="Tanya Si Pinter"
               >
-                <div className="relative w-8 h-8 rounded-xl bg-[#85cc00]/10 text-[#85cc00] flex items-center justify-center group-hover:bg-[#85cc00] group-hover:text-white transition-all shadow-3xs">
-                  <Sparkles className="w-4.5 h-4.5" />
+                <div className="relative w-8 h-8 rounded-full overflow-hidden flex items-center justify-center border border-emerald-200/90 shadow-2xs group-hover:scale-105 group-hover:border-[#85cc00] transition-all">
+                  <SipinterAvatar sizeClass="w-full h-full" />
                 </div>
                 <span className="text-[10px] font-extrabold tracking-tight text-[#85cc00] leading-none whitespace-nowrap">Si Pinter</span>
               </button>

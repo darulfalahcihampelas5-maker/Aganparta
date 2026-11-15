@@ -21,7 +21,7 @@ import {
   User,
   ShieldAlert,
 } from "lucide-react";
-import smartTeacherAvatar from "../../assets/images/sipinter_sma_avatar_1794657225547.jpg";
+import { SipinterAvatar, CuteMascotSvg } from "../CuteLoadingScreen";
 import { getDriveImageUrl, getDriveImageFallbackUrl } from "../../lib/driveUtils";
 import { EtikaDigitalModal } from "./EtikaDigitalModal";
 import { addDoc, collection } from "firebase/firestore";
@@ -821,19 +821,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   };
 
   const renderTeacherAvatar = (sizeClass: string) => (
-    <div className={`${sizeClass} rounded-full overflow-hidden shrink-0 bg-sky-100 border border-slate-200/80 shadow-xs flex items-center justify-center`}>
-      {!avatarFailed ? (
-        <img
-          src={smartTeacherAvatar}
-          alt={assistantName}
-          referrerPolicy="no-referrer"
-          onError={() => setAvatarFailed(true)}
-          className="w-full h-full object-cover object-[50%_15%]"
-        />
-      ) : (
-        <span className="text-xs font-bold text-[#075e54]">SP</span>
-      )}
-    </div>
+    <SipinterAvatar sizeClass={sizeClass} />
   );
 
   const renderStudentAvatar = (sizeClass: string) => (
@@ -1313,17 +1301,17 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
               >
                 <X className="w-4 h-4" />
               </button>
-              <div className="aspect-[3/4] w-full bg-sky-100 overflow-hidden">
-                <img
-                  src={smartTeacherAvatar}
-                  alt="Foto Profil Si Pinter"
-                  className="w-full h-full object-cover object-top"
-                />
+              <div className="aspect-square w-full bg-gradient-to-b from-sky-100 via-emerald-50 to-lime-100 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(133,204,0,0.2),transparent_70%)] pointer-events-none" />
+                <CuteMascotSvg size={180} className="relative z-10 drop-shadow-xl" />
               </div>
               <div className="p-4 text-center bg-white border-t border-slate-100">
-                <h4 className="font-bold text-slate-900 text-base">Si Pinter</h4>
-                <p className="text-xs font-medium text-slate-500 mt-0.5">
-                  Asisten Belajar Informatika · SMAN 1 Cililin
+                <h4 className="font-bold text-slate-900 text-lg">Si Pinter</h4>
+                <p className="text-xs font-bold text-[#85cc00] mt-0.5">
+                  Maskot Resmi & Asisten Belajar
+                </p>
+                <p className="text-[11px] font-medium text-slate-500 mt-1">
+                  Informatika · SMAN 1 Cililin
                 </p>
               </div>
             </motion.div>
