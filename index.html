@@ -15,7 +15,8 @@
     <meta name="apple-mobile-web-app-title" content="SiPinter" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&display=swap" rel="stylesheet" />
+    <link rel="preload" as="image" href="https://lh3.googleusercontent.com/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR=w256" />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Plus+Jakarta+Sans:wght@700;800&display=swap" rel="stylesheet" />
     <title>SiPinter Apps - SMAN 1 Cililin</title>
   </head>
   <body>
@@ -52,7 +53,8 @@
           pointer-events: none;
         }
         .init-brand-title {
-          font-size: 30px;
+          font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+          font-size: 32px;
           font-weight: 900;
           letter-spacing: 0.05em;
           text-transform: uppercase;
@@ -62,13 +64,14 @@
           text-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
         }
         .init-brand-school {
+          font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
           font-size: 13px;
           font-weight: 700;
           color: #475569;
           letter-spacing: 0.18em;
           text-transform: uppercase;
           line-height: 1.25;
-          margin-top: 2px;
+          margin-top: 4px;
         }
         .init-splash-wrap {
           position: fixed;
@@ -160,7 +163,7 @@
         <div style="position: relative; z-index: 10; display: flex; flex-direction: column; align-items: center; text-align: center;">
           <div style="width: 112px; height: 112px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; position: relative;">
             <div style="position: absolute; inset: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.35); filter: blur(20px); pointer-events: none;"></div>
-            <img src="https://drive.google.com/thumbnail?id=1P395tuZymxs3qero4XduMpHy7g2GJrdR&sz=w500" alt="Logo SMA Negeri 1 Cililin" style="position: relative; z-index: 10; width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 10px 24px rgba(15, 23, 42, 0.18));" referrerpolicy="no-referrer" />
+            <img src="https://lh3.googleusercontent.com/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR=w256" alt="Logo SMA Negeri 1 Cililin" style="position: relative; z-index: 10; width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 10px 24px rgba(15, 23, 42, 0.18));" referrerpolicy="no-referrer" />
           </div>
           <h1 class="init-brand-title">SIPINTER APP</h1>
           <p class="init-brand-school">SMA NEGERI 1 CILILIN</p>
@@ -214,13 +217,32 @@
           try {
             var isDash = window.location.pathname.indexOf('/dashboard') === 0;
             var hasTeacher = sessionStorage.getItem('is_teacher_auth') === 'true' || localStorage.getItem('is_teacher_auth') === 'true';
-            var hasStudent = !!localStorage.getItem('current_student');
-            var hasSeenSplash = sessionStorage.getItem('sipinter_splash_seen') === 'true';
-            if (isDash || hasTeacher || hasStudent || hasSeenSplash) {
+            var hasStudent = false;
+            try {
+              var rawStu = localStorage.getItem('current_student');
+              if (rawStu) {
+                var parsedStu = JSON.parse(rawStu);
+                hasStudent = Boolean(parsedStu && (parsedStu.nisn || parsedStu.id));
+              }
+            } catch (_) {}
+            var navType = 'navigate';
+            try {
+              var navEntries = window.performance && window.performance.getEntriesByType && window.performance.getEntriesByType('navigation');
+              if (navEntries && navEntries.length > 0 && navEntries[0].type) {
+                navType = navEntries[0].type;
+              } else if (window.performance && window.performance.navigation) {
+                navType = window.performance.navigation.type === 1 ? 'reload' : 'navigate';
+              }
+            } catch (_) {}
+            var isReload = navType === 'reload';
+            var hasSeenSplash = sessionStorage.getItem('sipinter_splash_seen_v2') === 'true';
+            if (isDash || hasTeacher || hasStudent || (isReload && hasSeenSplash)) {
               var b = document.getElementById('init-brand-splash');
               var m = document.getElementById('init-mascot-loader');
               if (b) b.style.display = 'none';
               if (m) m.style.display = 'flex';
+            } else {
+              window.__sipinterBrandSplashStart = Date.now();
             }
           } catch (_) {}
         })();

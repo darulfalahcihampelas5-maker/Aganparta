@@ -1,5 +1,3 @@
-import { KOP_SURAT_BASE64 } from "../kopSuratBase64";
-
 export interface StudentRaporGradeItem {
   title: string;
   type: string;
@@ -120,6 +118,7 @@ _Ringkasan ini dikirim otomatis melalui sistem SiPinter SMAN 1 Cililin agar Oran
 
 async function addKopSurat(doc: any, pageWidth: number, margin: number): Promise<number> {
   try {
+    const { KOP_SURAT_BASE64 } = await import("../kopSuratBase64");
     const imgWidth = 1450;
     const imgHeight = 341;
     const targetWidth = pageWidth - margin * 2;

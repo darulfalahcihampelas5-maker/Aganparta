@@ -20,7 +20,6 @@ import { CuteLoadingScreen, SipinterAvatar } from "../components/CuteLoadingScre
 import { getLocalCache, setLocalCache, clearStudentCaches } from "../lib/firestoreUtils";
 import { saveFinalGrade } from "../lib/supabaseSync";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
-import { generateStudentRaporPdf } from "../lib/studentReportPdf";
 
 export function handleOpenFileLink(rawUrl: string, e?: React.MouseEvent) {
   if (e) {
@@ -735,7 +734,7 @@ export default function DashboardStudent() {
     // Add a small delay to ensure everything is ready and prevent "muter-muter" feeling
     const timer = setTimeout(() => {
       setIsLoadingInitialData(false);
-    }, 1000);
+    }, 500);
     return () => clearTimeout(timer);
   }, []);
 
@@ -6407,6 +6406,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
                           const freshTeacherSettings = await fetchLatestTeacherProfileSettings();
 
+                          const { generateStudentRaporPdf } = await import("../lib/studentReportPdf");
                           await generateStudentRaporPdf({
                             student,
                             userSettings: {

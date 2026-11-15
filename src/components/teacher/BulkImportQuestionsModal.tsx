@@ -12,8 +12,6 @@ import {
   Plus,
   RefreshCw,
 } from "lucide-react";
-import * as XLSX from "xlsx";
-import mammoth from "mammoth";
 
 export interface ImportedExamQuestion {
   type: "multiple_choice" | "short_answer" | "essay";
@@ -169,7 +167,8 @@ export const BulkImportQuestionsModal: React.FC<BulkImportQuestionsModalProps> =
   const [fileName, setFileName] = useState("");
   const [isParsing, setIsParsing] = useState(false);
 
-  const handleDownloadExcelTemplate = () => {
+  const handleDownloadExcelTemplate = async () => {
+    const XLSX = await import("xlsx");
     const sampleRows = [
       {
         "Tipe Soal": "PG",
@@ -228,6 +227,7 @@ export const BulkImportQuestionsModal: React.FC<BulkImportQuestionsModalProps> =
     setImportError("");
     setFileName(file.name);
     try {
+      const XLSX = await import("xlsx");
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { type: "array" });
       const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -300,6 +300,8 @@ export const BulkImportQuestionsModal: React.FC<BulkImportQuestionsModalProps> =
     try {
       let extracted = "";
       if (file.name.toLowerCase().endsWith(".docx")) {
+        const mammothModule = await import("mammoth");
+        const mammoth = mammothModule.default || mammothModule;
         const arrayBuffer = await file.arrayBuffer();
         const res = await mammoth.extractRawText({ arrayBuffer });
         extracted = res.value || "";

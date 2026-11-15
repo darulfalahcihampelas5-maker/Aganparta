@@ -49,8 +49,10 @@ const retryImport = <T,>(
   });
 };
 
-const DashboardTeacher = lazy(() => retryImport(() => import('./pages/DashboardTeacher')));
-const DashboardStudent = lazy(() => retryImport(() => import('./pages/DashboardStudent')));
+import { preloadDashboardTeacher, preloadDashboardStudent } from './lib/routePreload';
+
+const DashboardTeacher = lazy(() => retryImport(preloadDashboardTeacher));
+const DashboardStudent = lazy(() => retryImport(preloadDashboardStudent));
 
 import { CuteLoadingScreen } from './components/CuteLoadingScreen';
 

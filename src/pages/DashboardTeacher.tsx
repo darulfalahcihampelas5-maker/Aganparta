@@ -6,7 +6,6 @@ import { useAuth } from "../AuthContext";
 import { db } from "../lib/firebase";
 import { getDriveImageUrl, getDrivePdfEmbedUrl } from "../lib/driveUtils";
 import { CuteLoadingScreen } from "../components/CuteLoadingScreen";
-import { KOP_SURAT_BASE64 } from "../kopSuratBase64";
 import {
   doc,
   addDoc,
@@ -107,7 +106,9 @@ const Youtube = (props: React.SVGProps<SVGSVGElement>) => (
     <polygon points="10 15 15 12 10 9 10 15" fill="currentColor" />
   </svg>
 );
-import { SimulasiChapterMenu } from "../components/simulation/SimulasiChapterMenu";
+const SimulasiChapterMenu = React.lazy(() =>
+  import("../components/simulation/SimulasiChapterMenu").then((m) => ({ default: m.SimulasiChapterMenu }))
+);
 import { useNavigate } from "react-router-dom";
 import { ResetDashboardModal } from "../components/ResetDashboardModal";
 import { StorageManagerModal } from "../components/StorageManagerModal";
@@ -127,7 +128,10 @@ import { AddManualColumnModal } from "../components/teacher/AddManualColumnModal
 import { DeleteColumnModal } from "../components/teacher/DeleteColumnModal";
 import { EditColumnModal, ColumnEditData } from "../components/teacher/EditColumnModal";
 import { AssignmentPreviewModal } from "../components/teacher/AssignmentPreviewModal";
-import { BulkImportQuestionsModal, ImportedExamQuestion } from "../components/teacher/BulkImportQuestionsModal";
+import type { ImportedExamQuestion } from "../components/teacher/BulkImportQuestionsModal";
+const BulkImportQuestionsModal = React.lazy(() =>
+  import("../components/teacher/BulkImportQuestionsModal").then((m) => ({ default: m.BulkImportQuestionsModal }))
+);
 import { ExamItemAnalysisModal } from "../components/teacher/ExamItemAnalysisModal";
 import { LiveProctoringModal } from "../components/teacher/LiveProctoringModal";
 import { generateStudentRaporPdf, buildParentWaReportText } from "../lib/studentReportPdf";
@@ -2341,10 +2345,10 @@ export default function DashboardTeacher() {
   };
 
   useEffect(() => {
-    // Tampilkan maskot SiPinter loncat-loncat tepat 1 detik saat memuat halaman guru
+    // Tampilkan maskot SiPinter cukup 500ms lalu langsung masuk ke dasbor guru
     const maxLoadingTimer = setTimeout(() => {
       setIsLoadingInitialData(false);
-    }, 1000);
+    }, 500);
 
     // Initial fetch on mount with cache support
     fetchTeacherData(false);
@@ -4161,6 +4165,7 @@ export default function DashboardTeacher() {
 
   const addKopSuratToDoc = async (doc: any, pageWidth: number, margin = 40): Promise<number> => {
     try {
+      const { KOP_SURAT_BASE64 } = await import("../kopSuratBase64");
       const targetWidth = pageWidth - (margin * 2);
       // Dimensions are 1450 x 341. Aspect ratio is 341 / 1450 = 0.23517241
       const targetHeight = targetWidth * (341 / 1450);
@@ -12458,16 +12463,18 @@ export default function DashboardTeacher() {
                   {/* Simulasi Berpikir Komputasional Menu */}
                   {activeMenu === "simulasi" && (
                     <div className="space-y-6 animate-in fade-in duration-300">
-                      <SimulasiChapterMenu
-                        userRole="teacher"
-                        currentUser={{
-                          name: "Guru Pengampu Informatika",
-                          kelas: selectedClassFilter || "Kelas X",
-                        }}
-                        onBackToDashboard={() => setActiveMenu("dashboard")}
-                      >
-                        <SimulasiBKSettings classesList={classesList} />
-                      </SimulasiChapterMenu>
+                      <React.Suspense fallback={<div className="p-10 text-center text-sm font-semibold text-slate-500">Memuat modul simulasi...</div>}>
+                        <SimulasiChapterMenu
+                          userRole="teacher"
+                          currentUser={{
+                            name: "Guru Pengampu Informatika",
+                            kelas: selectedClassFilter || "Kelas X",
+                          }}
+                          onBackToDashboard={() => setActiveMenu("dashboard")}
+                        >
+                          <SimulasiBKSettings classesList={classesList} />
+                        </SimulasiChapterMenu>
+                      </React.Suspense>
                     </div>
                   )}
 
@@ -12739,12 +12746,16 @@ export default function DashboardTeacher() {
       />
 
       {/* Bulk Import Questions Modal (Excel & Word) */}
-      <BulkImportQuestionsModal
-        isOpen={isBulkImportModalOpen}
-        onClose={() => setIsBulkImportModalOpen(false)}
-        existingCount={examQuestions.length}
-        onApplyQuestions={handleApplyImportedQuestions}
-      />
+      {isBulkImportModalOpen && (
+        <React.Suspense fallback={null}>
+          <BulkImportQuestionsModal
+            isOpen={isBulkImportModalOpen}
+            onClose={() => setIsBulkImportModalOpen(false)}
+            existingCount={examQuestions.length}
+            onApplyQuestions={handleApplyImportedQuestions}
+          />
+        </React.Suspense>
+      )}
 
       {/* Edit Student Modal */}
       <EditStudentModal

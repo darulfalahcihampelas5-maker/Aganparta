@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { isClassMatch, isSameNisn } from "../../lib/gradeUtils";
 import { saveFinalGrade } from "../../lib/supabaseSync";
-import { KOP_SURAT_BASE64 } from "../../kopSuratBase64";
 import { getDriveImageUrl } from "../../lib/driveUtils";
 
 interface ExamItemAnalysisModalProps {
@@ -245,6 +244,7 @@ export const ExamItemAnalysisModal: React.FC<ExamItemAnalysisModalProps> = ({
 
       let currentY = 30;
       try {
+        const { KOP_SURAT_BASE64 } = await import("../../kopSuratBase64");
         const targetW = pageWidth - margin * 2;
         const targetH = (341 / 1450) * targetW;
         doc.addImage(KOP_SURAT_BASE64, "PNG", margin, 18, targetW, targetH);

@@ -8,6 +8,7 @@ import { OperationType, handleFirestoreError } from "../lib/firestoreUtils";
 import { getDriveImageUrl } from "../lib/driveUtils";
 import { NotificationModal } from "../components/NotificationModal";
 import { CuteLoadingScreen } from "../components/CuteLoadingScreen";
+import { preloadDashboardStudent, preloadDashboardTeacher } from "../lib/routePreload";
 import { motion, AnimatePresence } from "motion/react";
 import {
   GraduationCap,
@@ -57,9 +58,25 @@ const checkStudentSessionActive = () => {
   }
 };
 
+const isPageReloadNavigation = () => {
+  try {
+    const entries = window.performance?.getEntriesByType?.("navigation") as PerformanceNavigationTiming[] | undefined;
+    if (entries && entries.length > 0 && entries[0]?.type) {
+      return entries[0].type === "reload";
+    }
+    const legacyNav = (window.performance as any)?.navigation;
+    if (legacyNav) {
+      return legacyNav.type === 1;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+};
+
 const checkSplashSeenInSession = () => {
   try {
-    return sessionStorage.getItem("sipinter_splash_seen") === "true";
+    return sessionStorage.getItem("sipinter_splash_seen_v2") === "true";
   } catch {
     return false;
   }
@@ -67,7 +84,7 @@ const checkSplashSeenInSession = () => {
 
 const markSplashSeenInSession = () => {
   try {
-    sessionStorage.setItem("sipinter_splash_seen", "true");
+    sessionStorage.setItem("sipinter_splash_seen_v2", "true");
   } catch {
     // ignore storage errors
   }
@@ -75,17 +92,18 @@ const markSplashSeenInSession = () => {
 
 export default function LoginPage() {
   const navigate = useNavigate();
-  const hasTeacherSession = checkTeacherSessionActive();
-  const hasStudentSession = checkStudentSessionActive();
-
-  // Splash Screen hijau hanya tampil saat aplikasi pertama kali dibuka (belum ada di sessionStorage & belum login)
-  const [showSplash, setShowSplash] = useState(
+  const [hasTeacherSession] = useState(() => checkTeacherSessionActive());
+  const [hasStudentSession] = useState(() => checkStudentSessionActive());
+  const [shouldShowBrandSplashOnMount] = useState(
     () =>
       !hasShownSplashThisLoad &&
       !hasTeacherSession &&
       !hasStudentSession &&
-      !checkSplashSeenInSession()
+      !(isPageReloadNavigation() && checkSplashSeenInSession())
   );
+
+  // Splash Screen hijau tampil saat aplikasi pertama kali dibuka (belum login & bukan reload setelah pernah tampil)
+  const [showSplash, setShowSplash] = useState(() => shouldShowBrandSplashOnMount);
 
   // Jika halaman di-refresh pada sesi yang sudah pernah dibuka, tampilkan loading maskot 500ms
   const [isInitialReloading, setIsInitialReloading] = useState(
@@ -93,13 +111,12 @@ export default function LoginPage() {
       !hasShownSplashThisLoad &&
       !hasTeacherSession &&
       !hasStudentSession &&
-      checkSplashSeenInSession()
+      !shouldShowBrandSplashOnMount
   );
 
   useEffect(() => {
     if (hasTeacherSession) {
       hasShownSplashThisLoad = true;
-      markSplashSeenInSession();
       setShowSplash(false);
       setIsInitialReloading(false);
       navigate("/dashboard/teacher", { replace: true });
@@ -112,11 +129,16 @@ export default function LoginPage() {
       return;
     }
 
-    markSplashSeenInSession();
+    let durationMs = 500;
+    if (shouldShowBrandSplashOnMount) {
+      const startTs = (window as any).__sipinterBrandSplashStart;
+      const elapsed = typeof startTs === "number" ? Math.max(0, Date.now() - startTs) : 0;
+      durationMs = Math.max(150, 1000 - elapsed);
+    }
 
-    const durationMs = showSplash ? 2000 : 1000;
     const timer = setTimeout(() => {
       hasShownSplashThisLoad = true;
+      markSplashSeenInSession();
       setShowSplash(false);
       setIsInitialReloading(false);
     }, durationMs);
@@ -124,7 +146,13 @@ export default function LoginPage() {
     return () => {
       clearTimeout(timer);
     };
-  }, [hasTeacherSession, navigate]);
+  }, [hasTeacherSession, navigate, shouldShowBrandSplashOnMount]);
+
+  // Preload lazy dashboard chunks silently while user is on splash / typing credentials
+  useEffect(() => {
+    void preloadDashboardStudent().catch(() => {});
+    void preloadDashboardTeacher().catch(() => {});
+  }, []);
 
   // Auto-login if student session exists in localStorage (langsung masuk tanpa menahan splash hijau)
   useEffect(() => {
@@ -245,20 +273,43 @@ export default function LoginPage() {
   const handleTeacherLogin = async () => {
     setIsLoading(true);
     setNisnError("");
+    void preloadDashboardTeacher().catch(() => {});
     try {
-      // Artificial delay for premium feel
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
       const cleanUser = username.trim().toLowerCase();
       const cleanPass = password.trim();
 
+      if (!cleanUser || !cleanPass) {
+        setNisnError("Silakan masukkan Username dan Password Guru.");
+        return;
+      }
+
+      const validUsers = ["admin", "agan", "agan121", "agan121@guru.sma.belajar.id"];
+      const defaultPasses = ["admin", "guru", "pinter", "123456"];
+      const isUserValid = validUsers.includes(cleanUser);
+
       let storedPass = dbTeacherPassword || localStorage.getItem("teacher_password");
-      
-      // If not in cache, fetch once on demand
-      if (!storedPass) {
+      const isEmergencyBypass =
+        isUserValid &&
+        (cleanUser === "agan121" || cleanUser === "admin") &&
+        defaultPasses.includes(cleanPass);
+
+      // Instant login when cached/default credentials match without waiting on network
+      if (isUserValid && ((storedPass && cleanPass === storedPass) || (!storedPass && defaultPasses.includes(cleanPass)) || isEmergencyBypass)) {
+        sessionStorage.setItem("is_teacher_auth", "true");
+        localStorage.setItem("is_teacher_auth", "true");
+        await preloadDashboardTeacher().catch(() => {});
+        navigate("/dashboard/teacher", { replace: true });
+        return;
+      }
+
+      // Only query remote teacher_auth if not yet cached and not a default password, capped at 2.5s
+      if (!storedPass && isUserValid) {
         try {
-          const docSnap = await getDoc(doc(db, "config", "teacher_auth"));
-          if (docSnap.exists() && docSnap.data()?.password) {
+          const docSnap = await Promise.race([
+            getDoc(doc(db, "config", "teacher_auth")),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 2500)),
+          ]);
+          if (docSnap && docSnap.exists() && docSnap.data()?.password) {
             storedPass = docSnap.data().password;
             setDbTeacherPassword(storedPass);
             if (storedPass) localStorage.setItem("teacher_password", storedPass);
@@ -268,26 +319,13 @@ export default function LoginPage() {
         }
       }
 
-      const validUsers = ["admin", "agan", "agan121", "agan121@guru.sma.belajar.id"];
-      const defaultPasses = ["admin", "guru", "pinter", "123456"];
-
-      const isUserValid = validUsers.includes(cleanUser);
-      
-      // LOGIC IMPROVEMENT: 
-      // 1. If Firestore fetch fails or is slow, check against default passes
-      // 2. Add an explicit emergency bypass for the primary admin user
       const isPassValid = storedPass ? cleanPass === storedPass : defaultPasses.includes(cleanPass);
-      
-      // Emergency bypass: If everything else fails but it's the main admin user and using default pass
-      const isEmergencyBypass = isUserValid && (cleanUser === "agan121" || cleanUser === "admin") && defaultPasses.includes(cleanPass);
 
       if (isUserValid && (isPassValid || isEmergencyBypass)) {
-        console.log("Login sukses sebagai guru/admin");
         sessionStorage.setItem("is_teacher_auth", "true");
         localStorage.setItem("is_teacher_auth", "true");
+        await preloadDashboardTeacher().catch(() => {});
         navigate("/dashboard/teacher", { replace: true });
-      } else if (!cleanUser || !cleanPass) {
-        setNisnError("Silakan masukkan Username dan Password Guru.");
       } else {
         setNisnError("Kredensial tidak valid. Periksa kembali Username dan Password Anda.");
       }
@@ -306,10 +344,13 @@ export default function LoginPage() {
     setNisnError("");
     setIsLoading(true);
 
+    void preloadDashboardStudent().catch(() => {});
     try {
-      const inputCode = studentAccessCode.toString().trim().toLowerCase();
+      const rawCode = studentAccessCode.toString().trim();
+      const inputCode = rawCode.toLowerCase();
+      const upperCode = rawCode.toUpperCase();
 
-      // 1. Check direct fallback credentials first to ensure instant login under any conditions (e.g. offline, initial seed delay)
+      // 1. Check direct fallback credentials first to ensure instant login
       if (inputCode === "siswa2026") {
         const fallbackStudent = {
           id: "123456789",
@@ -334,7 +375,7 @@ export default function LoginPage() {
         return;
       }
 
-      // Check local cache if student logged in recently
+      // 2. Check current_student local cache first (0ms)
       const savedStudent = localStorage.getItem("current_student");
       if (savedStudent) {
         try {
@@ -347,12 +388,33 @@ export default function LoginPage() {
         } catch (_) {}
       }
 
-      // 2. Query Supabase directly first, checking accessCode, nisn, and nis, then fallback to local cache and dbGetDocs
-      const fetchStudentPromise = async () => {
-        const rawCode = studentAccessCode.toString().trim();
-        const upperCode = rawCode.toUpperCase();
+      // 3. Check firas_cache_students local cache next (0ms)
+      try {
+        const cachedStudents = localStorage.getItem("firas_cache_students");
+        if (cachedStudents) {
+          const parsedList = JSON.parse(cachedStudents);
+          if (Array.isArray(parsedList)) {
+            for (const studentData of parsedList) {
+              const storedCode = String(studentData.accessCode || "").trim();
+              const storedNisn = String(studentData.nisn || "").trim();
+              const storedNis = String(studentData.nis || "").trim();
+              if (
+                storedCode === rawCode ||
+                storedCode.toUpperCase() === upperCode ||
+                storedNisn === rawCode ||
+                storedNis === rawCode
+              ) {
+                setStudent(studentData);
+                setIsLoading(false);
+                return;
+              }
+            }
+          }
+        }
+      } catch (_) {}
 
-        // Try direct Supabase query first
+      // 4. Query Supabase + parallel Firestore fallback with fast 3.5s timeout
+      const fetchStudentPromise = async () => {
         if (isSupabaseConfigured && supabase) {
           try {
             const { data, error } = await supabase
@@ -367,9 +429,9 @@ export default function LoginPage() {
                   const storedCode = String(studentData.accessCode || "").trim();
                   const storedNisn = String(studentData.nisn || "").trim();
                   const storedNis = String(studentData.nis || "").trim();
-                  
+
                   if (
-                    storedCode === rawCode || 
+                    storedCode === rawCode ||
                     storedCode.toUpperCase() === upperCode ||
                     storedNisn === rawCode ||
                     storedNis === rawCode
@@ -385,50 +447,19 @@ export default function LoginPage() {
           }
         }
 
-        // Check local cache of students if any
-        try {
-          const cachedStudents = localStorage.getItem("firas_cache_students");
-          if (cachedStudents) {
-            const parsedList = JSON.parse(cachedStudents);
-            if (Array.isArray(parsedList)) {
-              for (const studentData of parsedList) {
-                const storedCode = String(studentData.accessCode || "").trim();
-                const storedNisn = String(studentData.nisn || "").trim();
-                const storedNis = String(studentData.nis || "").trim();
-                if (
-                  storedCode === rawCode || 
-                  storedCode.toUpperCase() === upperCode ||
-                  storedNisn === rawCode ||
-                  storedNis === rawCode
-                ) {
-                  return studentData;
-                }
-              }
-            }
-          }
-        } catch (_) {}
-
-        // Fallback to dbGetDocs / Firestore
         try {
           const studentsRef = collection(db, "studentsByNisn");
-          const qSnap = await getDocs(query(studentsRef, where("accessCode", "==", rawCode)));
-          if (!qSnap.empty) {
-            const docDoc = qSnap.docs[0];
-            return { id: docDoc.id, ...docDoc.data() };
-          }
-          
-          if (rawCode.toUpperCase() !== rawCode) {
-            const qSnapUpper = await getDocs(query(studentsRef, where("accessCode", "==", rawCode.toUpperCase())));
-            if (!qSnapUpper.empty) {
-              const docDoc = qSnapUpper.docs[0];
+          const queries = [
+            getDocs(query(studentsRef, where("accessCode", "==", rawCode))),
+            ...(upperCode !== rawCode ? [getDocs(query(studentsRef, where("accessCode", "==", upperCode)))] : []),
+            getDocs(query(studentsRef, where("nisn", "==", rawCode))),
+          ];
+          const results = await Promise.allSettled(queries);
+          for (const res of results) {
+            if (res.status === "fulfilled" && !res.value.empty) {
+              const docDoc = res.value.docs[0];
               return { id: docDoc.id, ...docDoc.data() };
             }
-          }
-
-          const qSnapNisn = await getDocs(query(studentsRef, where("nisn", "==", rawCode)));
-          if (!qSnapNisn.empty) {
-            const docDoc = qSnapNisn.docs[0];
-            return { id: docDoc.id, ...docDoc.data() };
           }
         } catch (fsErr: any) {
           console.warn("Firestore student query bypassed due to error/quota:", fsErr);
@@ -437,9 +468,8 @@ export default function LoginPage() {
         return null;
       };
 
-      // Set a 12 seconds timeout to prevent premature timeout on slow connections or database cold starts
-      const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error("TIMEOUT")), 12000)
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("TIMEOUT")), 3500)
       );
 
       const foundStudentData = await Promise.race([
@@ -449,7 +479,6 @@ export default function LoginPage() {
 
       if (foundStudentData) {
         setStudent(foundStudentData);
-        safeSaveStudentToLocalStorage(foundStudentData);
       } else {
         // Robust fallback: allow student to login successfully with their entered code/NISN
         const dynamicStudent = {
@@ -463,7 +492,6 @@ export default function LoginPage() {
           isGuest: true,
         };
         setStudent(dynamicStudent);
-        safeSaveStudentToLocalStorage(dynamicStudent);
       }
     } catch (error: any) {
       // Even if network or quota timeout occurs, allow seamless student login with entered code
@@ -478,7 +506,6 @@ export default function LoginPage() {
         isGuest: true,
       };
       setStudent(dynamicStudent);
-      safeSaveStudentToLocalStorage(dynamicStudent);
     } finally {
       setIsLoading(false);
     }
@@ -500,12 +527,13 @@ export default function LoginPage() {
     }
   };
 
-  const handleStudentLogin = (stData?: any) => {
+  const handleStudentLogin = async (stData?: any) => {
     try {
       const isEventObj = stData && typeof stData === "object" && ("nativeEvent" in stData || "preventDefault" in stData || "_reactName" in stData);
       const target = isEventObj ? student : (stData || student);
       if (target) {
         safeSaveStudentToLocalStorage(target);
+        await preloadDashboardStudent().catch(() => {});
         navigate("/dashboard/student", { state: { student: target }, replace: true });
       }
     } catch (err) {
@@ -523,11 +551,12 @@ export default function LoginPage() {
         {showSplash && (
           <motion.div
             key="sipinter-splash"
-            initial={{ opacity: 1 }}
+            initial={false}
             exit={{ opacity: 0, scale: 1.02 }}
-            transition={{ duration: 0.4, ease: "easeInOut" }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
             onClick={() => {
               hasShownSplashThisLoad = true;
+              markSplashSeenInSession();
               setShowSplash(false);
             }}
             className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#85cc00] font-sans p-6 overflow-hidden cursor-pointer select-none"
@@ -537,38 +566,23 @@ export default function LoginPage() {
             </div>
 
             <div className="relative z-10 flex flex-col items-center text-center">
-              <motion.div
-                initial={{ scale: 0.8, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.5, ease: "easeOut" }}
-                className="w-28 h-28 md:w-32 md:h-32 flex items-center justify-center shrink-0 mb-3 relative"
-              >
+              <div className="w-[112px] h-[112px] flex items-center justify-center shrink-0 mb-3 relative">
                 <div className="absolute inset-2 rounded-full bg-white/35 blur-xl pointer-events-none" />
                 <img
-                  src={getDriveImageUrl("https://drive.google.com/file/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR/view?usp=sharing")}
+                  src="https://lh3.googleusercontent.com/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR=w256"
                   alt="Logo SMA Negeri 1 Cililin"
                   className="relative z-10 w-full h-full object-contain drop-shadow-[0_10px_24px_rgba(15,23,42,0.18)]"
                   referrerPolicy="no-referrer"
                 />
-              </motion.div>
+              </div>
 
-              <motion.h1
-                initial={{ y: 12, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.1, duration: 0.45 }}
-                className="text-3xl sm:text-4xl font-display font-black text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.16)] tracking-wider uppercase leading-none"
-              >
+              <h1 className="text-[32px] font-display font-black text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.16)] tracking-[0.05em] uppercase leading-none m-0">
                 SIPINTER APP
-              </motion.h1>
+              </h1>
 
-              <motion.p
-                initial={{ y: 8, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.18, duration: 0.45 }}
-                className="text-xs sm:text-sm font-bold text-slate-600 tracking-[0.18em] uppercase leading-tight mt-0.5"
-              >
+              <p className="text-[13px] font-display font-bold text-slate-600 tracking-[0.18em] uppercase leading-[1.25] mt-1">
                 SMA NEGERI 1 CILILIN
-              </motion.p>
+              </p>
             </div>
           </motion.div>
         )}
