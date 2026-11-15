@@ -735,7 +735,7 @@ export default function DashboardStudent() {
     // Add a small delay to ensure everything is ready and prevent "muter-muter" feeling
     const timer = setTimeout(() => {
       setIsLoadingInitialData(false);
-    }, 800);
+    }, 500);
     return () => clearTimeout(timer);
   }, []);
 

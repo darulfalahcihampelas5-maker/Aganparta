@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../AuthContext";
 import { db } from "../lib/firebase";
 import { getDriveImageUrl, getDrivePdfEmbedUrl } from "../lib/driveUtils";
+import { CuteLoadingScreen } from "../components/CuteLoadingScreen";
 import { KOP_SURAT_BASE64 } from "../kopSuratBase64";
 import {
   doc,
@@ -2046,276 +2047,306 @@ export default function DashboardTeacher() {
     }
   };
 
+  const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
   const [isRefreshingTeacherData, setIsRefreshingTeacherData] = useState(false);
 
   const fetchTeacherData = async (forceRefresh = false) => {
     setIsRefreshingTeacherData(true);
     try {
-      // 1. Classes (rarely changes, always cache first unless missing or forceRefresh)
-      const cachedClasses = !forceRefresh && getLocalCache<any[]>("firas_cache_classes", 12 * 60 * 60 * 1000);
-      if (cachedClasses && cachedClasses.length > 0) {
-        setClassesList(cachedClasses);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "classes"));
-          trackUsage(snapshot.size, 0);
-          const cls = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          cls.sort((a: any, b: any) => (a.createdAt || "").localeCompare(b.createdAt || ""));
-          setClassesList(cls);
-          setLocalCache("firas_cache_classes", cls);
-        } catch (e) {
-          console.warn("Failed fetching classes:", e);
-        }
-      }
-
-      // 2. Students (rarely changes, always cache first unless missing or forceRefresh)
-      const rawCachedStudents = !forceRefresh && getLocalCache<any[]>("firas_cache_students", 12 * 60 * 60 * 1000);
-      const cachedStudents = Array.isArray(rawCachedStudents)
-        ? rawCachedStudents.filter((s: any) => s && (s.displayName || s.studentName) && s.kelas)
-        : null;
-
-      if (cachedStudents && cachedStudents.length > 0) {
-        setStudentsList(cachedStudents);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "studentsByNisn"));
-          trackUsage(snapshot.size, 0);
-          const studs = snapshot.docs
-            .map((d) => ({ id: d.id, ...d.data() }))
-            .filter((s: any) => s && (s.displayName || s.studentName) && s.kelas);
-
-          if (studs.length > 0) {
-            studs.sort((a: any, b: any) => {
-              const classA = (a.kelas || "").toString();
-              const classB = (b.kelas || "").toString();
-              const classComp = classA.localeCompare(classB, "id", { numeric: true, sensitivity: "base" });
-              if (classComp !== 0) return classComp;
-              return (a.displayName || a.studentName || "").localeCompare(
-                b.displayName || b.studentName || "",
-                "id",
-                { sensitivity: "base" }
-              );
-            });
-            setStudentsList(studs);
-            setLocalCache("firas_cache_students", studs);
+      await Promise.allSettled([
+        // 1. Classes (rarely changes, always cache first unless missing or forceRefresh)
+        (async () => {
+          const cachedClasses = !forceRefresh && getLocalCache<any[]>("firas_cache_classes", 12 * 60 * 60 * 1000);
+          if (cachedClasses && cachedClasses.length > 0) {
+            setClassesList(cachedClasses);
           } else {
-            const rawFallback = getLocalCache<any[]>("firas_cache_students", Infinity);
-            const fallbackCached = Array.isArray(rawFallback)
-              ? rawFallback.filter((s: any) => s && (s.displayName || s.studentName) && s.kelas)
-              : null;
-            if (fallbackCached && fallbackCached.length > 0) {
-              setStudentsList(fallbackCached);
+            try {
+              const snapshot = await getDocs(collection(db, "classes"));
+              trackUsage(snapshot.size, 0);
+              const cls = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              cls.sort((a: any, b: any) => (a.createdAt || "").localeCompare(b.createdAt || ""));
+              setClassesList(cls);
+              setLocalCache("firas_cache_classes", cls);
+            } catch (e) {
+              console.warn("Failed fetching classes:", e);
             }
           }
-        } catch (e) {
-          console.warn("Failed fetching students:", e);
-          const rawFallback = getLocalCache<any[]>("firas_cache_students", Infinity);
-          const fallbackCached = Array.isArray(rawFallback)
-            ? rawFallback.filter((s: any) => s && (s.displayName || s.studentName) && s.kelas)
+        })(),
+
+        // 2. Students (rarely changes, always cache first unless missing or forceRefresh)
+        (async () => {
+          const rawCachedStudents = !forceRefresh && getLocalCache<any[]>("firas_cache_students", 12 * 60 * 60 * 1000);
+          const cachedStudents = Array.isArray(rawCachedStudents)
+            ? rawCachedStudents.filter((s: any) => s && (s.displayName || s.studentName) && s.kelas)
             : null;
-          if (fallbackCached && fallbackCached.length > 0) {
-            setStudentsList(fallbackCached);
+
+          if (cachedStudents && cachedStudents.length > 0) {
+            setStudentsList(cachedStudents);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "studentsByNisn"));
+              trackUsage(snapshot.size, 0);
+              const studs = snapshot.docs
+                .map((d) => ({ id: d.id, ...d.data() }))
+                .filter((s: any) => s && (s.displayName || s.studentName) && s.kelas);
+
+              if (studs.length > 0) {
+                studs.sort((a: any, b: any) => {
+                  const classA = (a.kelas || "").toString();
+                  const classB = (b.kelas || "").toString();
+                  const classComp = classA.localeCompare(classB, "id", { numeric: true, sensitivity: "base" });
+                  if (classComp !== 0) return classComp;
+                  return (a.displayName || a.studentName || "").localeCompare(
+                    b.displayName || b.studentName || "",
+                    "id",
+                    { sensitivity: "base" }
+                  );
+                });
+                setStudentsList(studs);
+                setLocalCache("firas_cache_students", studs);
+              } else {
+                const rawFallback = getLocalCache<any[]>("firas_cache_students", Infinity);
+                const fallbackCached = Array.isArray(rawFallback)
+                  ? rawFallback.filter((s: any) => s && (s.displayName || s.studentName) && s.kelas)
+                  : null;
+                if (fallbackCached && fallbackCached.length > 0) {
+                  setStudentsList(fallbackCached);
+                }
+              }
+            } catch (e) {
+              console.warn("Failed fetching students:", e);
+              const rawFallback = getLocalCache<any[]>("firas_cache_students", Infinity);
+              const fallbackCached = Array.isArray(rawFallback)
+                ? rawFallback.filter((s: any) => s && (s.displayName || s.studentName) && s.kelas)
+                : null;
+              if (fallbackCached && fallbackCached.length > 0) {
+                setStudentsList(fallbackCached);
+              }
+            }
           }
-        }
-      }
+        })(),
 
-      // 3. Assignments (rarely changes, always cache first unless missing or forceRefresh)
-      const cachedAssignments = null; // ALWAYS FETCH
-      if (cachedAssignments && cachedAssignments.length > 0) {
-        setAssignmentsList(cachedAssignments);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "assignments"));
-          trackUsage(snapshot.size, 0);
-          const tasks = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          tasks.sort((a: any, b: any) => {
-            const dateA = new Date(a.publishedAt || a.createdAt || 0).getTime();
-            const dateB = new Date(b.publishedAt || b.createdAt || 0).getTime();
-            return dateB - dateA;
-          });
-          setAssignmentsList(tasks);
-          setLocalCache("firas_cache_assignments_v2", tasks);
-        } catch (e) {
-          console.warn("Failed fetching assignments:", e);
-        }
-      }
-
-      // 4. Submissions (Direct query to ensure all new/pending/graded submissions appear)
-      // Highly dynamic, obeys forceRefresh
-      const cachedSubmissions = !forceRefresh && getLocalCache<any[]>("firas_cache_submissions", 2 * 60 * 1000);
-      if (cachedSubmissions && cachedSubmissions.length > 0) {
-        setSubmissionsList(cachedSubmissions);
-      } else {
-        try {
-          const snap = await getDocs(collection(db, "submissions"));
-          const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-          trackUsage(snap.size, 0);
-          setSubmissionsList(subs);
-          setLocalCache("firas_cache_submissions", subs);
-        } catch (e: any) {
-          console.warn("Failed fetching submissions directly:", e);
-          const stale = getLocalCache<any[]>("firas_cache_submissions", 24 * 60 * 60 * 1000);
-          if (stale && stale.length > 0) {
-            setSubmissionsList(stale);
+        // 3. Assignments
+        (async () => {
+          const cachedAssignments = null; // ALWAYS FETCH
+          if (cachedAssignments && cachedAssignments.length > 0) {
+            setAssignmentsList(cachedAssignments);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "assignments"));
+              trackUsage(snapshot.size, 0);
+              const tasks = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              tasks.sort((a: any, b: any) => {
+                const dateA = new Date(a.publishedAt || a.createdAt || 0).getTime();
+                const dateB = new Date(b.publishedAt || b.createdAt || 0).getTime();
+                return dateB - dateA;
+              });
+              setAssignmentsList(tasks);
+              setLocalCache("firas_cache_assignments_v2", tasks);
+            } catch (e) {
+              console.warn("Failed fetching assignments:", e);
+            }
           }
-        }
-      }
+        })(),
 
-      // 5. Final Grades (Supabase primary + Firestore fallback, unlimited reads)
-      const cachedFinalGrades = !forceRefresh && getLocalCache<any[]>("firas_cache_final_grades", 10 * 60 * 1000);
-      if (cachedFinalGrades && cachedFinalGrades.length > 0) {
-        setFinalGradesList(cachedFinalGrades);
-      } else {
-        try {
-          const grades = await getFinalGrades();
-          if (grades.length > 0) {
-            setFinalGradesList(grades);
-            setLocalCache("firas_cache_final_grades", grades);
+        // 4. Submissions (Direct query to ensure all new/pending/graded submissions appear)
+        (async () => {
+          const cachedSubmissions = !forceRefresh && getLocalCache<any[]>("firas_cache_submissions", 2 * 60 * 1000);
+          if (cachedSubmissions && cachedSubmissions.length > 0) {
+            setSubmissionsList(cachedSubmissions);
+          } else {
+            try {
+              const snap = await getDocs(collection(db, "submissions"));
+              const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+              trackUsage(snap.size, 0);
+              setSubmissionsList(subs);
+              setLocalCache("firas_cache_submissions", subs);
+            } catch (e: any) {
+              console.warn("Failed fetching submissions directly:", e);
+              const stale = getLocalCache<any[]>("firas_cache_submissions", 24 * 60 * 60 * 1000);
+              if (stale && stale.length > 0) {
+                setSubmissionsList(stale);
+              }
+            }
           }
-        } catch (e) {
-          console.warn("Failed fetching final grades:", e);
-        }
-      }
+        })(),
 
-      // 6. Chapters (Static, always cache first unless forceRefresh)
-      const cachedChapters = !forceRefresh && getLocalCache<any[]>("firas_cache_chapters", 24 * 60 * 60 * 1000);
-      if (cachedChapters && cachedChapters.length > 0) {
-        setChaptersList(cachedChapters);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "chapters"));
-          const chaps = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          if (chaps.length > 0) {
-            setChaptersList(chaps);
-            setLocalCache("firas_cache_chapters", chaps);
+        // 5. Final Grades (Supabase primary + Firestore fallback, unlimited reads)
+        (async () => {
+          const cachedFinalGrades = !forceRefresh && getLocalCache<any[]>("firas_cache_final_grades", 10 * 60 * 1000);
+          if (cachedFinalGrades && cachedFinalGrades.length > 0) {
+            setFinalGradesList(cachedFinalGrades);
+          } else {
+            try {
+              const grades = await getFinalGrades();
+              if (grades.length > 0) {
+                setFinalGradesList(grades);
+                setLocalCache("firas_cache_final_grades", grades);
+              }
+            } catch (e) {
+              console.warn("Failed fetching final grades:", e);
+            }
           }
-        } catch (e) {
-          console.warn("Failed fetching chapters:", e);
-        }
-      }
+        })(),
 
-      // 7. Exams (Static, always cache first unless forceRefresh)
-      const cachedExams = null; // ALWAYS FETCH
-      if (cachedExams && cachedExams.length > 0) {
-        setExamsList(cachedExams);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "exams"));
-          trackUsage(snapshot.size, 0);
-          const exams = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          exams.sort((a: any, b: any) => {
-            const dateA = new Date(a.createdAt || 0).getTime();
-            const dateB = new Date(b.createdAt || 0).getTime();
-            return dateB - dateA;
-          });
-          setExamsList(exams);
-          setLocalCache("firas_cache_exams_v2", exams);
-        } catch (e) {
-          console.warn("Failed fetching exams:", e);
-        }
-      }
-
-      // 8. Announcements (rarely changes, always cache first unless stale or forceRefresh)
-      const cachedAnnouncements = !forceRefresh && getLocalCache<any[]>("firas_cache_announcements", 2 * 60 * 60 * 1000);
-      if (cachedAnnouncements && cachedAnnouncements.length > 0) {
-        setAnnouncementsList(cachedAnnouncements);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "announcements"));
-          trackUsage(snapshot.size, 0);
-          const anns = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          anns.sort((a: any, b: any) => {
-            const dateA = new Date(a.createdAt || 0).getTime();
-            const dateB = new Date(b.createdAt || 0).getTime();
-            return dateB - dateA;
-          });
-          if (anns.length > 0) {
-            setAnnouncementsList(anns);
-            setLocalCache("firas_cache_announcements", anns);
+        // 6. Chapters
+        (async () => {
+          const cachedChapters = !forceRefresh && getLocalCache<any[]>("firas_cache_chapters", 24 * 60 * 60 * 1000);
+          if (cachedChapters && cachedChapters.length > 0) {
+            setChaptersList(cachedChapters);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "chapters"));
+              const chaps = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              if (chaps.length > 0) {
+                setChaptersList(chaps);
+                setLocalCache("firas_cache_chapters", chaps);
+              }
+            } catch (e) {
+              console.warn("Failed fetching chapters:", e);
+            }
           }
-        } catch (e) {
-          console.warn("Failed fetching announcements:", e);
-        }
-      }
+        })(),
 
-      // 9. Absensi (Dynamic, obeys forceRefresh)
-      const cachedAbsensi = !forceRefresh && getLocalCache<any[]>("firas_cache_absensi", 15 * 60 * 1000);
-      if (cachedAbsensi && cachedAbsensi.length > 0) {
-        setAbsensiList(cachedAbsensi);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "absensi"));
-          trackUsage(snapshot.size, 0);
-          const abs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          if (abs.length > 0) {
-            setAbsensiList(abs);
-            setLocalCache("firas_cache_absensi", abs);
+        // 7. Exams
+        (async () => {
+          const cachedExams = null; // ALWAYS FETCH
+          if (cachedExams && cachedExams.length > 0) {
+            setExamsList(cachedExams);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "exams"));
+              trackUsage(snapshot.size, 0);
+              const exams = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              exams.sort((a: any, b: any) => {
+                const dateA = new Date(a.createdAt || 0).getTime();
+                const dateB = new Date(b.createdAt || 0).getTime();
+                return dateB - dateA;
+              });
+              setExamsList(exams);
+              setLocalCache("firas_cache_exams_v2", exams);
+            } catch (e) {
+              console.warn("Failed fetching exams:", e);
+            }
           }
-        } catch (e) {
-          console.warn("Failed fetching absensi:", e);
-        }
-      }
+        })(),
 
-      // 10. Materials (Static, always cache first unless forceRefresh)
-      const cachedMaterials = !forceRefresh && getLocalCache<any[]>("firas_cache_materials", 12 * 60 * 60 * 1000);
-      if (cachedMaterials && cachedMaterials.length > 0) {
-        setMaterialsList(cachedMaterials);
-      } else {
-        try {
-          const snapshot = await getDocs(collection(db, "materials"));
-          trackUsage(snapshot.size, 0);
-          const mat = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-          mat.sort((a: any, b: any) => {
-            if (a.order !== b.order) return (a.order || 0) - (b.order || 0);
-            const dateA = new Date(a.createdAt || 0).getTime();
-            const dateB = new Date(b.createdAt || 0).getTime();
-            return dateB - dateA;
-          });
-          if (mat.length > 0) {
-            setMaterialsList(mat);
-            setLocalCache("firas_cache_materials", mat);
+        // 8. Announcements
+        (async () => {
+          const cachedAnnouncements = !forceRefresh && getLocalCache<any[]>("firas_cache_announcements", 2 * 60 * 60 * 1000);
+          if (cachedAnnouncements && cachedAnnouncements.length > 0) {
+            setAnnouncementsList(cachedAnnouncements);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "announcements"));
+              trackUsage(snapshot.size, 0);
+              const anns = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              anns.sort((a: any, b: any) => {
+                const dateA = new Date(a.createdAt || 0).getTime();
+                const dateB = new Date(b.createdAt || 0).getTime();
+                return dateB - dateA;
+              });
+              if (anns.length > 0) {
+                setAnnouncementsList(anns);
+                setLocalCache("firas_cache_announcements", anns);
+              }
+            } catch (e) {
+              console.warn("Failed fetching announcements:", e);
+            }
           }
-        } catch (e) {
-          console.warn("Failed fetching materials:", e);
-        }
-      }
+        })(),
 
-      // 11. Rubric (Static, always cache first unless forceRefresh)
-      const cachedRubric = !forceRefresh && getLocalCache<any>("firas_cache_rubric", 24 * 60 * 60 * 1000);
-      if (cachedRubric) {
-        setRubric(cachedRubric);
-        setEditKehadiran(String(cachedRubric.kehadiran ?? 20));
-        setEditTugas(String(cachedRubric.tugas ?? 50));
-        setEditUts(String(cachedRubric.uts ?? 10));
-        setEditUas(String(cachedRubric.uas ?? 20));
-      } else {
-        try {
-          const docSnap = await getDoc(doc(db, "config", "grading_rubric"));
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const r = {
-              kehadiran: Number(data.kehadiran) ?? 20,
-              tugas: Number(data.tugas) ?? 50,
-              uts: Number(data.uts) ?? 10,
-              uas: Number(data.uas) ?? 20,
-            };
-            setRubric(r);
-            setEditKehadiran(String(r.kehadiran));
-            setEditTugas(String(r.tugas));
-            setEditUts(String(r.uts));
-            setEditUas(String(r.uas));
-            setLocalCache("firas_cache_rubric", r);
+        // 9. Absensi
+        (async () => {
+          const cachedAbsensi = !forceRefresh && getLocalCache<any[]>("firas_cache_absensi", 15 * 60 * 1000);
+          if (cachedAbsensi && cachedAbsensi.length > 0) {
+            setAbsensiList(cachedAbsensi);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "absensi"));
+              trackUsage(snapshot.size, 0);
+              const abs = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              if (abs.length > 0) {
+                setAbsensiList(abs);
+                setLocalCache("firas_cache_absensi", abs);
+              }
+            } catch (e) {
+              console.warn("Failed fetching absensi:", e);
+            }
           }
-        } catch (e) {
-          console.warn("Failed fetching rubric:", e);
-        }
-      }
+        })(),
+
+        // 10. Materials
+        (async () => {
+          const cachedMaterials = !forceRefresh && getLocalCache<any[]>("firas_cache_materials", 12 * 60 * 60 * 1000);
+          if (cachedMaterials && cachedMaterials.length > 0) {
+            setMaterialsList(cachedMaterials);
+          } else {
+            try {
+              const snapshot = await getDocs(collection(db, "materials"));
+              trackUsage(snapshot.size, 0);
+              const mat = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
+              mat.sort((a: any, b: any) => {
+                if (a.order !== b.order) return (a.order || 0) - (b.order || 0);
+                const dateA = new Date(a.createdAt || 0).getTime();
+                const dateB = new Date(b.createdAt || 0).getTime();
+                return dateB - dateA;
+              });
+              if (mat.length > 0) {
+                setMaterialsList(mat);
+                setLocalCache("firas_cache_materials", mat);
+              }
+            } catch (e) {
+              console.warn("Failed fetching materials:", e);
+            }
+          }
+        })(),
+
+        // 11. Rubric
+        (async () => {
+          const cachedRubric = !forceRefresh && getLocalCache<any>("firas_cache_rubric", 24 * 60 * 60 * 1000);
+          if (cachedRubric) {
+            setRubric(cachedRubric);
+            setEditKehadiran(String(cachedRubric.kehadiran ?? 20));
+            setEditTugas(String(cachedRubric.tugas ?? 50));
+            setEditUts(String(cachedRubric.uts ?? 10));
+            setEditUas(String(cachedRubric.uas ?? 20));
+          } else {
+            try {
+              const docSnap = await getDoc(doc(db, "config", "grading_rubric"));
+              if (docSnap.exists()) {
+                const data = docSnap.data();
+                const r = {
+                  kehadiran: Number(data.kehadiran) ?? 20,
+                  tugas: Number(data.tugas) ?? 50,
+                  uts: Number(data.uts) ?? 10,
+                  uas: Number(data.uas) ?? 20,
+                };
+                setRubric(r);
+                setEditKehadiran(String(r.kehadiran));
+                setEditTugas(String(r.tugas));
+                setEditUts(String(r.uts));
+                setEditUas(String(r.uas));
+                setLocalCache("firas_cache_rubric", r);
+              }
+            } catch (e) {
+              console.warn("Failed fetching rubric:", e);
+            }
+          }
+        })(),
+      ]);
     } finally {
+      setIsLoadingInitialData(false);
       setTimeout(() => setIsRefreshingTeacherData(false), 500);
     }
   };
 
   useEffect(() => {
+    // Batasi tampilan loading maskot maksimal 500ms agar dasbor langsung terbuka
+    const maxLoadingTimer = setTimeout(() => {
+      setIsLoadingInitialData(false);
+    }, 500);
+
     // Initial fetch on mount with cache support
     fetchTeacherData(false);
 
@@ -2336,6 +2367,7 @@ export default function DashboardTeacher() {
     });
 
     return () => {
+      clearTimeout(maxLoadingTimer);
       unsubscribeGrades();
     };
   }, []);
@@ -6241,15 +6273,8 @@ export default function DashboardTeacher() {
     );
   };
 
-   if (!isTeacherAuth) {
-     return (
-       <div className="min-h-screen bg-slate-950 flex items-center justify-center">
-         <div className="text-center space-y-4">
-           <div className="w-12 h-12 border-4 border-[#85cc00] border-t-transparent rounded-full animate-spin mx-auto"></div>
-           <p className="text-slate-400 text-sm font-medium">Memverifikasi Hak Akses...</p>
-         </div>
-       </div>
-     );
+   if (!isTeacherAuth || isLoadingInitialData) {
+     return <CuteLoadingScreen fullScreen={true} />;
    }
 
    return (
@@ -6721,12 +6746,6 @@ export default function DashboardTeacher() {
 
                     {/* MENU UTAMA GURU (AKSES CEPAT SEMUA MODUL DI BERANDA - Desain seperti Dasbor Siswa) */}
                     <section className="space-y-4">
-                      <div className="flex items-center justify-end px-1">
-                        <span className="text-[10px] font-black text-[#85cc00] bg-[#85cc00]/10 px-3 py-1 rounded-full uppercase tracking-wider border border-[#85cc00]/20">
-                          11 Modul Guru
-                        </span>
-                      </div>
-
                       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3.5 sm:gap-4.5">
                         {/* 1. Manajemen Nilai */}
                         <div

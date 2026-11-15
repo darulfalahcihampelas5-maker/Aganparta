@@ -262,7 +262,7 @@ export const SipinterAvatar: React.FC<{
 };
 
 export const CuteLoadingScreen: React.FC<CuteLoadingScreenProps> = ({
-  subtitle = "Sedang memuat data tunggu sebentar yaa",
+  subtitle = "Tunggu Sebentar Yaaa. Sedang Memuat Halaman Dulu",
   fullScreen = true,
   className = "",
   onDismiss,

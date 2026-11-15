@@ -7,7 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { OperationType, handleFirestoreError } from "../lib/firestoreUtils";
 import { getDriveImageUrl } from "../lib/driveUtils";
 import { NotificationModal } from "../components/NotificationModal";
-import { CuteLoadingScreen, CuteMascotSvg } from "../components/CuteLoadingScreen";
+import { CuteLoadingScreen } from "../components/CuteLoadingScreen";
 import { motion, AnimatePresence } from "motion/react";
 import {
   GraduationCap,
@@ -35,13 +35,34 @@ import {
 
 let hasShownSplashThisLoad = false;
 
+const checkTeacherSessionActive = () => {
+  try {
+    return (
+      sessionStorage.getItem("is_teacher_auth") === "true" ||
+      localStorage.getItem("is_teacher_auth") === "true"
+    );
+  } catch {
+    return false;
+  }
+};
+
 export default function LoginPage() {
   const navigate = useNavigate();
+  const hasTeacherSession = checkTeacherSessionActive();
 
-  // Splash Screen State (tampil setiap aplikasi dimuat/di-refresh)
-  const [showSplash, setShowSplash] = useState(() => !hasShownSplashThisLoad);
+  // Splash Screen State (hanya tampil saat aplikasi pertama dibuka dan belum ada sesi guru aktif)
+  const [showSplash, setShowSplash] = useState(
+    () => !hasShownSplashThisLoad && !hasTeacherSession
+  );
 
   useEffect(() => {
+    if (hasTeacherSession) {
+      hasShownSplashThisLoad = true;
+      setShowSplash(false);
+      navigate("/dashboard/teacher", { replace: true });
+      return;
+    }
+
     if (hasShownSplashThisLoad) {
       setShowSplash(false);
       return;
@@ -50,16 +71,16 @@ export default function LoginPage() {
     const timer = setTimeout(() => {
       hasShownSplashThisLoad = true;
       setShowSplash(false);
-    }, 2400);
+    }, 500);
 
     return () => {
       clearTimeout(timer);
     };
-  }, []);
+  }, [hasTeacherSession, navigate]);
 
   // Auto-login if student session exists in localStorage (waits for splash screen to complete)
   useEffect(() => {
-    if (showSplash) return;
+    if (showSplash || hasTeacherSession) return;
     try {
       const savedStudent = localStorage.getItem("current_student");
       if (savedStudent) {
@@ -71,7 +92,7 @@ export default function LoginPage() {
     } catch (e) {
       console.warn("Error parsing saved student session:", e);
     }
-  }, [showSplash, navigate]);
+  }, [showSplash, hasTeacherSession, navigate]);
 
   const [modalConfig, setModalConfig] = useState<{
     isOpen: boolean;
@@ -129,7 +150,7 @@ export default function LoginPage() {
     setNisnError("");
     setTimeout(() => {
       setIsPageRefreshing(false);
-    }, 1300);
+    }, 500);
   };
 
   const handleTabChange = (tab: "siswa" | "guru") => {
@@ -444,6 +465,10 @@ export default function LoginPage() {
     }
   };
 
+  if (hasTeacherSession) {
+    return <CuteLoadingScreen fullScreen={true} />;
+  }
+
   return (
     <div className="relative min-h-screen w-full flex flex-col items-center justify-center bg-gradient-to-b from-slate-50 via-white to-slate-100/70 selection:bg-[#85cc00]/25 selection:text-slate-900 font-sans p-4 sm:p-6 lg:p-10 overflow-x-hidden">
       <AnimatePresence>
@@ -457,29 +482,44 @@ export default function LoginPage() {
               hasShownSplashThisLoad = true;
               setShowSplash(false);
             }}
-            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-50 bg-gradient-to-br from-emerald-50/60 via-slate-50 to-[#85cc00]/15 font-sans p-6 overflow-hidden cursor-pointer select-none"
+            className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#85cc00] font-sans p-6 overflow-hidden cursor-pointer select-none"
           >
             <div className="absolute inset-0 pointer-events-none overflow-hidden">
-              <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full bg-gradient-to-br from-[#85cc00]/15 to-emerald-400/5 blur-3xl" />
-              <div className="absolute bottom-1/4 right-1/4 w-96 h-96 rounded-full bg-gradient-to-tr from-emerald-500/15 to-[#85cc00]/5 blur-3xl" />
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[380px] h-[380px] rounded-full bg-white/25 blur-[90px]" />
             </div>
 
-            <div className="relative z-10 flex flex-col items-center text-center max-w-sm mx-auto">
+            <div className="relative z-10 flex flex-col items-center text-center">
               <motion.div
-                initial={{ scale: 0.85, opacity: 0 }}
+                initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                transition={{ duration: 0.4, ease: "easeOut" }}
+                transition={{ duration: 0.5, ease: "easeOut" }}
+                className="w-28 h-28 md:w-32 md:h-32 flex items-center justify-center shrink-0 mb-3 relative"
               >
-                <CuteMascotSvg size={150} className="drop-shadow-sm" />
+                <div className="absolute inset-2 rounded-full bg-white/35 blur-xl pointer-events-none" />
+                <img
+                  src={getDriveImageUrl("https://drive.google.com/file/d/1P395tuZymxs3qero4XduMpHy7g2GJrdR/view?usp=sharing")}
+                  alt="Logo SMA Negeri 1 Cililin"
+                  className="relative z-10 w-full h-full object-contain drop-shadow-[0_10px_24px_rgba(15,23,42,0.18)]"
+                  referrerPolicy="no-referrer"
+                />
               </motion.div>
 
-              <motion.p
-                initial={{ y: 6, opacity: 0 }}
+              <motion.h1
+                initial={{ y: 12, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 0.12, duration: 0.4 }}
-                className="text-sm sm:text-base font-semibold text-slate-700 mt-4 leading-relaxed"
+                transition={{ delay: 0.1, duration: 0.45 }}
+                className="text-3xl sm:text-4xl font-display font-black text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.16)] tracking-wider uppercase leading-none"
               >
-                Sedang memuat data tunggu sebentar yaa
+                SIPINTER APP
+              </motion.h1>
+
+              <motion.p
+                initial={{ y: 8, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ delay: 0.18, duration: 0.45 }}
+                className="text-xs sm:text-sm font-bold text-slate-600 tracking-[0.18em] uppercase leading-tight mt-0.5"
+              >
+                SMA NEGERI 1 CILILIN
               </motion.p>
             </div>
           </motion.div>
