@@ -13,6 +13,7 @@ import {
   Layers,
   CheckSquare,
   Square,
+  ChevronDown,
 } from "lucide-react";
 
 interface AddManualColumnModalProps {
@@ -155,7 +156,7 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-6">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -169,7 +170,7 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-lg overflow-hidden flex flex-col max-h-[92vh]"
+            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-lg overflow-hidden flex flex-col max-h-[88dvh]"
           >
             {/* Header */}
             <div className="px-6 py-5 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">
@@ -221,11 +222,12 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
               <select
                 value={type}
                 onChange={(e) => setType(e.target.value as "Tugas" | "CBT")}
-                className="w-full bg-slate-50 border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#85cc00] focus:border-transparent font-bold text-slate-800 transition-all cursor-pointer"
+                className="w-full appearance-none bg-slate-50 border-2 border-slate-200 rounded-xl pl-4 pr-10 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#85cc00] focus:border-transparent font-bold text-slate-800 transition-all cursor-pointer"
               >
                 <option value="Tugas">📝 Tugas (Nilai Tugas / Penilaian Harian / Praktik)</option>
                 <option value="CBT">💻 CBT (Ujian Online CBT / Evaluasi)</option>
               </select>
+              <ChevronDown className="w-4 h-4 text-slate-500 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
             <p className="text-[11px] text-slate-400 mt-1 font-medium">
               {type === "CBT"
@@ -290,25 +292,28 @@ export const AddManualColumnModal: React.FC<AddManualColumnModalProps> = ({
               Bab Pembelajaran <span className="text-rose-500">*</span>
             </label>
             {chaptersList.length > 0 ? (
-              <select
-                value={bab}
-                onChange={(e) => setBab(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#85cc00] focus:border-transparent font-medium"
-                required
-              >
-                <option value="" disabled>
-                  -- Pilih Bab --
-                </option>
-                {chaptersList.map((ch: any, idx: number) => {
-                  const rawName = ch.name || ch.id || "";
-                  const cleanName = rawName.replace(/^Bab\s*\d+\s*[-:.]\s*/i, "").trim();
-                  return (
-                    <option key={`ch-opt-${ch.id || ch.name || "ch"}-${idx}`} value={cleanName}>
-                      {cleanName}
-                    </option>
-                  );
-                })}
-              </select>
+              <div className="relative">
+                <select
+                  value={bab}
+                  onChange={(e) => setBab(e.target.value)}
+                  className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl pl-4 pr-10 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#85cc00] focus:border-transparent font-medium cursor-pointer"
+                  required
+                >
+                  <option value="" disabled>
+                    -- Pilih Bab --
+                  </option>
+                  {chaptersList.map((ch: any, idx: number) => {
+                    const rawName = ch.name || ch.id || "";
+                    const cleanName = rawName.replace(/^Bab\s*\d+\s*[-:.]\s*/i, "").trim();
+                    return (
+                      <option key={`ch-opt-${ch.id || ch.name || "ch"}-${idx}`} value={cleanName}>
+                        {cleanName}
+                      </option>
+                    );
+                  })}
+                </select>
+                <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
             ) : (
               <input
                 type="text"

@@ -16,6 +16,7 @@ import {
   Clock,
   AlertCircle,
   HelpCircle,
+  ChevronDown,
 } from "lucide-react";
 
 export interface ColumnEditData {
@@ -203,7 +204,7 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-6">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -217,7 +218,7 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-2xl overflow-hidden flex flex-col max-h-[88dvh]"
           >
             {/* Header */}
             <div className="px-6 py-5 bg-gradient-to-r from-amber-900 via-slate-900 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">
@@ -260,21 +261,24 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
               <Layers className="w-3.5 h-3.5 text-amber-600" />
               Pilih Kolom Penilaian yang Diedit
             </label>
-            <select
-              value={selectedColId}
-              onChange={(e) => handleColumnSelectChange(e.target.value)}
-              disabled={isSaving}
-              className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all cursor-pointer"
-            >
-              {columns.map((col, idx) => {
-                const isExam = col.type === "exam";
-                return (
-                  <option key={`opt-col-${col.id || "col"}-${idx}`} value={col.id}>
-                    [{isExam ? "CBT" : "TUGAS"}] {col.title} - {col.bab || "Umum"}
-                  </option>
-                );
-              })}
-            </select>
+            <div className="relative">
+              <select
+                value={selectedColId}
+                onChange={(e) => handleColumnSelectChange(e.target.value)}
+                disabled={isSaving}
+                className="w-full appearance-none pl-3.5 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none transition-all cursor-pointer"
+              >
+                {columns.map((col, idx) => {
+                  const isExam = col.type === "exam";
+                  return (
+                    <option key={`opt-col-${col.id || "col"}-${idx}`} value={col.id}>
+                      [{isExam ? "CBT" : "TUGAS"}] {col.title} - {col.bab || "Umum"}
+                    </option>
+                  );
+                })}
+              </select>
+              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
             <p className="text-[10px] text-slate-500 mt-1">
               Catatan: Nilai siswa yang telah diinput pada kolom ini akan tetap aman dan tidak akan hilang saat identitas kolom diperbarui.
             </p>
@@ -383,21 +387,24 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
               Bab Pembelajaran
               <span className="text-rose-500">*</span>
             </label>
-            <select
-              value={bab}
-              onChange={(e) => setBab(e.target.value)}
-              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none transition-all cursor-pointer"
-            >
-              <option value="" disabled>-- Pilih Bab --</option>
-              {chaptersList.map((chap, idx) => {
-                const name = chap.name || chap.id;
-                return (
-                  <option key={`chap-${idx}`} value={name}>
-                    {name}
-                  </option>
-                );
-              })}
-            </select>
+            <div className="relative">
+              <select
+                value={bab}
+                onChange={(e) => setBab(e.target.value)}
+                className="w-full appearance-none pl-4 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none transition-all cursor-pointer"
+              >
+                <option value="" disabled>-- Pilih Bab --</option>
+                {chaptersList.map((chap, idx) => {
+                  const name = chap.name || chap.id;
+                  return (
+                    <option key={`chap-${idx}`} value={name}>
+                      {name}
+                    </option>
+                  );
+                })}
+              </select>
+              <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
           </div>
 
           {/* 4. Tanggal Mulai & Tenggat */}

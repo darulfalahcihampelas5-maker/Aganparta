@@ -10,6 +10,7 @@ import {
   GraduationCap,
   Sparkles,
   RefreshCw,
+  ChevronDown,
 } from "lucide-react";
 import { getDriveImageUrl } from "../../lib/driveUtils";
 
@@ -105,7 +106,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
       {isOpen && student && (
         <div
           id="edit-student-modal"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-6"
         >
           <motion.div
             initial={{ opacity: 0 }}
@@ -120,7 +121,7 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-lg rounded-3xl border border-slate-200/80 ring-1 ring-slate-900/5 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+            className="relative z-10 bg-white/95 backdrop-blur-xl w-full max-w-lg rounded-3xl border border-slate-200/80 ring-1 ring-slate-900/5 shadow-2xl overflow-hidden flex flex-col max-h-[88dvh]"
           >
             {/* Header */}
             <div className="px-6 py-4 border-b border-slate-200/70 bg-slate-50/80 flex items-center justify-between gap-3 shrink-0">
@@ -231,18 +232,21 @@ export const EditStudentModal: React.FC<EditStudentModalProps> = ({
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
                 Kelas Siswa <span className="text-rose-500">*</span>
               </label>
-              <select
-                value={kelas}
-                onChange={(e) => setKelas(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#85cc00] focus:border-[#85cc00] focus:bg-white outline-none transition-all text-slate-900 font-bold shadow-xs cursor-pointer h-[42px]"
-              >
-                <option value="">-- Pilih Kelas --</option>
-                {availableClasses.map((clsName, idx) => (
-                  <option key={`edit-stu-cls-${clsName}-${idx}`} value={clsName}>
-                    Kelas {clsName}
-                  </option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value={kelas}
+                  onChange={(e) => setKelas(e.target.value)}
+                  className="w-full appearance-none pl-3.5 pr-10 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-[#85cc00] focus:border-[#85cc00] focus:bg-white outline-none transition-all text-slate-900 font-bold shadow-xs cursor-pointer h-[42px]"
+                >
+                  <option value="">-- Pilih Kelas --</option>
+                  {availableClasses.map((clsName, idx) => (
+                    <option key={`edit-stu-cls-${clsName}-${idx}`} value={clsName}>
+                      Kelas {clsName}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              </div>
             </div>
           </div>
 

@@ -60,7 +60,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center p-3 sm:p-6">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -74,7 +74,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: 12 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-xl overflow-hidden flex flex-col max-h-[85vh]"
+            className="relative z-10 bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl border border-slate-200/80 ring-1 ring-slate-900/5 w-full max-w-xl overflow-hidden flex flex-col max-h-[86dvh]"
           >
             {/* Header */}
             <div className="px-6 py-5 bg-gradient-to-r from-rose-900 via-slate-900 to-slate-900 text-white flex items-center justify-between relative overflow-hidden">

@@ -4741,6 +4741,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       const nowIso = new Date().toISOString();
 
       const isPerbaikan = !!existingSub && (existingSub.status === "ditolak" || existingSub.wasRejected === true || !!existingSub.keterangan);
+      const existingNote = isPerbaikan ? (existingSub?.keterangan || existingSub?.feedback || existingSub?.rejectionReason || "") : "";
 
       const newSubmissionObj = {
         id: submissionId,
@@ -4754,7 +4755,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         updatedAt: nowIso,
         resubmittedAt: isPerbaikan ? nowIso : null,
         wasRejected: isPerbaikan || existingSub?.wasRejected || false,
-        keterangan: "",
+        keterangan: existingNote,
         status: "menunggu penilaian guru",
       };
 
@@ -5987,7 +5988,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
               {/* Tugas Siswa (Daftar Tugas) Menu */}
               {activeMenu === "daftar-tugas" && (
-                <div className="space-y-6 max-w-[1400px] mx-auto px-1 sm:px-4 pb-12 animate-in fade-in duration-300">
+                <div className="space-y-6 max-w-[1400px] mx-auto px-1 sm:px-4 pb-44 sm:pb-52 animate-in fade-in duration-300">
                   {/* Title & Header Section */}
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mt-2">
                     <div>
@@ -8512,6 +8513,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       const initialSubmittedAt = existingSub?.submittedAt || existingSub?.createdAt || new Date().toISOString();
                       const nowIso = new Date().toISOString();
                       const isPerbaikan = !!existingSub && (existingSub.status === "ditolak" || existingSub.wasRejected === true || !!existingSub.keterangan);
+                      const existingNote = isPerbaikan ? (existingSub?.keterangan || existingSub?.feedback || existingSub?.rejectionReason || "") : "";
                       const cleanName = (student.name || student.displayName || "Siswa").replace(/[^a-zA-Z0-9]/g, "_");
 
                       const newSubmissionObj = {
@@ -8529,7 +8531,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         updatedAt: nowIso,
                         resubmittedAt: isPerbaikan ? nowIso : null,
                         wasRejected: isPerbaikan || existingSub?.wasRejected || false,
-                        keterangan: "",
+                        keterangan: existingNote,
                         status: "menunggu penilaian guru",
                       };
 
@@ -11270,9 +11272,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       {!isExamOn && (
         <nav
           aria-label="Student Bottom Navigation"
-          className="fixed bottom-0 left-0 right-0 z-[80] bg-white/95 backdrop-blur-xl border-t border-slate-200/70 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.06)] px-2 pt-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] min-h-[72px] flex items-center justify-center overflow-visible"
+          className="fixed bottom-3 sm:bottom-6 left-4 right-4 sm:left-1/2 sm:-translate-x-1/2 sm:w-full sm:max-w-xl md:max-w-2xl z-[80] bg-white/95 backdrop-blur-xl border border-slate-200/80 rounded-3xl shadow-[0_20px_40px_-10px_rgba(0,0,0,0.15)] px-3 pt-2.5 pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] min-h-[72px] flex items-center justify-center overflow-visible"
         >
-          <div className="w-full max-w-lg md:max-w-xl grid grid-cols-5 items-center overflow-visible">
+          <div className="w-full grid grid-cols-5 items-center overflow-visible">
             {/* 1. Ujung Kiri: Pesan */}
             <div className="flex justify-center items-center">
               <button
