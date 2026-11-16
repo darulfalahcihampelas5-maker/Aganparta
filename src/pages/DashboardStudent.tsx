@@ -2041,32 +2041,90 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   }, []);
 
   const syncPendingResults = async () => {
-    if (!student?.nisn || !isOnline || isSyncingResults) return;
-    
-    const syncKey = `pending_exam_sync_${student.nisn}`;
-    const pending = JSON.parse(localStorage.getItem(syncKey) || "[]");
-    if (pending.length === 0) return;
+    const targetNisn = student?.nisn;
+    if (!targetNisn || isSyncingResults) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+
+    const syncKey = `pending_exam_sync_${targetNisn}`;
+    let pending: any[] = [];
+    try {
+      pending = JSON.parse(localStorage.getItem(syncKey) || "[]");
+    } catch {
+      pending = [];
+    }
+    if (!Array.isArray(pending) || pending.length === 0) return;
 
     setIsSyncingResults(true);
-    const remaining = [];
-    
+    const remaining: any[] = [];
+
     for (const result of pending) {
+      const targetExamId = result.examId || result.assignmentId;
+      if (!targetExamId) continue;
+      const docId = `${targetExamId}_${targetNisn}`;
+      const gradePayload = {
+        ...result,
+        id: docId,
+        examId: targetExamId,
+        assignmentId: targetExamId,
+        nisn: targetNisn,
+        studentName: result.studentName || student?.displayName || student?.studentName || student?.name || "",
+        kelas: result.kelas || student?.kelas || "",
+        nilai: result.nilai ?? result.score,
+        score: result.score ?? result.nilai,
+        status: "selesai",
+        type: "exam",
+        updatedAt: new Date().toISOString(),
+      };
+
       try {
-        const finalGradeRef = doc(db, "final_grades", `${result.examId}_${student.nisn}`);
-        await setDoc(finalGradeRef, {
-          ...result,
-          assignmentId: result.examId,
-          nisn: student.nisn,
-          type: "exam",
-        });
-        trackUsage(0, 1);
+        const savedOk = await saveFinalGrade(gradePayload);
+        // Also ensure exam_sessions reflects completed state with score
+        try {
+          await setDoc(
+            doc(db, "exam_sessions", docId),
+            {
+              examId: targetExamId,
+              examTitle: result.examTitle || result.title || "",
+              nisn: targetNisn,
+              studentName: gradePayload.studentName,
+              kelas: gradePayload.kelas,
+              status: "selesai",
+              violationCount: result.violationCount || 0,
+              score: gradePayload.score,
+              finishedAt: result.submittedAt || new Date().toISOString(),
+              lastActiveAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        } catch (_) {}
+
+        if (savedOk) {
+          trackUsage(0, 1);
+          setRealtimeFinalGrades((prev) => {
+            const base = Array.isArray(prev) ? prev : [];
+            const idx = base.findIndex((g: any) => g.id === docId || g.assignmentId === targetExamId || g.examId === targetExamId);
+            const next = idx >= 0
+              ? base.map((g: any, i: number) => (i === idx ? { ...g, ...gradePayload } : g))
+              : [gradePayload, ...base];
+            setLocalCache(`firas_cache_final_grades_${targetNisn}`, next);
+            return next;
+          });
+        } else {
+          remaining.push(result);
+        }
       } catch (err) {
         console.warn("Gagal sinkronisasi nilai tertunda:", err);
         remaining.push(result);
       }
     }
 
-    localStorage.setItem(syncKey, JSON.stringify(remaining));
+    try {
+      localStorage.setItem(syncKey, JSON.stringify(remaining));
+    } catch (_) {}
+    if (remaining.length < pending.length) {
+      if (typeof mutateFinalGrades === "function") mutateFinalGrades();
+      if (typeof mutateAllFinalGrades === "function") mutateAllFinalGrades();
+    }
     setIsSyncingResults(false);
   };
 
@@ -2078,10 +2136,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   }, []);
 
   useEffect(() => {
-    if (isOnline && student?.id) {
+    if (isOnline && student?.nisn) {
       syncPendingResults();
     }
-  }, [isOnline, student?.id]);
+  }, [isOnline, student?.id, student?.nisn]);
 
   // Refs for audio / timer
   const sirenAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -2517,9 +2575,54 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     setExamResult(result);
 
-    // Update live proctoring session as selesai
-    setDoc(
-      doc(db, "exam_sessions", `${activeExam.id}_${student.nisn}`),
+    const gradeDocId = `${activeExam.id}_${student.nisn}`;
+    const gradePayload = {
+      ...result,
+      id: gradeDocId,
+      examId: activeExam.id,
+      assignmentId: activeExam.id,
+      title: activeExam.title,
+      examTitle: activeExam.title,
+      nisn: student.nisn || "",
+      studentName: student.displayName || student.studentName || student.name || "",
+      kelas: student.kelas || "",
+      status: "selesai",
+      type: "exam",
+      answers: answersPayload,
+      updatedAt: nowIso,
+    };
+
+    // Optimistic UI & local cache update so the score appears immediately for the student
+    setRealtimeFinalGrades((prev) => {
+      const base = Array.isArray(prev) ? prev : [];
+      const idx = base.findIndex((g: any) => g.id === gradeDocId || g.assignmentId === activeExam.id || g.examId === activeExam.id);
+      const next = idx >= 0
+        ? base.map((g: any, i: number) => (i === idx ? { ...g, ...gradePayload } : g))
+        : [gradePayload, ...base];
+      if (currentNisn) {
+        setLocalCache(`firas_cache_final_grades_${currentNisn}`, next);
+      }
+      return next;
+    });
+
+    // Save exam history & clear active state immediately
+    try {
+      const historyKey = `ujian_history_${student.nisn}`;
+      const currentHistory = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      const filteredHistory = Array.isArray(currentHistory)
+        ? currentHistory.filter((h: any) => h.examId !== activeExam.id)
+        : [];
+      const updatedHistory = [result, ...filteredHistory];
+      try {
+        localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
+      } catch (_) {}
+      setExamHistoryList(updatedHistory);
+      removeSafeExamState(student.nisn);
+    } catch (e) { console.warn("Error parsing stored data:", e); }
+
+    // Update live proctoring session as selesai AND persist final grade reliably to cloud
+    const sessionPromise = setDoc(
+      doc(db, "exam_sessions", gradeDocId),
       {
         examId: activeExam.id,
         examTitle: activeExam.title || "",
@@ -2537,53 +2640,56 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       { merge: true }
     ).catch((err) => console.warn("Gagal memperbarui sesi proctoring selesai:", err));
 
-    const saveToCloud = async () => {
+    const queuePendingSync = () => {
       try {
-        await saveFinalGrade({
-          ...result,
-          id: `${activeExam.id}_${student.nisn}`,
-          examId: activeExam.id,
-          assignmentId: activeExam.id,
-          nisn: student.nisn || "",
-          studentName: student.displayName || student.studentName || student.name || "",
-          kelas: student.kelas || "",
-          type: "exam",
-          answers: answersPayload,
-        });
-        trackUsage(0, 1);
-        if (typeof mutateFinalGrades === "function") mutateFinalGrades();
-        if (typeof mutateAllFinalGrades === "function") mutateAllFinalGrades();
-      } catch (err) {
-        console.warn("Gagal mengupload nilai ujian, masuk ke antrean sinkronisasi:", err);
+        const syncKey = `pending_exam_sync_${student.nisn}`;
+        const existing = JSON.parse(localStorage.getItem(syncKey) || "[]");
+        const filtered = Array.isArray(existing)
+          ? existing.filter((p: any) => p.examId !== activeExam.id)
+          : [];
+        filtered.push({ ...gradePayload });
+        localStorage.setItem(syncKey, JSON.stringify(filtered));
+      } catch (storageErr) {
+        clearStudentCaches();
         try {
           const syncKey = `pending_exam_sync_${student.nisn}`;
-          const pending = JSON.parse(localStorage.getItem(syncKey) || "[]");
-          pending.push({ ...result, answers: answersPayload });
-          localStorage.setItem(syncKey, JSON.stringify(pending));
-        } catch (storageErr) {
-          clearStudentCaches();
-          try {
-            const syncKey = `pending_exam_sync_${student.nisn}`;
-            localStorage.setItem(syncKey, JSON.stringify([{ ...result, answers: answersPayload }]));
-          } catch {
-            console.warn("Could not queue pending exam sync:", storageErr);
-          }
+          localStorage.setItem(syncKey, JSON.stringify([{ ...gradePayload }]));
+        } catch {
+          console.warn("Could not queue pending exam sync:", storageErr);
         }
       }
     };
 
-    saveToCloud();
-
-    try {
-      const historyKey = `ujian_history_${student.nisn}`;
-      const currentHistory = JSON.parse(localStorage.getItem(historyKey) || "[]");
-      const updatedHistory = [result, ...currentHistory];
+    const saveToCloud = async () => {
+      let saved = false;
       try {
-        localStorage.setItem(historyKey, JSON.stringify(updatedHistory));
-      } catch (_) {}
-      setExamHistoryList(updatedHistory);
-      removeSafeExamState(student.nisn);
-    } catch (e) { console.warn("Error parsing stored data:", e); }
+        saved = await saveFinalGrade(gradePayload);
+      } catch (err) {
+        console.warn("saveFinalGrade error:", err);
+        saved = false;
+      }
+
+      // Direct Firestore backup attempt if saveFinalGrade returned false
+      if (!saved) {
+        try {
+          await setDoc(doc(db, "final_grades", gradeDocId), gradePayload, { merge: true });
+          saved = true;
+        } catch (fsErr) {
+          console.warn("Direct Firestore fallback save grade failed:", fsErr);
+        }
+      }
+
+      if (saved) {
+        trackUsage(0, 1);
+        if (typeof mutateFinalGrades === "function") mutateFinalGrades();
+        if (typeof mutateAllFinalGrades === "function") mutateAllFinalGrades();
+      } else {
+        console.warn("Gagal mengupload nilai ujian ke cloud, masuk ke antrean sinkronisasi");
+        queuePendingSync();
+      }
+    };
+
+    await Promise.allSettled([sessionPromise, saveToCloud()]);
   };
 
   const confirmCheatExit = async () => {
@@ -3831,9 +3937,13 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     const studentExams = examsList.filter(e => isExamForClass(e, student.kelas));
     studentExams.forEach(e => {
-      const fGrade = finalGradesList.find(f => (f.alignmentId === e.id || f.assignmentId === e.id) && f.nisn === student.nisn);
-      if (fGrade?.nilai !== undefined && fGrade?.nilai !== null && fGrade?.nilai !== "") {
-        const n = Number(fGrade.nilai);
+      const fGrade = finalGradesList.find(f =>
+        (f.alignmentId === e.id || f.assignmentId === e.id || f.examId === e.id || (f.id && f.id.startsWith(`${e.id}_`))) &&
+        (isSameNisn(f.nisn, student.nisn) || isSameNisn(f.nis, student.nisn))
+      );
+      const rawScore = fGrade?.nilai ?? fGrade?.score;
+      if (rawScore !== undefined && rawScore !== null && rawScore !== "") {
+        const n = Number(rawScore);
         if (isPTSItem(e)) nilaiUts = n;
         else if (isPASItem(e)) nilaiUas = n;
         else tugasVals.push(n);
@@ -7529,10 +7639,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                               {/* Mobile View */}
                               <div className="md:hidden space-y-4">
                                 {examsList.map((exam: any, idx: number) => {
-                                  const finalGrade = finalGradesList.find(f => f.assignmentId === exam.id && f.nisn === student?.nisn);
-                                  const isFinished = !!finalGrade;
-                                  const violations = finalGrade?.violationCount || finalGrade?.violationsCount || 0;
-                                  const nilai = finalGrade?.nilai !== undefined ? finalGrade.nilai : "-";
+                                  const finalGrade = finalGradesList.find(f =>
+                                    (f.assignmentId === exam.id || f.examId === exam.id || f.alignmentId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))) &&
+                                    (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
+                                    ((f.nilai !== undefined && f.nilai !== null && f.nilai !== "") || (f.score !== undefined && f.score !== null && f.score !== "") || f.status === "selesai")
+                                  );
+                                  const histEntry = examHistoryList.find((h: any) => h.examId === exam.id);
+                                  const isFinished = !!finalGrade || !!histEntry;
+                                  const violations = finalGrade?.violationCount ?? finalGrade?.violationsCount ?? histEntry?.violationCount ?? 0;
+                                  const rawNilai = finalGrade?.nilai ?? finalGrade?.score ?? histEntry?.score ?? histEntry?.nilai;
+                                  const nilai = rawNilai !== undefined && rawNilai !== null && rawNilai !== "" ? rawNilai : "-";
                                   
                                   const getIntegrityStatus = (v: number) => {
                                     if (v === 0) return { text: "Sangat Berintegritas", color: "text-emerald-700 font-extrabold" };
@@ -7633,10 +7749,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                   </thead>
                                   <tbody>
                                     {examsList.map((exam: any, idx: number) => {
-                                      const finalGrade = finalGradesList.find(f => f.assignmentId === exam.id && f.nisn === student?.nisn);
-                                      const isFinished = !!finalGrade;
-                                      const violations = finalGrade?.violationCount || finalGrade?.violationsCount || 0;
-                                      const nilai = finalGrade?.nilai !== undefined ? finalGrade.nilai : "-";
+                                      const finalGrade = finalGradesList.find(f =>
+                                        (f.assignmentId === exam.id || f.examId === exam.id || f.alignmentId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))) &&
+                                        (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
+                                        ((f.nilai !== undefined && f.nilai !== null && f.nilai !== "") || (f.score !== undefined && f.score !== null && f.score !== "") || f.status === "selesai")
+                                      );
+                                      const histEntry = examHistoryList.find((h: any) => h.examId === exam.id);
+                                      const isFinished = !!finalGrade || !!histEntry;
+                                      const violations = finalGrade?.violationCount ?? finalGrade?.violationsCount ?? histEntry?.violationCount ?? 0;
+                                      const rawNilai = finalGrade?.nilai ?? finalGrade?.score ?? histEntry?.score ?? histEntry?.nilai;
+                                      const nilai = rawNilai !== undefined && rawNilai !== null && rawNilai !== "" ? rawNilai : "-";
                                       
                                       const getIntegrityStatus = (v: number) => {
                                         if (v === 0) return { text: "Sangat Berintegritas", color: "text-emerald-700 font-extrabold" };

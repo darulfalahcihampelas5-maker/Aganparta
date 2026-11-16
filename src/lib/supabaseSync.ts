@@ -58,23 +58,180 @@ export interface ExamItem {
   [key: string]: any;
 }
 
-// 1. Fetch all Final Grades (Unlimited Reads from Supabase + Firestore Fallback/Merge)
+const hasValidNumericScore = (val: any): boolean => {
+  return val !== undefined && val !== null && val !== "" && !Number.isNaN(Number(val));
+};
+
+const normalizeNisnForKey = (val: any): string => {
+  const s = String(val || "").trim();
+  if (!s) return "";
+  const unpadded = s.replace(/^0+/, "");
+  return unpadded || s;
+};
+
+const extractColIdFromDocId = (docId: string, nisn: string): string => {
+  if (!docId) return "";
+  if (docId.startsWith("FG-") && nisn && docId.startsWith(`FG-${nisn}-`)) {
+    return docId.slice(`FG-${nisn}-`.length);
+  }
+  const lastUnderscore = docId.lastIndexOf("_");
+  if (lastUnderscore > 0) {
+    return docId.substring(0, lastUnderscore);
+  }
+  return docId;
+};
+
+const extractTimestampMs = (item: any): number => {
+  const raw =
+    item?.gradedAt ||
+    item?.graded_at ||
+    item?.updatedAt ||
+    item?.updated_at ||
+    item?.submittedAt ||
+    item?.submitted_at ||
+    item?.finishedAt ||
+    item?.lastActiveAt ||
+    item?.createdAt ||
+    "";
+  if (!raw) return 0;
+  if (typeof raw?.toDate === "function") {
+    return raw.toDate().getTime() || 0;
+  }
+  const t = new Date(raw).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
+
+const sanitizeForFirestore = (obj: any): any => {
+  if (obj === null || obj === undefined) return null;
+  if (Array.isArray(obj)) {
+    return obj.map((item) => (item === undefined ? null : sanitizeForFirestore(item)));
+  }
+  if (typeof obj === "object" && !(obj instanceof Date)) {
+    const clean: Record<string, any> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (v !== undefined) {
+        clean[k] = sanitizeForFirestore(v);
+      }
+    }
+    return clean;
+  }
+  return obj;
+};
+
+const mergeGradeRecords = (existing: GradeItem | undefined, incoming: GradeItem): GradeItem => {
+  if (!existing) return incoming;
+
+  const existingScore = existing.nilai ?? existing.score;
+  const incomingScore = incoming.nilai ?? incoming.score;
+  const existingHasScore = hasValidNumericScore(existingScore);
+  const incomingHasScore = hasValidNumericScore(incomingScore);
+
+  const existingTs = extractTimestampMs(existing);
+  const incomingTs = extractTimestampMs(incoming);
+
+  // Choose base record prioritizing valid numeric score first, then newest timestamp
+  let primary = existing;
+  let secondary = incoming;
+
+  if (!existingHasScore && incomingHasScore) {
+    primary = incoming;
+    secondary = existing;
+  } else if (existingHasScore && !incomingHasScore) {
+    primary = existing;
+    secondary = incoming;
+  } else if (incomingTs > existingTs) {
+    primary = incoming;
+    secondary = existing;
+  }
+
+  const mergedScore = hasValidNumericScore(primary.nilai ?? primary.score)
+    ? (primary.nilai ?? primary.score)
+    : (secondary.nilai ?? secondary.score);
+
+  const violationCount = Math.max(
+    Number(existing.violationCount || existing.violationsCount || 0) || 0,
+    Number(incoming.violationCount || incoming.violationsCount || 0) || 0
+  );
+
+  return {
+    ...secondary,
+    ...primary,
+    id: primary.id || secondary.id,
+    assignmentId: primary.assignmentId || secondary.assignmentId || primary.examId || secondary.examId,
+    examId: primary.examId || secondary.examId || primary.assignmentId || secondary.assignmentId,
+    nisn: primary.nisn || secondary.nisn,
+    studentName: primary.studentName || secondary.studentName || "",
+    kelas: primary.kelas || secondary.kelas || "",
+    title: primary.title || secondary.title || primary.examTitle || secondary.examTitle,
+    examTitle: primary.examTitle || secondary.examTitle || primary.title || secondary.title,
+    bab: primary.bab || secondary.bab,
+    type: primary.type || secondary.type,
+    ...(hasValidNumericScore(mergedScore) ? { nilai: Number(mergedScore), score: Number(mergedScore) } : {}),
+    violationCount,
+    submittedAt: primary.submittedAt || secondary.submittedAt,
+    gradedAt: primary.gradedAt || secondary.gradedAt,
+    answers:
+      primary.answers && Object.keys(primary.answers).length > 0
+        ? primary.answers
+        : (secondary.answers || {}),
+  };
+};
+
+// 1. Fetch all Final Grades (Unlimited Reads from Supabase + Firestore Fallback/Merge + exam_sessions recovery)
 export async function getFinalGrades(): Promise<GradeItem[]> {
   const gradesMap = new Map<string, GradeItem>();
+  const scoredKeysInFinalGrades = new Set<string>();
 
-  // 1. Always Try Supabase First (Primary)
+  const putGrade = (item: GradeItem, fromFinalGradesCollection = false) => {
+    const nisnStr = String(item.nisn || item.nis || "").trim();
+    const colId = String(
+      item.assignmentId || item.examId || item.alignmentId || extractColIdFromDocId(item.id, nisnStr) || ""
+    ).trim();
+    if (!colId && !item.id) return;
+
+    const normNisn = normalizeNisnForKey(nisnStr);
+    const canonicalKey = colId && normNisn ? `${colId}__${normNisn}` : (item.id || `${colId}__${nisnStr}`);
+
+    const merged = mergeGradeRecords(gradesMap.get(canonicalKey), {
+      ...item,
+      assignmentId: item.assignmentId || colId || undefined,
+      examId: item.examId || colId || undefined,
+      nisn: nisnStr,
+    });
+    gradesMap.set(canonicalKey, merged);
+
+    if (fromFinalGradesCollection && hasValidNumericScore(merged.nilai ?? merged.score)) {
+      scoredKeysInFinalGrades.add(canonicalKey);
+    }
+  };
+
+  // 1. Always Try Supabase First (Primary, paginated)
   if (isSupabaseConfigured && supabase) {
     try {
-      const { data, error } = await supabase.from("final_grades").select("*");
-      if (!error && Array.isArray(data) && data.length > 0) {
-        data.forEach((d) => {
+      let allSupaData: any[] = [];
+      let page = 0;
+      const pageSize = 1000;
+      while (true) {
+        const { data, error } = await supabase
+          .from("final_grades")
+          .select("*")
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+        if (error || !data || data.length === 0) break;
+        allSupaData.push(...data);
+        if (data.length < pageSize) break;
+        page++;
+        if (page >= 10) break;
+      }
+
+      if (allSupaData.length > 0) {
+        allSupaData.forEach((d) => {
           const item: GradeItem = {
             id: d.id,
             assignmentId: d.assignment_id || d.exam_id,
             examId: d.exam_id || d.assignment_id,
-            nisn: d.nisn,
-            studentName: d.student_name,
-            kelas: d.kelas,
+            nisn: d.nisn || "",
+            studentName: d.student_name || "",
+            kelas: d.kelas || "",
             nilai: d.nilai ?? d.score,
             score: d.score ?? d.nilai,
             submittedAt: d.submitted_at,
@@ -83,8 +240,7 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
             isRemedial: d.is_remedial,
             remedialScore: d.remedial_score,
           };
-          const key = item.id || `${item.assignmentId}_${item.nisn}`;
-          gradesMap.set(key, item);
+          putGrade(item, true);
         });
       }
     } catch (err) {
@@ -93,133 +249,241 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
   }
 
   // 2. Also check Firestore for any fresh or existing grades
+  let fsSnap: any = null;
   if (!isFirebaseDisabled) {
     try {
-      const snap = await getDocs(collection(db, "final_grades"));
-      snap.docs.forEach((docSnap) => {
-        const d = docSnap.data();
-        const asgId = d.assignmentId || d.examId || "";
-        const nisnVal = d.nisn || "";
-        const item: GradeItem = {
-          id: docSnap.id,
-          assignmentId: asgId,
-          examId: d.examId || asgId,
-          nisn: nisnVal,
-          studentName: d.studentName,
-          kelas: d.kelas,
-          nilai: d.nilai ?? d.score,
-          score: d.score ?? d.nilai,
-          ...d,
-        };
-        const key = docSnap.id || `${asgId}_${nisnVal}`;
-        if (!gradesMap.has(key)) {
-          gradesMap.set(key, item);
-        } else {
-          const existing = gradesMap.get(key)!;
-          // Prefer non-null values if existing has null/0
-          if ((existing.nilai === null || existing.nilai === undefined) && (item.nilai !== null && item.nilai !== undefined)) {
-            gradesMap.set(key, { ...existing, ...item });
-          }
-        }
-      });
+      fsSnap = await getDocs(collection(db, "final_grades"));
     } catch (err: any) {
       if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
         isFirebaseDisabled = true;
       }
+      try {
+        fsSnap = await getDocsFromCache(collection(db, "final_grades"));
+      } catch (_) {}
     }
+  } else {
+    try {
+      fsSnap = await getDocsFromCache(collection(db, "final_grades"));
+    } catch (_) {}
+  }
+
+  if (fsSnap && fsSnap.docs) {
+    fsSnap.docs.forEach((docSnap: any) => {
+      const d = docSnap.data();
+      const nisnVal = String(d.nisn || d.nis || "").trim();
+      const asgId = d.assignmentId || d.examId || extractColIdFromDocId(docSnap.id, nisnVal) || "";
+      const item: GradeItem = {
+        ...d,
+        id: docSnap.id,
+        assignmentId: asgId,
+        examId: d.examId || asgId,
+        nisn: nisnVal,
+        studentName: d.studentName || d.student_name || "",
+        kelas: d.kelas || "",
+        nilai: d.nilai ?? d.score,
+        score: d.score ?? d.nilai,
+      };
+      putGrade(item, true);
+    });
+  }
+
+  // 3. Recovery from Firestore exam_sessions:
+  // If a student finished an exam (status === "selesai" and numeric score) in exam_sessions,
+  // ensure it appears in Buku Nilai even if an earlier final_grades write failed or was overwritten by a violation record.
+  let sessionsSnap: any = null;
+  if (!isFirebaseDisabled) {
+    try {
+      sessionsSnap = await getDocs(collection(db, "exam_sessions"));
+    } catch (err: any) {
+      if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+        isFirebaseDisabled = true;
+      }
+      try {
+        sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
+      } catch (_) {}
+    }
+  } else {
+    try {
+      sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
+    } catch (_) {}
+  }
+
+  const missingGradesToBackfill: GradeItem[] = [];
+  if (sessionsSnap && sessionsSnap.docs) {
+    sessionsSnap.docs.forEach((docSnap: any) => {
+      const d = docSnap.data();
+      const sessionScore = d.score ?? d.nilai;
+      const isCompleted = d.status === "selesai" || Boolean(d.finishedAt);
+      if (!isCompleted || !hasValidNumericScore(sessionScore)) return;
+
+      const nisnVal = String(d.nisn || "").trim();
+      const examId = String(d.examId || extractColIdFromDocId(docSnap.id, nisnVal) || "").trim();
+      if (!examId || !nisnVal) return;
+
+      const canonicalKey = `${examId}__${normalizeNisnForKey(nisnVal)}`;
+      const recoveredItem: GradeItem = {
+        id: `${examId}_${nisnVal}`,
+        examId,
+        assignmentId: examId,
+        examTitle: d.examTitle || d.title || "",
+        title: d.examTitle || d.title || "",
+        nisn: nisnVal,
+        studentName: d.studentName || "",
+        kelas: d.kelas || "",
+        nilai: Number(sessionScore),
+        score: Number(sessionScore),
+        violationCount: Number(d.violationCount || 0) || 0,
+        submittedAt: d.finishedAt || d.lastActiveAt || new Date().toISOString(),
+        gradedAt: d.finishedAt || d.lastActiveAt || new Date().toISOString(),
+        status: "selesai",
+        type: "exam",
+      };
+
+      const existedWithScore = scoredKeysInFinalGrades.has(canonicalKey);
+      putGrade(recoveredItem, false);
+      if (!existedWithScore) {
+        missingGradesToBackfill.push(recoveredItem);
+      }
+    });
+  }
+
+  // Self-heal missing final_grades in background so future loads/exports find them natively
+  if (missingGradesToBackfill.length > 0 && typeof window !== "undefined") {
+    setTimeout(() => {
+      missingGradesToBackfill.slice(0, 25).forEach((item) => {
+        saveFinalGrade(item).catch(() => {});
+      });
+    }, 100);
   }
 
   return Array.from(gradesMap.values());
 }
 
-// 2. Fetch Exams (Unlimited Reads from Supabase)
+// 2. Fetch Exams (Merge Supabase + Firestore so no exam is missed)
 export async function getExams(): Promise<ExamItem[]> {
-  // 1. Always Try Supabase First (Primary)
+  const examsMap = new Map<string, ExamItem>();
+
+  // 1. Try Supabase First
   if (isSupabaseConfigured && supabase) {
     try {
       const { data, error } = await supabase.from("exams").select("*");
       if (!error && Array.isArray(data) && data.length > 0) {
-        return data.map((d) => ({
-          id: d.id,
-          title: d.title,
-          subject: d.subject,
-          kelasRef: d.kelas_ref,
-          token: d.token,
-          duration: d.duration,
-          kkm: d.kkm,
-          questions: d.questions || [],
-          createdAt: d.created_at,
-        }));
+        data.forEach((d) => {
+          examsMap.set(d.id, {
+            id: d.id,
+            title: d.title,
+            subject: d.subject,
+            kelasRef: d.kelas_ref,
+            token: d.token,
+            duration: d.duration,
+            kkm: d.kkm,
+            questions: d.questions || [],
+            createdAt: d.created_at,
+          });
+        });
       }
     } catch (err) {
       console.warn("Supabase fetch exams exception:", err);
     }
   }
 
-  // 2. Fallback to Firestore
-  if (isFirebaseDisabled) return [];
-
-  try {
-    const snap = await getDocs(collection(db, "exams"));
-    return snap.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-    })) as ExamItem[];
-  } catch (err: any) {
-    if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-      isFirebaseDisabled = true;
+  // 2. Also merge Firestore exams (which contains full targets/targetClasses/bab/tema metadata)
+  let snap: any = null;
+  if (!isFirebaseDisabled) {
+    try {
+      snap = await getDocs(collection(db, "exams"));
+    } catch (err: any) {
+      if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+        isFirebaseDisabled = true;
+      }
+      try {
+        snap = await getDocsFromCache(collection(db, "exams"));
+      } catch (_) {}
     }
-    return [];
+  } else {
+    try {
+      snap = await getDocsFromCache(collection(db, "exams"));
+    } catch (_) {}
   }
+
+  if (snap && snap.docs) {
+    snap.docs.forEach((docSnap: any) => {
+      const existing = examsMap.get(docSnap.id) || {};
+      examsMap.set(docSnap.id, {
+        ...existing,
+        id: docSnap.id,
+        ...docSnap.data(),
+      } as ExamItem);
+    });
+  }
+
+  return Array.from(examsMap.values());
 }
 
-// 3. Save a Final Grade (Saves to Supabase as primary, Firestore as background backup)
+// 3. Save a Final Grade (Saves to Supabase as primary AND Firestore as durable backup)
 export async function saveFinalGrade(grade: GradeItem): Promise<boolean> {
-  const gradeId = grade.id || `${grade.assignmentId || grade.examId}_${grade.nisn}`;
+  const targetId = grade.assignmentId || grade.examId || grade.alignmentId || "";
+  const cleanNisn = String(grade.nisn || "").trim();
+  const gradeId = grade.id || (targetId && cleanNisn ? `${targetId}_${cleanNisn}` : `FG-${Date.now()}`);
+  const numericScore = grade.nilai ?? grade.score;
+  const hasScore = hasValidNumericScore(numericScore);
 
   let supabaseSuccess = false;
+  let firestoreSuccess = false;
 
   // 1. Save to Supabase (Primary)
   if (isSupabaseConfigured && supabase) {
     try {
       const { error } = await supabase.from("final_grades").upsert({
         id: gradeId,
-        exam_id: grade.examId || grade.assignmentId,
-        assignment_id: grade.assignmentId || grade.examId,
-        nisn: grade.nisn,
+        exam_id: grade.examId || grade.assignmentId || targetId,
+        assignment_id: grade.assignmentId || grade.examId || targetId,
+        nisn: cleanNisn,
         student_name: grade.studentName || "",
         kelas: grade.kelas || "",
-        nilai: grade.nilai ?? grade.score ?? 0,
-        score: grade.score ?? grade.nilai ?? 0,
-        submitted_at: new Date().toISOString(),
+        nilai: hasScore ? Number(numericScore) : null,
+        score: hasScore ? Number(numericScore) : null,
+        submitted_at: grade.submittedAt || new Date().toISOString(),
         violation_count: grade.violationCount || 0,
         answers: grade.answers || {},
         is_remedial: grade.isRemedial || false,
-        remedial_score: grade.remedialScore || null,
+        remedial_score: grade.remedialScore ?? null,
       });
-      
+
       if (!error) {
         supabaseSuccess = true;
+      } else {
+        console.warn("Supabase save grade error:", error);
       }
     } catch (err) {
-      console.warn("Supabase save grade error:", err);
+      console.warn("Supabase save grade exception:", err);
     }
   }
 
-  // 2. Save to Firestore (Background Backup)
-  if (isFirebaseDisabled) return supabaseSuccess;
-
-  try {
-    const finalRef = doc(db, "final_grades", gradeId);
-    await setDoc(finalRef, grade, { merge: true });
-    return true; // Return true as long as one of them or Firebase worked
-  } catch (err: any) {
-    if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-      isFirebaseDisabled = true;
+  // 2. Save to Firestore (Durable Backup)
+  if (!isFirebaseDisabled) {
+    try {
+      const finalRef = doc(db, "final_grades", gradeId);
+      const fsPayload = sanitizeForFirestore({
+        ...grade,
+        id: gradeId,
+        assignmentId: grade.assignmentId || grade.examId || targetId,
+        examId: grade.examId || grade.assignmentId || targetId,
+        nisn: cleanNisn,
+        ...(hasScore ? { nilai: Number(numericScore), score: Number(numericScore) } : {}),
+        updatedAt: grade.updatedAt || new Date().toISOString(),
+      });
+      await setDoc(finalRef, fsPayload, { merge: true });
+      firestoreSuccess = true;
+    } catch (err: any) {
+      if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+        isFirebaseDisabled = true;
+      }
+      console.warn("Firestore save grade error:", err);
     }
-    // If Firebase quota is reached but Supabase worked, we are still good
-    return supabaseSuccess;
   }
+
+  return supabaseSuccess || firestoreSuccess;
 }
 
 // 4. Real-time Subscription (Zero Quota - WebSocket Stream)

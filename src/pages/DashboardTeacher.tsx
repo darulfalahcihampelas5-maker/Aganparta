@@ -135,9 +135,38 @@ const BulkImportQuestionsModal = React.lazy(() =>
 import { ExamItemAnalysisModal } from "../components/teacher/ExamItemAnalysisModal";
 import { LiveProctoringModal } from "../components/teacher/LiveProctoringModal";
 import { generateStudentRaporPdf, buildParentWaReportText } from "../lib/studentReportPdf";
-import { getFinalGrades, saveFinalGrade, subscribeToFinalGrades, dbSetDoc, dbDeleteDoc } from "../lib/supabaseSync";
+import { getFinalGrades, getExams, saveFinalGrade, subscribeToFinalGrades, dbSetDoc, dbDeleteDoc } from "../lib/supabaseSync";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import { isAssignmentForClass, isExamForClass, isClassMatch, normalizeClassName, isPTSItem, isPASItem, isSameNisn } from "../lib/gradeUtils";
+
+const getNisnVariants = (nisn?: string | number | null, nis?: string | number | null): string[] => {
+  const out = new Set<string>();
+  [nisn, nis].forEach((val) => {
+    const s = String(val || "").trim();
+    if (!s) return;
+    out.add(s);
+    const unpadded = s.replace(/^0+/, "");
+    if (unpadded) {
+      out.add(unpadded);
+      out.add(unpadded.padStart(10, "0"));
+    }
+  });
+  return Array.from(out);
+};
+
+const hasNumericScore = (val: any): boolean =>
+  val !== undefined && val !== null && val !== "" && !Number.isNaN(Number(val));
+
+const pickPreferredGrade = (existing: any, incoming: any): any => {
+  if (!existing) return incoming;
+  const exHas = hasNumericScore(existing.nilai ?? existing.score);
+  const inHas = hasNumericScore(incoming.nilai ?? incoming.score);
+  if (!exHas && inHas) return incoming;
+  if (exHas && !inHas) return existing;
+  const exTime = new Date(existing.gradedAt || existing.updatedAt || existing.submittedAt || 0).getTime() || 0;
+  const inTime = new Date(incoming.gradedAt || incoming.updatedAt || incoming.submittedAt || 0).getTime() || 0;
+  return inTime >= exTime ? { ...existing, ...incoming } : existing;
+};
 
 const trackUsage = (reads = 0, writes = 0) => {
   try {
@@ -1472,11 +1501,27 @@ export default function DashboardTeacher() {
   const finalGradesByNisnLookup = useMemo(() => {
     const map = new Map<string, Map<string, any>>();
     finalGradesList.forEach(grade => {
-      if (!grade.nisn) return;
-      if (!map.has(grade.nisn)) map.set(grade.nisn, new Map());
-      const studentMap = map.get(grade.nisn)!;
-      const asgId = grade.assignmentId || grade.examId || grade.id?.split('_')[0];
-      if (asgId) studentMap.set(asgId, grade);
+      const nisnVariants = getNisnVariants(grade.nisn, grade.nis);
+      if (nisnVariants.length === 0) return;
+
+      const rawId = String(grade.id || "");
+      const docPrefix = rawId.includes("_") ? rawId.substring(0, rawId.lastIndexOf("_")) : "";
+      const targetIds = Array.from(
+        new Set(
+          [grade.assignmentId, grade.examId, grade.alignmentId, docPrefix]
+            .map((v) => String(v || "").trim())
+            .filter(Boolean)
+        )
+      );
+      if (targetIds.length === 0) return;
+
+      nisnVariants.forEach((nKey) => {
+        if (!map.has(nKey)) map.set(nKey, new Map());
+        const studentMap = map.get(nKey)!;
+        targetIds.forEach((tId) => {
+          studentMap.set(tId, pickPreferredGrade(studentMap.get(tId), grade));
+        });
+      });
     });
     return map;
   }, [finalGradesList]);
@@ -2174,21 +2219,20 @@ export default function DashboardTeacher() {
           }
         })(),
 
-        // 5. Final Grades (Supabase primary + Firestore fallback, unlimited reads)
+        // 5. Final Grades (Supabase primary + Firestore + completed exam_sessions recovery)
         (async () => {
-          const cachedFinalGrades = !forceRefresh && getLocalCache<any[]>("firas_cache_final_grades", 10 * 60 * 1000);
+          const cachedFinalGrades = !forceRefresh && getLocalCache<any[]>("firas_cache_final_grades", 24 * 60 * 60 * 1000);
           if (cachedFinalGrades && cachedFinalGrades.length > 0) {
             setFinalGradesList(cachedFinalGrades);
-          } else {
-            try {
-              const grades = await getFinalGrades();
-              if (grades.length > 0) {
-                setFinalGradesList(grades);
-                setLocalCache("firas_cache_final_grades", grades);
-              }
-            } catch (e) {
-              console.warn("Failed fetching final grades:", e);
+          }
+          try {
+            const grades = await getFinalGrades();
+            if (grades.length > 0) {
+              setFinalGradesList(grades);
+              setLocalCache("firas_cache_final_grades", grades);
             }
+          } catch (e) {
+            console.warn("Failed fetching final grades:", e);
           }
         })(),
 
@@ -2211,25 +2255,23 @@ export default function DashboardTeacher() {
           }
         })(),
 
-        // 7. Exams
+        // 7. Exams (Merge Supabase + Firestore via getExams so no exam is missed)
         (async () => {
-          const cachedExams = null; // ALWAYS FETCH
-          if (cachedExams && cachedExams.length > 0) {
-            setExamsList(cachedExams);
-          } else {
-            try {
-              const snapshot = await getDocs(collection(db, "exams"));
-              trackUsage(snapshot.size, 0);
-              const exams = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-              exams.sort((a: any, b: any) => {
-                const dateA = new Date(a.createdAt || 0).getTime();
-                const dateB = new Date(b.createdAt || 0).getTime();
-                return dateB - dateA;
-              });
-              setExamsList(exams);
-              setLocalCache("firas_cache_exams_v2", exams);
-            } catch (e) {
-              console.warn("Failed fetching exams:", e);
+          try {
+            const exams = await getExams();
+            trackUsage(exams.length, 0);
+            exams.sort((a: any, b: any) => {
+              const dateA = new Date(a.createdAt || 0).getTime();
+              const dateB = new Date(b.createdAt || 0).getTime();
+              return dateB - dateA;
+            });
+            setExamsList(exams);
+            setLocalCache("firas_cache_exams_v2", exams);
+          } catch (e) {
+            console.warn("Failed fetching exams:", e);
+            const staleExams = getLocalCache<any[]>("firas_cache_exams_v2", 24 * 60 * 60 * 1000);
+            if (staleExams && staleExams.length > 0) {
+              setExamsList(staleExams);
             }
           }
         })(),
@@ -3277,6 +3319,34 @@ export default function DashboardTeacher() {
       );
       return () => unsubscribe();
     }
+
+    // Always pull latest exam & assignment grades (including exam_sessions recovery) when opening Buku Nilai
+    if (activeMenu === "manajemen-nilai" && activeNilaiTab === "rekapitulasi") {
+      let cancelled = false;
+      Promise.all([getFinalGrades(), getExams()])
+        .then(([grades, exams]) => {
+          if (cancelled) return;
+          if (Array.isArray(grades) && grades.length > 0) {
+            setFinalGradesList(grades);
+            setLocalCache("firas_cache_final_grades", grades);
+          }
+          if (Array.isArray(exams) && exams.length > 0) {
+            const sorted = [...exams].sort((a: any, b: any) => {
+              const dateA = new Date(a.createdAt || 0).getTime();
+              const dateB = new Date(b.createdAt || 0).getTime();
+              return dateB - dateA;
+            });
+            setExamsList(sorted);
+            setLocalCache("firas_cache_exams_v2", sorted);
+          }
+        })
+        .catch((err) => {
+          console.warn("Gagal menyegarkan data Buku Nilai:", err);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
   }, [activeMenu, activeNilaiTab]);
   const [activePresensiTab, setActivePresensiTab] = useState<
     "input" | "preview" | "analisis"
@@ -3326,8 +3396,15 @@ export default function DashboardTeacher() {
     const targetClass = stu.kelas || selectedClassFilter;
     const studentAbs = absensiByNisnLookup.get(stu.nisn) || absensiList;
     const absCounts = getStudentAbsensiCounts(stu, studentAbs, targetClass);
-    const studentGradesMap = finalGradesByNisnLookup.get(stu.nisn);
-    const studentSubs = submissionsByNisnLookup.get(stu.nisn) || [];
+    const studentKey = String(stu.nisn || stu.nis || "").trim();
+    const studentGradesMap =
+      finalGradesByNisnLookup.get(studentKey) ||
+      finalGradesByNisnLookup.get(studentKey.replace(/^0+/, "")) ||
+      finalGradesByNisnLookup.get(studentKey.replace(/^0+/, "").padStart(10, "0"));
+    const studentSubs =
+      submissionsByNisnLookup.get(studentKey) ||
+      submissionsByNisnLookup.get(studentKey.replace(/^0+/, "")) ||
+      [];
 
     const gradeItems: { title: string; type: string; bab: string; tanggal: string; nilai: number }[] = [];
     const tugasVals: number[] = [];
@@ -3614,31 +3691,42 @@ export default function DashboardTeacher() {
       }
     });
 
-    // 3. Fallback: Truly manual columns in finalGradesList that aren't yet in assignments/exams
+    // 3. Fallback: Columns/exams in finalGradesList that aren't yet in assignments/exams (e.g. recovered exam_sessions or manual cols)
     finalGradesList.forEach((f) => {
-      const targetId = f.assignmentId || f.examId || f.id;
+      const targetId = String(f.assignmentId || f.examId || f.alignmentId || (f.id && f.id.includes("_") ? f.id.substring(0, f.id.lastIndexOf("_")) : f.id) || "").trim();
       if (!targetId || addedIds.has(targetId) || deletedColumnIds.has(targetId)) return;
 
       const stu = studentsList.find((s) => isSameNisn(s.nisn, f.nisn) || isSameNisn(s.nis, f.nisn));
-      const isForCurrentClass = !selectedClassFilter || selectedClassFilter === "SEMUA_KELAS" || (stu && isClassMatch(stu.kelas, selectedClassFilter));
-      
+      const isForCurrentClass =
+        !selectedClassFilter ||
+        selectedClassFilter === "SEMUA_KELAS" ||
+        (stu && isClassMatch(stu.kelas, selectedClassFilter)) ||
+        (f.kelas && isClassMatch(f.kelas, selectedClassFilter));
+
       if (isForCurrentClass) {
         const matchingAsg = assignmentsList.find((a) => a.id === targetId);
         const matchingExam = examsList.find((e) => e.id === targetId);
-        const fallbackTitle = f.title || f.materi || f.examTitle || matchingAsg?.title || matchingAsg?.materi || matchingExam?.title;
-        
-        if (!fallbackTitle && !matchingAsg && !matchingExam) return;
+        const fallbackTitle = f.examTitle || f.title || f.materi || matchingAsg?.title || matchingAsg?.materi || matchingExam?.title;
+        const isExam =
+          targetId.startsWith("EXM-") ||
+          targetId.startsWith("ujian-") ||
+          f.type === "CBT" ||
+          f.type === "exam" ||
+          Boolean(f.examId) ||
+          /cbt|ujian|pretes|postes|pretest|posttest/i.test(fallbackTitle || "");
+
+        const hasScore = hasNumericScore(f.nilai ?? f.score);
+        if (!fallbackTitle && !matchingAsg && !matchingExam && !(isExam && hasScore)) return;
 
         addedIds.add(targetId);
-        const isExam = targetId.startsWith("EXM-") || f.type === "CBT" || f.type === "exam" || /cbt|ujian|pretes|postes|pretest|posttest/i.test(fallbackTitle || "");
         cols.push({
           id: targetId,
-          title: fallbackTitle || (isExam ? "CBT" : "Tugas"),
+          title: fallbackTitle || (isExam ? `Ujian CBT (${targetId})` : "Tugas"),
           type: isExam ? ("exam" as const) : ("assignment" as const),
           bab: f.bab || matchingAsg?.bab || matchingExam?.bab,
           targetClasses: [],
-          kelasRef: f.kelas || selectedClassFilter,
-          date: f.gradedAt || f.createdAt || f.updatedAt || f.date || "",
+          kelasRef: f.kelas || stu?.kelas || selectedClassFilter,
+          date: f.gradedAt || f.submittedAt || f.createdAt || f.updatedAt || f.date || "",
           deadline: null,
           rawDoc: f,
         });
@@ -3656,20 +3744,28 @@ export default function DashboardTeacher() {
   const gradesLookupMap = useMemo(() => {
     const map = new Map<string, any>();
     finalGradesList.forEach((f) => {
-      const nisnKey = f.nisn || f.nis;
-      if (!nisnKey) return;
-      
-      const targetId = f.assignmentId || f.examId || f.id;
-      if (targetId) {
-        map.set(`${nisnKey}_${targetId}`, f);
-      }
-      
-      if (f.alignmentId) {
-        map.set(`${nisnKey}_${f.alignmentId}`, f);
-      }
-      
-      if (f.id && f.id.includes("_")) {
-         map.set(f.id, f);
+      const nisnVariants = getNisnVariants(f.nisn, f.nis);
+      if (nisnVariants.length === 0) return;
+
+      const rawId = String(f.id || "");
+      const docPrefix = rawId.includes("_") ? rawId.substring(0, rawId.lastIndexOf("_")) : "";
+      const targetIds = Array.from(
+        new Set(
+          [f.assignmentId, f.examId, f.alignmentId, docPrefix, rawId]
+            .map((v) => String(v || "").trim())
+            .filter(Boolean)
+        )
+      );
+
+      nisnVariants.forEach((nKey) => {
+        targetIds.forEach((tId) => {
+          const compositeKey = `${nKey}_${tId}`;
+          map.set(compositeKey, pickPreferredGrade(map.get(compositeKey), f));
+        });
+      });
+
+      if (rawId) {
+        map.set(rawId, pickPreferredGrade(map.get(rawId), f));
       }
     });
     return map;
@@ -3678,9 +3774,11 @@ export default function DashboardTeacher() {
   const submissionsLookupMap = useMemo(() => {
     const map = new Map<string, any>();
     submissionsList.forEach((s) => {
-      const nisnKey = s.nisn || s.nis;
-      if (!nisnKey || !s.assignmentId) return;
-      map.set(`${nisnKey}_${s.assignmentId}`, s);
+      const nisnVariants = getNisnVariants(s.nisn, s.nis);
+      if (nisnVariants.length === 0 || !s.assignmentId) return;
+      nisnVariants.forEach((nKey) => {
+        map.set(`${nKey}_${s.assignmentId}`, s);
+      });
     });
     return map;
   }, [submissionsList]);
@@ -3688,10 +3786,12 @@ export default function DashboardTeacher() {
   const submissionsByNisnLookup = useMemo(() => {
     const map = new Map<string, any[]>();
     submissionsList.forEach((s) => {
-      const nisnKey = s.nisn || s.nis;
-      if (!nisnKey) return;
-      if (!map.has(nisnKey)) map.set(nisnKey, []);
-      map.get(nisnKey)!.push(s);
+      const nisnVariants = getNisnVariants(s.nisn, s.nis);
+      if (nisnVariants.length === 0) return;
+      nisnVariants.forEach((nKey) => {
+        if (!map.has(nKey)) map.set(nKey, []);
+        map.get(nKey)!.push(s);
+      });
     });
     return map;
   }, [submissionsList]);
@@ -4203,12 +4303,12 @@ export default function DashboardTeacher() {
   };
 
   const calculateNilaiRapor = (stu: any) => {
-    const studentNisn = stu.nisn;
+    const studentNisn = String(stu.nisn || stu.nis || "").trim();
     if (!studentNisn) return 0;
     const targetClass = selectedClassFilter || stu.kelas;
     
     // Use Pre-calculated maps for O(1) lookups
-    const studentAbs = absensiByNisnLookup.get(studentNisn) || [];
+    const studentAbs = absensiByNisnLookup.get(studentNisn) || absensiByNisnLookup.get(studentNisn.replace(/^0+/, "")) || [];
     const { total, persentase } = getStudentAbsensiCounts(stu, studentAbs, targetClass);
     const nilaiKehadiran = total > 0 ? persentase : 100;
 
@@ -4216,8 +4316,13 @@ export default function DashboardTeacher() {
     let utsVal = 0;
     let uasVal = 0;
 
-    const studentGrades = finalGradesByNisnLookup.get(studentNisn);
-    const studentSubmissions = submissionsByNisnLookup.get(studentNisn);
+    const studentGrades =
+      finalGradesByNisnLookup.get(studentNisn) ||
+      finalGradesByNisnLookup.get(studentNisn.replace(/^0+/, "")) ||
+      finalGradesByNisnLookup.get(studentNisn.replace(/^0+/, "").padStart(10, "0"));
+    const studentSubmissions =
+      submissionsByNisnLookup.get(studentNisn) ||
+      submissionsByNisnLookup.get(studentNisn.replace(/^0+/, ""));
 
     const validAssignments = assignmentsList.filter((a) => isAssignmentForClass(a, targetClass));
     validAssignments.forEach((a) => {
@@ -4331,28 +4436,13 @@ export default function DashboardTeacher() {
     doc.text(currentDateStrString, 463, currentY);
     currentY += 25;
 
-    // Prepare Dynamic Headers - filtered by published class
-    const filteredAssignmentsForPDF = assignmentsList.filter((a) => isAssignmentForClass(a, selectedClassFilter));
-    const filteredExamsForPDF = examsList.filter((e) => isExamForClass(e, selectedClassFilter));
-
-    const sortedEvaluations = [
-      ...filteredAssignmentsForPDF.map((a) => ({
-        id: a.id,
-        title: a.materi || "Tugas",
-        type: "assignment",
-        date: a.publishedAt || a.createdAt,
-      })),
-      ...filteredExamsForPDF.map((e) => ({
-        id: e.id,
-        title: e.title || "Ujian",
-        type: "exam",
-        date: e.createdAt,
-      })),
-    ].sort((a, b) => {
-      const dateA = a.date ? new Date(a.date).getTime() : 0;
-      const dateB = b.date ? new Date(b.date).getTime() : 0;
-      return dateA - dateB;
-    });
+    // Prepare Dynamic Headers - aligned with rekapTableColumns (including any recovered/manual CBT cols)
+    const sortedEvaluations = rekapTableColumns.map((c) => ({
+      id: c.id,
+      title: c.title,
+      type: c.type,
+      date: c.date,
+    }));
 
     const tableHeaders = [
       "No",
@@ -4364,9 +4454,9 @@ export default function DashboardTeacher() {
       "Nilai Rapor"
     ];
 
-    // Prepare Rows directly from final_grades Firestore DB sync state (finalGradesList)
+    // Prepare Rows directly from final_grades Firestore/Supabase sync state
     const tableRows = studentsList
-      .filter((stu) => (selectedClassFilter ? stu.kelas === selectedClassFilter : true))
+      .filter((stu) => (selectedClassFilter ? isClassMatch(stu.kelas, selectedClassFilter) : true))
       .sort((a, b) => {
         const classA = (a.kelas || "").toString();
         const classB = (b.kelas || "").toString();
@@ -4381,17 +4471,12 @@ export default function DashboardTeacher() {
       .map((stu, index) => {
         const { total, persentase } = getStudentAbsensiCounts(stu, absensiList, selectedClassFilter || stu.kelas);
         const presenceScore = (total > 0 ? persentase : 100).toString(); // TANPA simbol %
+        const stuKey = String(stu.nisn || stu.nis || "").trim();
 
-        // List each evaluation's grade
+        // List each evaluation's grade using normalized O(1) lookup
         const gradesCols = sortedEvaluations.map((evalItem) => {
-          const fg = finalGradesList.find(
-            (f) =>
-              (f.assignmentId === evalItem.id || f.examId === evalItem.id || f.alignmentId === evalItem.id || (f.id && f.id.startsWith(evalItem.id))) &&
-              (isSameNisn(f.nisn, stu.nisn) || isSameNisn(f.nis, stu.nisn))
-          );
-          const sub = submissionsList.find(
-            (s) => (s.assignmentId === evalItem.id || (s.id && s.id.includes(evalItem.id))) && (isSameNisn(s.nisn, stu.nisn) || isSameNisn(s.nis, stu.nisn))
-          );
+          const fg = gradesLookupMap.get(`${stuKey}_${evalItem.id}`);
+          const sub = submissionsLookupMap.get(`${stuKey}_${evalItem.id}`);
           const cellKey = `${evalItem.id}_${stu.nisn}`;
           const isEdited = editedRekapGrades[cellKey] !== undefined;
 
@@ -4815,27 +4900,12 @@ export default function DashboardTeacher() {
       const workbook = new ExcelJS.default.Workbook();
       const worksheet = workbook.addWorksheet("Rekap_Nilai");
 
-      const filteredAssignmentsForExcel = assignmentsList.filter((a) => isAssignmentForClass(a, selectedClassFilter));
-      const filteredExamsForExcel = examsList.filter((e) => isExamForClass(e, selectedClassFilter));
-
-      const sortedEvaluations = [
-        ...filteredAssignmentsForExcel.map((a) => ({
-          id: a.id,
-          title: a.materi || a.title || "Tugas",
-          type: "assignment" as const,
-          dueDate: a.deadline || a.publishedAt || a.createdAt,
-        })),
-        ...filteredExamsForExcel.map((e) => ({
-          id: e.id,
-          title: e.title || "Ujian",
-          type: "exam" as const,
-          dueDate: e.createdAt,
-        })),
-      ].sort((a, b) => {
-        const dateA = a.dueDate?.toDate?.() || new Date(a.dueDate);
-        const dateB = b.dueDate?.toDate?.() || new Date(b.dueDate);
-        return dateA.getTime() - dateB.getTime();
-      });
+      const sortedEvaluations = rekapTableColumns.map((c) => ({
+        id: c.id,
+        title: c.title,
+        type: c.type,
+        dueDate: c.date,
+      }));
 
       const headers = [
         "No",
@@ -4890,7 +4960,7 @@ export default function DashboardTeacher() {
 
       // Data
       const filteredStudents = studentsList
-        .filter((s) => !selectedClassFilter || s.kelas === selectedClassFilter)
+        .filter((s) => !selectedClassFilter || isClassMatch(s.kelas, selectedClassFilter))
         .sort((a, b) => {
           const classA = (a.kelas || "").toString();
           const classB = (b.kelas || "").toString();
@@ -4908,16 +4978,11 @@ export default function DashboardTeacher() {
         
         const { total, persentase } = getStudentAbsensiCounts(stu, absensiList, selectedClassFilter || stu.kelas);
         const presenceScore = total > 0 ? persentase : 100; // TANPA %
+        const stuKey = String(stu.nisn || stu.nis || "").trim();
 
         const gradesCols = sortedEvaluations.map((ev) => {
-          const fg = finalGradesList.find(
-            (g) =>
-              (g.nisn === stu.nisn || g.nis === stu.nisn) &&
-              (g.assignmentId === ev.id || g.examId === ev.id || g.alignmentId === ev.id || g.id === `${ev.id}_${stu.nisn}`)
-          );
-          const sub = submissionsList.find(
-            (s) => (s.assignmentId === ev.id || s.id === `SUB-${stu.nisn}-${ev.id}`) && (s.nisn === stu.nisn || s.nis === stu.nisn)
-          );
+          const fg = gradesLookupMap.get(`${stuKey}_${ev.id}`);
+          const sub = submissionsLookupMap.get(`${stuKey}_${ev.id}`);
           const cellKey = `${ev.id}_${stu.nisn}`;
           const isEdited = editedRekapGrades[cellKey] !== undefined;
 
@@ -4933,8 +4998,8 @@ export default function DashboardTeacher() {
           return val !== undefined && val !== null && val !== "" ? Number(val) : "-";
         });
 
-        const studentGrades = finalGradesList.filter((fg) => fg.nisn === stu.nisn);
-        const totalScore = studentGrades.reduce((sum, item) => sum + Number(item.nilai || 0), 0);
+        const studentGrades = finalGradesList.filter((fg) => (isSameNisn(fg.nisn, stu.nisn) || isSameNisn(fg.nis, stu.nisn)) && hasNumericScore(fg.nilai ?? fg.score));
+        const totalScore = studentGrades.reduce((sum, item) => sum + Number(item.nilai ?? item.score ?? 0), 0);
         const finalGrade = studentGrades.length > 0 ? Number((totalScore / studentGrades.length).toFixed(1)) : "N/A";
 
         const nilaiRapor = calculateNilaiRapor(stu);
@@ -5978,6 +6043,21 @@ export default function DashboardTeacher() {
         createdAt: new Date().toISOString(),
         teacherId: user?.uid || "mock-admin",
       });
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase.from("exams").upsert({
+            id: examId,
+            title: examTitle.trim(),
+            subject: examSubject.trim(),
+            kelas_ref: kelasRefVal,
+            token: examToken.trim().toUpperCase(),
+            duration: examDuration * 60,
+            kkm: Number(examKkm) || 75,
+            questions: examQuestions,
+            created_at: new Date().toISOString(),
+          });
+        } catch (_) {}
+      }
 
       setExamSaveMessage({
         text: "Ujian Kompetensi Mandiri berhasil diterbitkan dan token dirilis!",
@@ -9858,15 +9938,9 @@ export default function DashboardTeacher() {
                                                    : isExamForClass(col.rawDoc || col, stu.kelas);
 
                                                  let score: any = "";
-                                                 const fGrade = finalGradesList.find(
-                                                   (f) =>
-                                                     (isSameNisn(f.nisn, stu.nisn) || isSameNisn(f.nis, stu.nisn)) &&
-                                                     (f.assignmentId === col.id ||
-                                                       f.examId === col.id ||
-                                                       f.alignmentId === col.id ||
-                                                       (f.id && (f.id === `${col.id}_${stu.nisn}` || f.id.startsWith(col.id))))
-                                                 );
-                                                 const sub = studentSubs.find(
+                                                 const stuKey = String(stu.nisn || stu.nis || "").trim();
+                                                 const fGrade = gradesLookupMap.get(`${stuKey}_${col.id}`);
+                                                 const sub = submissionsLookupMap.get(`${stuKey}_${col.id}`) || studentSubs.find(
                                                    (s) =>
                                                      (isSameNisn(s.nisn, stu.nisn) || isSameNisn(s.nis, stu.nisn)) &&
                                                      (s.assignmentId === col.id || (s.id && s.id.includes(col.id)))
@@ -10123,11 +10197,12 @@ export default function DashboardTeacher() {
                                               : isExamForClass(col.rawDoc || col, stu.kelas);
 
                                             let score: any = "";
-                                            // 1. Check finalGradesList (primary source for finalized scores)
-                                            const fGrade = gradesLookupMap.get(`${stu.nisn}_${col.id}`);
+                                            const stuKey = String(stu.nisn || stu.nis || "").trim();
+                                            // 1. Check finalGradesList (primary source for finalized scores + recovered exam_sessions)
+                                            const fGrade = gradesLookupMap.get(`${stuKey}_${col.id}`);
 
                                             // 2. Check submissionsList
-                                            const sub = submissionsLookupMap.get(`${stu.nisn}_${col.id}`);
+                                            const sub = submissionsLookupMap.get(`${stuKey}_${col.id}`);
 
                                             if (col.type === "assignment") {
                                               if (sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" && sub?.status === "sudah dinilai") {
