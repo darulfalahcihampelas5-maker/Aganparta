@@ -1,4 +1,5 @@
 import { auth } from './firebase';
+import { setFirebaseQuotaExhausted } from './supabaseSync';
 
 export enum OperationType {
   CREATE = 'create',
@@ -36,11 +37,13 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     path
   }
   
-  if (errInfo.error && errInfo.error.toLowerCase().includes("quota")) {
+  const errLower = errInfo.error ? errInfo.error.toLowerCase() : "";
+  if (errLower.includes("quota") || errLower.includes("resource-exhausted") || errLower.includes("unavailable") || errLower.includes("exceeded")) {
+    setFirebaseQuotaExhausted(true);
     console.warn("Firestore Quota Exceeded:", errInfo.path);
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('firestore-quota-exceeded', {
-        detail: { message: "Kuota server harian (Firebase) telah habis. Aplikasi dapat digunakan kembali pada pukul 14.00 WIB atau jam 2 siang." }
+        detail: { message: "Kuota server harian (Firebase) telah habis. Mengalihkan ke mode offline & Supabase." }
       }));
     }
     return;

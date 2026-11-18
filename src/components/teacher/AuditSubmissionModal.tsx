@@ -31,6 +31,8 @@ interface AuditSubmissionModalProps {
   setGradeValue: (val: string) => void;
   feedbackReason: string;
   setFeedbackReason: (val: string) => void;
+  teacherNote?: string;
+  setTeacherNote?: (val: string) => void;
   isRejecting: boolean;
   setIsRejecting: (val: boolean) => void;
   isSavingGrade: boolean;
@@ -48,6 +50,8 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
   setGradeValue,
   feedbackReason,
   setFeedbackReason,
+  teacherNote,
+  setTeacherNote,
   isRejecting,
   setIsRejecting,
   isSavingGrade,
@@ -59,6 +63,7 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
   const [justUsedSuggested, setJustUsedSuggested] = useState(false);
   const [driveRenderMode, setDriveRenderMode] = useState<"pdf" | "image">("pdf");
   const [focusTopZoom, setFocusTopZoom] = useState(false);
+  const [showAllTemplatesManual, setShowAllTemplatesManual] = useState(false);
 
   const fileUrl = submission?.fileUrl || "";
   const isExplicitPdf =
@@ -105,6 +110,14 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
 
   const suggestedScore = submission?.suggestedGrade || "100";
   const quickGrades = [100, 95, 90, 85, 80, 75];
+  const quickPraiseTemplates: Record<number, string> = {
+    100: "Luar biasa sempurna! Tugas dikerjakan dengan sangat teliti, tepat waktu, dan sangat memuaskan. Pertahankan prestasimu!",
+    95: "Sangat baik! Jawaban dan pemahaman materi sudah sangat mantap serta rapi. Pertahankan dan terus berprestasi!",
+    90: "Bagus sekali! Kualitas pengerjaan tugas sudah baik dan rapi. Terus pertahankan semangat belajarnya.",
+    85: "Hasil pekerjaan sudah cukup baik dan memenuhi kriteria. Sedikit lagi menuju nilai maksimal, tetap semangat!",
+    80: "Cukup baik dan tuntas KKM. Mari lebih teliti dan tingkatkan pemahaman materi pada tugas-tugas berikutnya.",
+    75: "Tugas tuntas KKM (75). Tolong diperhatikan agar jangan sampai telat mengirim tugas lagi ya, karena ketepatan waktu pengumpulan tugas akan mempengaruhi nilai rapor dan kedisiplinan Anda. Tetap semangat belajar!",
+  };
   const quickRejectionReasons = [
     "Link Google Drive tugas masih dibatasi (terkunci). Ubah akses berbagi menjadi 'Siapa saja yang memiliki link' lalu kirim ulang tugas.",
     "Tugas di buku catatan belum ditambahkan Nama dan Kelas silahkan tambahkan dan kirim ulang tugas",
@@ -128,9 +141,19 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
     document.body.removeChild(a);
   };
 
+  const handleGradeChange = (newGrade: string) => {
+    setGradeValue(newGrade);
+    const num = parseInt(newGrade, 10);
+    if (num && quickPraiseTemplates[num]) {
+      if (setTeacherNote) setTeacherNote(quickPraiseTemplates[num]);
+      else setFeedbackReason(quickPraiseTemplates[num]);
+      setShowAllTemplatesManual(false);
+    }
+  };
+
   const handleApplySuggested = () => {
     const scoreToUse = String(suggestedScore || "100");
-    setGradeValue(scoreToUse);
+    handleGradeChange(scoreToUse);
     setJustUsedSuggested(true);
     setTimeout(() => {
       setJustUsedSuggested(false);
@@ -544,7 +567,7 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
                       max="100"
                       placeholder="Contoh: 100"
                       value={gradeValue}
-                      onChange={(e) => setGradeValue(e.target.value)}
+                      onChange={(e) => handleGradeChange(e.target.value)}
                       className="w-full text-center py-4 px-4 text-3xl font-mono font-black text-slate-900 bg-slate-50 border-2 border-slate-200 rounded-2xl focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/20 outline-none transition-all"
                     />
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 uppercase">
@@ -563,7 +586,7 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
                       <button
                         key={val}
                         type="button"
-                        onClick={() => setGradeValue(val.toString())}
+                        onClick={() => handleGradeChange(val.toString())}
                         className={`py-2 px-3 rounded-xl font-mono text-sm font-black border transition-all cursor-pointer ${
                           gradeValue === val.toString()
                             ? "bg-[#85cc00] text-slate-950 border-[#85cc00] shadow-sm scale-[1.02]"
@@ -584,11 +607,93 @@ export const AuditSubmissionModal: React.FC<AuditSubmissionModalProps> = ({
                   <textarea
                     rows={3}
                     placeholder="Contoh: Pekerjaan sangat rapi dan teliti. Pertahankan prestasimu!"
-                    value={feedbackReason}
-                    onChange={(e) => setFeedbackReason(e.target.value)}
+                    value={teacherNote !== undefined ? teacherNote : feedbackReason}
+                    onChange={(e) => setTeacherNote ? setTeacherNote(e.target.value) : setFeedbackReason(e.target.value)}
                     className="w-full p-3 text-xs font-medium text-slate-900 bg-slate-50 border-2 border-slate-200 rounded-2xl focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/20 outline-none transition-all resize-none"
                   />
                 </div>
+
+                {/* Status Catatan Otomatis atau Template Pilihan */}
+                {(() => {
+                  const numericGrade = parseInt(gradeValue, 10);
+                  const hasMatchingTemplate = Boolean(numericGrade && quickPraiseTemplates[numericGrade]);
+                  const shouldShowTemplateList = !hasMatchingTemplate || showAllTemplatesManual;
+
+                  return (
+                    <div className="space-y-2">
+                      {hasMatchingTemplate ? (
+                        <div className="flex items-center justify-between text-[11px] text-[#436800] bg-[#85cc00]/10 border border-[#85cc00]/25 px-3 py-2 rounded-xl">
+                          <span className="flex items-center gap-1.5 font-bold">
+                            <Sparkles className="w-3.5 h-3.5 text-[#558300]" />
+                            Catatan otomatis terisi untuk nilai {numericGrade}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setShowAllTemplatesManual(!showAllTemplatesManual)}
+                            className="text-[10px] font-extrabold text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                          >
+                            {showAllTemplatesManual ? "Tutup Pilihan" : "Ganti Catatan Lain"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px]">
+                          <span className="font-bold flex items-center gap-1.5 mb-0.5">
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            Nilai {gradeValue ? `"${gradeValue}"` : "(belum dipilih)"} tidak ada di daftar catatan default:
+                          </span>
+                          <p className="text-[10px] text-amber-700">
+                            Silakan ketik catatan sendiri atau pilih salah satu template cepat 1-klik di bawah ini:
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Daftar Pilihan 1-Klik: Hanya tampil jika nilainya tidak ada di daftar catatan, atau jika guru mengklik "Ganti Catatan Lain" */}
+                      {shouldShowTemplateList && (
+                        <div className="space-y-1.5 pt-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                            Pilihan Template Catatan Cepat (75 - 100):
+                          </span>
+                          <div className="space-y-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-0.5">
+                            {[100, 95, 90, 85, 80, 75].map((score) => {
+                              const template = quickPraiseTemplates[score];
+                              const isCurrentText = (teacherNote !== undefined ? teacherNote : feedbackReason) === template;
+                              return (
+                                <button
+                                  key={score}
+                                  type="button"
+                                  onClick={() => {
+                                    if (setTeacherNote) setTeacherNote(template);
+                                    else setFeedbackReason(template);
+                                  }}
+                                  className={`w-full text-left p-2.5 rounded-xl text-[11px] font-medium border transition-all flex items-start gap-2.5 cursor-pointer ${
+                                    isCurrentText
+                                      ? "bg-[#85cc00]/20 border-[#85cc00] text-slate-950 shadow-xs font-semibold"
+                                      : "bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200"
+                                  }`}
+                                >
+                                  <span
+                                    className={`shrink-0 px-2 py-0.5 rounded-lg text-[10px] font-mono font-black ${
+                                      score === 75
+                                        ? "bg-amber-100 text-amber-900 border border-amber-300"
+                                        : score >= 90
+                                        ? "bg-[#85cc00]/25 text-[#436800] border border-[#85cc00]/40"
+                                        : "bg-slate-200 text-slate-700"
+                                    }`}
+                                  >
+                                    {score}
+                                  </span>
+                                  <span className="flex-1 leading-snug">
+                                    {template}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Primary Action Button: Terima dan Beri Nilai */}
                 <div className="mt-auto pt-4 border-t border-slate-100">

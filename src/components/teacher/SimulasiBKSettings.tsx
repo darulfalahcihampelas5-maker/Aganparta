@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { dbSetDoc as setDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../../lib/supabaseSync";
 import { doc, onSnapshot } from "firebase/firestore";
-import { dbSetDoc as setDoc } from "../../lib/supabaseSync";
 import { db } from "../../lib/firebase";
 import { 
   Settings, 
@@ -46,31 +46,44 @@ export const SimulasiBKSettings: React.FC<SimulasiBKSettingsProps> = ({ classesL
   const [expandedClass, setExpandedClass] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isFirebaseQuotaExhausted()) {
+      setIsLoading(false);
+      return;
+    }
     const docRef = doc(db, "config", "simulasiBK");
-    const unsubscribe = onSnapshot(docRef, (snap) => {
-      if (snap.exists()) {
-        const data = snap.data();
-        // Support old format (activeClasses array) for backward compatibility during migration
-        if (data.activeClasses && !data.classConfigs) {
-          const initialConfigs: Record<string, ClassConfig> = {};
-          data.activeClasses.forEach((className: string) => {
-            initialConfigs[className] = {
-              active: true,
-              chapters: AVAILABLE_CHAPTERS.map(c => c.id)
-            };
-          });
-          setClassConfigs(initialConfigs);
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onSnapshot(docRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          // Support old format (activeClasses array) for backward compatibility during migration
+          if (data.activeClasses && !data.classConfigs) {
+            const initialConfigs: Record<string, ClassConfig> = {};
+            data.activeClasses.forEach((className: string) => {
+              initialConfigs[className] = {
+                active: true,
+                chapters: AVAILABLE_CHAPTERS.map(c => c.id)
+              };
+            });
+            setClassConfigs(initialConfigs);
+          } else {
+            setClassConfigs(data.classConfigs || {});
+          }
         } else {
-          setClassConfigs(data.classConfigs || {});
+          setClassConfigs({});
         }
-      } else {
-        setClassConfigs({});
-      }
+        setIsLoading(false);
+      }, (err) => {
+        const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
+        if (msg.includes("quota") || msg.includes("resource-exhausted") || msg.includes("unavailable") || msg.includes("permission")) {
+          setFirebaseQuotaExhausted(true);
+        }
+        console.error("Failed to fetch simulasiBK config", err);
+        setIsLoading(false);
+      });
+    } catch (err) {
       setIsLoading(false);
-    }, (err) => {
-      console.error("Failed to fetch simulasiBK config", err);
-      setIsLoading(false);
-    });
+    }
 
     return () => unsubscribe();
   }, []);

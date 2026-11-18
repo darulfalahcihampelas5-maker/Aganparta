@@ -17,7 +17,7 @@ import {
   where,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../lib/supabaseSync";
 import { OperationType, handleFirestoreError, getLocalCache, setLocalCache, clearTeacherCaches } from "../lib/firestoreUtils";
 import { googleSignIn } from "../lib/googleAuth";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
@@ -1542,6 +1542,7 @@ export default function DashboardTeacher() {
   const [selectedSubmission, setSelectedSubmission] = useState<any>(null);
   const [gradeValue, setGradeValue] = useState("");
   const [feedbackReason, setFeedbackReason] = useState("");
+  const [teacherNote, setTeacherNote] = useState("");
   const [isRejecting, setIsRejecting] = useState(false);
   const [isMassAuditing, setIsMassAuditing] = useState(false);
   const [isRefreshingSubmissions, setIsRefreshingSubmissions] = useState(false);
@@ -1668,7 +1669,26 @@ export default function DashboardTeacher() {
       suggestedGrade: calculatedGrade,
     });
     setGradeValue(initialScore);
-    setFeedbackReason(submission.keterangan || submission.feedback || submission.rejectionReason || "");
+
+    // Rejection note stays in "Alasan / Catatan Perbaikan *" so teacher knows why it was rejected
+    const rejectionNote = submission.rejectionReason || (submission.status === "ditolak" || submission.wasRejected ? submission.keterangan : "") || "";
+    setFeedbackReason(rejectionNote);
+
+    const quickPraiseTemplates: Record<number, string> = {
+      100: "Luar biasa sempurna! Tugas dikerjakan dengan sangat teliti, tepat waktu, dan sangat memuaskan. Pertahankan prestasimu!",
+      95: "Sangat baik! Jawaban dan pemahaman materi sudah sangat mantap serta rapi. Pertahankan dan terus berprestasi!",
+      90: "Bagus sekali! Kualitas pengerjaan tugas sudah baik dan rapi. Terus pertahankan semangat belajarnya.",
+      85: "Hasil pekerjaan sudah cukup baik dan memenuhi kriteria. Sedikit lagi menuju nilai maksimal, tetap semangat!",
+      80: "Cukup baik dan tuntas KKM. Mari lebih teliti dan tingkatkan pemahaman materi pada tugas-tugas berikutnya.",
+      75: "Tugas tuntas KKM (75). Tolong diperhatikan agar jangan sampai telat mengirim tugas lagi ya, karena ketepatan waktu pengumpulan tugas akan mempengaruhi nilai rapor dan kedisiplinan Anda. Tetap semangat belajar!",
+    };
+    const numInit = parseInt(initialScore, 10);
+    // "Catatan Pak Agan untuk Siswa (Opsional)" stays clean and directly receives template for score
+    const existingPraiseNote = (!submission.wasRejected && submission.status !== "ditolak" && !submission.rejectionReason)
+      ? (submission.catatan || submission.keterangan || (numInit && quickPraiseTemplates[numInit]) || "")
+      : ((numInit && quickPraiseTemplates[numInit]) || "");
+    setTeacherNote(existingPraiseNote);
+
     setIsRejecting(false);
     setIsGradingModalOpen(true);
   };
@@ -1844,7 +1864,7 @@ export default function DashboardTeacher() {
           title: colTitle,
           bab: colBab,
           type: examObj ? "CBT" : (asgObj?.type || "Tugas"),
-          catatan: feedbackReason.trim(),
+          catatan: (teacherNote || "").trim(),
           gradedAt: now,
           updatedAt: now,
         };
@@ -1868,8 +1888,9 @@ export default function DashboardTeacher() {
           status: "sudah dinilai",
           nilai: finalScore,
           fileUrl: null, // Clear large image data to optimize storage
-          keterangan: feedbackReason.trim(),
+          keterangan: (teacherNote || "").trim(),
           rejectionReason: "",
+          wasRejected: false,
           gradedAt: now,
           updatedAt: now,
         };
@@ -2410,9 +2431,45 @@ export default function DashboardTeacher() {
       });
     });
 
+    // Real-time listener for grading rubric changes
+    let unsubscribeRubric = () => {};
+    if (!isFirebaseQuotaExhausted()) {
+      try {
+        unsubscribeRubric = onSnapshot(
+          doc(db, "config", "grading_rubric"),
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              const r = {
+                kehadiran: Number(data.kehadiran) ?? 20,
+                tugas: Number(data.tugas) ?? 50,
+                uts: Number(data.uts) ?? 10,
+                uas: Number(data.uas) ?? 20,
+              };
+              setRubric(r);
+              setEditKehadiran(String(r.kehadiran));
+              setEditTugas(String(r.tugas));
+              setEditUts(String(r.uts));
+              setEditUas(String(r.uas));
+              setLocalCache("firas_cache_rubric", r);
+            }
+          },
+          (err) => {
+            const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
+            if (msg.includes("quota") || msg.includes("resource-exhausted") || msg.includes("exceeded")) {
+              setFirebaseQuotaExhausted(true);
+              window.dispatchEvent(new CustomEvent("firestore-quota-exceeded"));
+            }
+            console.warn("Rubric snapshot error:", err);
+          }
+        );
+      } catch (_) {}
+    }
+
     return () => {
       clearTimeout(maxLoadingTimer);
       unsubscribeGrades();
+      unsubscribeRubric();
     };
   }, []);
 
@@ -2463,15 +2520,29 @@ export default function DashboardTeacher() {
 
     setIsSavingRubric(true);
     try {
-      await setDoc(doc(db, "config", "grading_rubric"), {
+      const newRubric = {
         kehadiran: k,
         tugas: t,
         uts: utsVal,
         uas: uasVal,
         updatedAt: new Date().toISOString()
-      });
+      };
+      await setDoc(doc(db, "config", "grading_rubric"), newRubric, { merge: true });
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase.from("app_collections").upsert({
+            id: "config_grading_rubric",
+            collection_name: "config",
+            doc_id: "grading_rubric",
+            data: newRubric,
+            updated_at: newRubric.updatedAt
+          });
+        } catch (_) {}
+      }
+      setRubric(newRubric);
+      setLocalCache("firas_cache_rubric", newRubric);
       setIsEditingRubric(false);
-      showAlert("Berhasil", "Rubrik penilaian rapor berhasil disimpan ke cloud!", "alert");
+      showAlert("Berhasil", "Rubrik penilaian rapor berhasil disimpan ke cloud dan langsung diterapkan ke nilai siswa!", "alert");
     } catch (error: any) {
       console.warn("Gagal menyimpan rubrik:", error);
       showAlert("Gagal", "Terjadi kesalahan saat menyimpan rubrik ke cloud: " + (error.message || error), "danger");
@@ -3313,6 +3384,7 @@ export default function DashboardTeacher() {
           console.warn("Gagal sinkron otomatis respon tugas realtime:", error);
           const msg = error && (error as any).message ? (error as any).message.toLowerCase() : String(error).toLowerCase();
           if (msg.includes('quota') || msg.includes('resource-exhausted') || msg.includes('exceeded')) {
+            setFirebaseQuotaExhausted(true);
             window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
           }
         }
@@ -12794,6 +12866,8 @@ export default function DashboardTeacher() {
         setGradeValue={setGradeValue}
         feedbackReason={feedbackReason}
         setFeedbackReason={setFeedbackReason}
+        teacherNote={teacherNote}
+        setTeacherNote={setTeacherNote}
         isRejecting={isRejecting}
         setIsRejecting={setIsRejecting}
         isSavingGrade={isSavingGrade}

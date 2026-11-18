@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../../lib/firebase";
-import { dbGetDocs } from "../../lib/supabaseSync";
+import { dbGetDocs, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../../lib/supabaseSync";
 import { isClassMatch, isExamForClass, isSameNisn } from "../../lib/gradeUtils";
 
 interface LiveProctoringModalProps {
@@ -78,6 +78,7 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
     if (!isOpen || !exam?.id) return;
 
     loadFallbackSessions();
+    if (isFirebaseQuotaExhausted()) return;
 
     let unsubscribe: (() => void) | undefined;
     try {
@@ -95,6 +96,10 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
           setSessionsMap((prev) => ({ ...prev, ...updated }));
         },
         (err) => {
+          const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
+          if (msg.includes("quota") || msg.includes("resource-exhausted") || msg.includes("unavailable") || msg.includes("permission")) {
+            setFirebaseQuotaExhausted(true);
+          }
           console.warn("Realtime listener exam_sessions dialihkan ke polling:", err);
         }
       );

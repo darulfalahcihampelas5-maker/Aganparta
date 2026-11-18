@@ -8,7 +8,7 @@ import {
   doc,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../lib/supabaseSync";
 import { db, auth, storage } from "../lib/firebase";
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 import { getDriveImageUrl, getDrivePdfEmbedUrl, isYouTubeUrl, getYouTubeEmbedUrl, getYouTubeThumbnailUrl, getMediaEmbedUrl, getExternalOpenUrl, getDirectDownloadUrl, getAlternativePdfEmbedUrl } from "../lib/driveUtils";
@@ -158,12 +158,15 @@ interface FirestoreErrorInfo {
 
 function dispatchIfQuotaError(e: any) {
   const msg = e && e.message ? e.message.toLowerCase() : String(e).toLowerCase();
-  if (msg.includes('quota') || msg.includes('resource-exhausted') || msg.includes('exceeded')) {
-    window.dispatchEvent(new CustomEvent('firestore-quota-exceeded', {
-      detail: {
-        message: "Batas kuota pembacaan harian Firebase (Free Tier) telah tercapai untuk hari ini. Kuota akan direset otomatis pada hari berikutnya, atau Anda dapat menaikkan paket/billing database di Firebase Console."
-      }
-    }));
+  if (msg.includes('quota') || msg.includes('resource-exhausted') || msg.includes('exceeded') || msg.includes('unavailable')) {
+    setFirebaseQuotaExhausted(true);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('firestore-quota-exceeded', {
+        detail: {
+          message: "Batas kuota pembacaan harian Firebase (Free Tier) telah tercapai untuk hari ini. Mengalihkan ke mode offline & Supabase."
+        }
+      }));
+    }
   }
 }
 
@@ -1232,34 +1235,42 @@ export default function DashboardStudent() {
     let unsubscribe: any = null;
     let unsubscribePeriod: any = null;
     let unsubscribeTeacherProfile: any = null;
-    import("firebase/firestore").then(({ onSnapshot }) => {
-      if (!isMounted) return;
-      unsubscribe = onSnapshot(docRef, (snap: any) => {
-        if (snap && snap.exists() && snap.data()?.quote) {
-          setMotivationalQuote(snap.data().quote);
-        }
-      }, () => {});
-      unsubscribePeriod = onSnapshot(periodDocRef, (snap: any) => {
-        if (snap && snap.exists()) {
-          const d = snap.data();
-          if (d?.academicYear || d?.semester) {
-            setAcademicPeriod({
-              academicYear: d.academicYear || "2026/2027",
-              semester: d.semester || "Ganjil",
-            });
-            mergeTeacherSettingsPatch({
-              academicYear: d.academicYear,
-              semester: d.semester,
-            });
+    if (!isFirebaseQuotaExhausted()) {
+      import("firebase/firestore").then(({ onSnapshot }) => {
+        if (!isMounted) return;
+        unsubscribe = onSnapshot(docRef, (snap: any) => {
+          if (snap && snap.exists() && snap.data()?.quote) {
+            setMotivationalQuote(snap.data().quote);
           }
-        }
-      }, () => {});
-      unsubscribeTeacherProfile = onSnapshot(teacherProfileDocRef, (snap: any) => {
-        if (snap && snap.exists()) {
-          applyTeacherProfile(snap.data());
-        }
-      }, () => {});
-    }).catch(() => {});
+        }, (err: any) => {
+          dispatchIfQuotaError(err);
+        });
+        unsubscribePeriod = onSnapshot(periodDocRef, (snap: any) => {
+          if (snap && snap.exists()) {
+            const d = snap.data();
+            if (d?.academicYear || d?.semester) {
+              setAcademicPeriod({
+                academicYear: d.academicYear || "2026/2027",
+                semester: d.semester || "Ganjil",
+              });
+              mergeTeacherSettingsPatch({
+                academicYear: d.academicYear,
+                semester: d.semester,
+              });
+            }
+          }
+        }, (err: any) => {
+          dispatchIfQuotaError(err);
+        });
+        unsubscribeTeacherProfile = onSnapshot(teacherProfileDocRef, (snap: any) => {
+          if (snap && snap.exists()) {
+            applyTeacherProfile(snap.data());
+          }
+        }, (err: any) => {
+          dispatchIfQuotaError(err);
+        });
+      }).catch(() => {});
+    }
 
     return () => {
       isMounted = false;
@@ -1614,27 +1625,37 @@ export default function DashboardStudent() {
     uas: 20,
   });
 
-  // Fetch Grading Rubric from Firestore with cache
+  // Fetch Grading Rubric from Firestore with cache & real-time snapshot listener
   useEffect(() => {
     const cacheKey = "firas_cache_rubric";
     const cached = getLocalCache<any>(cacheKey, 60 * 60 * 1000);
     if (cached) {
       setRubric(cached);
-      return;
     }
-    getDoc(doc(db, "config", "grading_rubric")).then((docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          const r = {
-            kehadiran: Number(data.kehadiran) ?? 20,
-            tugas: Number(data.tugas) ?? 50,
-            uts: Number(data.uts) ?? 10,
-            uas: Number(data.uas) ?? 20,
-          };
-          setRubric(r);
-          setLocalCache(cacheKey, r);
+    if (isFirebaseQuotaExhausted()) return;
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onSnapshot(
+        doc(db, "config", "grading_rubric"),
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            const r = {
+              kehadiran: Number(data.kehadiran) ?? 20,
+              tugas: Number(data.tugas) ?? 50,
+              uts: Number(data.uts) ?? 10,
+              uas: Number(data.uas) ?? 20,
+            };
+            setRubric(r);
+            setLocalCache(cacheKey, r);
+          }
+        },
+        (error) => {
+          dispatchIfQuotaError(error);
         }
-      }).catch((error) => { console.warn('Gagal mengambil rubrik:', error); dispatchIfQuotaError(error); });
+      );
+    } catch (_) {}
+    return () => unsubscribe();
   }, []);
 
   // Announcement interaction
@@ -3130,10 +3151,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       },
       (error) => {
         console.warn("Realtime assignments notification snapshot error:", error);
-        // Only report fatal errors, common quota/auth issues are logged
-        if (error.message.includes("permission")) {
-          // Silent or report if critical
-        }
+        dispatchIfQuotaError(error);
       }
     );
 
@@ -4866,6 +4884,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         resubmittedAt: isPerbaikan ? nowIso : null,
         wasRejected: isPerbaikan || existingSub?.wasRejected || false,
         keterangan: existingNote,
+        rejectionReason: existingSub?.rejectionReason || existingNote || "",
         status: "menunggu penilaian guru",
       };
 
@@ -8654,6 +8673,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         resubmittedAt: isPerbaikan ? nowIso : null,
                         wasRejected: isPerbaikan || existingSub?.wasRejected || false,
                         keterangan: existingNote,
+                        rejectionReason: existingSub?.rejectionReason || existingNote || "",
                         status: "menunggu penilaian guru",
                       };
 
