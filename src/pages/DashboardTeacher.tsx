@@ -5216,55 +5216,96 @@ export default function DashboardTeacher() {
       const headers = [
         "No",
         "NIS",
-        "Nama Siswa",
+        "Nama Lengkap Siswa",
         "Kelas",
         "Nilai Kehadiran",
         ...sortedEvaluations.map((e) => e.title),
-        "Nilai Akhir",
         "Nilai Rapor"
       ];
 
-      // Set Title instead of image
-      const endColIndex = Math.max(8, headers.length);
+      const endColIndex = Math.max(7, headers.length);
+      const namaSiswaColIndex = 3;
+      const nilaiRaporColIndex = headers.length;
+
+      // 1. Header Instansi: SMA NEGERI 1 CILILIN (Font: Times New Roman, Size: 16, Bold)
       worksheet.mergeCells(1, 1, 2, endColIndex);
       const headerCell = worksheet.getCell('A1');
       headerCell.value = "SMA NEGERI 1 CILILIN";
-      headerCell.font = { bold: true, size: 16 };
+      headerCell.font = { name: "Times New Roman", bold: true, size: 16 };
       headerCell.alignment = { horizontal: 'center', vertical: 'middle' };
+
+      // 2. Sub-Header: LAPORAN PENILAIAN - INFORMATIKA - [Nomor Kelas tanpa kata Kelas] (Font: Times New Roman, Size: 16, Bold)
+      const cleanClassName = (cls?: string) => {
+        if (!cls) return "";
+        return cls.replace(/^kelas\s*/i, "").trim();
+      };
+
+      const activeClassLabel = selectedClassFilter && selectedClassFilter !== "SEMUA_KELAS"
+        ? cleanClassName(selectedClassFilter).toUpperCase()
+        : "SEMUA KELAS";
+      const subjectLabel = (userSettings?.subjectName || "INFORMATIKA").toUpperCase();
 
       worksheet.mergeCells(3, 1, 3, endColIndex);
       const subHeaderCell = worksheet.getCell('A3');
-      subHeaderCell.value = `LAPORAN PENILAIAN - ${(userSettings?.subjectName || "").toUpperCase()}`;
-      subHeaderCell.font = { bold: true, size: 12 };
-      subHeaderCell.alignment = { horizontal: 'center' };
+      subHeaderCell.value = `LAPORAN PENILAIAN - ${subjectLabel} - ${activeClassLabel}`;
+      subHeaderCell.font = { name: "Times New Roman", bold: true, size: 16 };
+      subHeaderCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
+      // 3. Tanggal & Jam Pas Pertama Kali Diekspor ke Excel (Font: Times New Roman, Size: 12, Italic)
+      const exportTimestamp = new Date();
+      const formattedDate = exportTimestamp.toLocaleDateString("id-ID", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      });
+      const formattedTime = exportTimestamp.toLocaleTimeString("id-ID", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }) + " WIB";
+
+      worksheet.mergeCells(4, 1, 4, endColIndex);
       const dateCell = worksheet.getCell('A4');
-      dateCell.value = `Tanggal Update Nilai: ${new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}`;
-      dateCell.font = { italic: true, size: 10, bold: true };
+      dateCell.value = `Tanggal Update Nilai: ${formattedDate} | Update Jam : ${formattedTime}`;
+      dateCell.font = { name: "Times New Roman", size: 12, italic: true };
+      dateCell.alignment = { horizontal: 'center', vertical: 'middle' };
 
+      // Row 5 spacer
+      worksheet.getRow(5).height = 10;
+
+      // 4. Header Tabel (Row 6)
       const startRow = 6;
-
-      // Headers
-      worksheet.getRow(startRow).values = headers;
-      
       const headerRow = worksheet.getRow(startRow);
-      headerRow.font = { bold: true };
-      headerRow.alignment = { horizontal: 'center' };
-      headerRow.eachCell((cell) => {
+      headerRow.values = headers;
+      // Allow row height to auto-adjust based on content / wrap text
+      headerRow.height = 42;
+      
+      headerRow.eachCell((cell, colNumber) => {
+        const isNilaiRapor = colNumber === nilaiRaporColIndex;
+        cell.font = {
+          name: "Times New Roman",
+          bold: true,
+          size: isNilaiRapor ? 16 : 12,
+        };
+        cell.alignment = {
+          horizontal: 'center',
+          vertical: 'middle',
+          wrapText: true,
+        };
         cell.border = {
           top: { style: 'thin' },
           left: { style: 'thin' },
           bottom: { style: 'thin' },
-          right: { style: 'thin' }
+          right: { style: 'thin' },
         };
         cell.fill = {
           type: 'pattern',
           pattern: 'solid',
-          fgColor: { argb: 'FFE5E7EB' }
+          fgColor: { argb: 'FFE5E7EB' },
         };
       });
 
-      // Data
+      // 5. Data Siswa
       const filteredStudents = studentsList
         .filter((s) => !selectedClassFilter || isClassMatch(s.kelas, selectedClassFilter))
         .sort((a, b) => {
@@ -5279,12 +5320,21 @@ export default function DashboardTeacher() {
           );
         });
 
+      // Track max length of student full names for column width adaptation
+      let maxNameLength = 18; // minimum width
+
       filteredStudents.forEach((stu, index) => {
-        const row = worksheet.getRow(startRow + 1 + index);
+        const currentRow = worksheet.getRow(startRow + 1 + index);
+        currentRow.height = 24;
         
         const { total, persentase } = getStudentAbsensiCounts(stu, absensiList, selectedClassFilter || stu.kelas);
-        const presenceScore = total > 0 ? persentase : 100; // TANPA %
+        const presenceScore = total > 0 ? persentase : 100;
         const stuKey = String(stu.nisn || stu.nis || "").trim();
+
+        const fullName = stu.displayName || stu.studentName || "-";
+        if (fullName.length > maxNameLength) {
+          maxNameLength = fullName.length;
+        }
 
         const gradesCols = sortedEvaluations.map((ev) => {
           const fg = gradesLookupMap.get(`${stuKey}_${ev.id}`);
@@ -5304,43 +5354,79 @@ export default function DashboardTeacher() {
           return val !== undefined && val !== null && val !== "" ? Number(val) : "-";
         });
 
-        const studentGrades = finalGradesList.filter((fg) => (isSameNisn(fg.nisn, stu.nisn) || isSameNisn(fg.nis, stu.nisn)) && hasNumericScore(fg.nilai ?? fg.score));
-        const totalScore = studentGrades.reduce((sum, item) => sum + Number(item.nilai ?? item.score ?? 0), 0);
-        const finalGrade = studentGrades.length > 0 ? Number((totalScore / studentGrades.length).toFixed(1)) : "N/A";
+        const rawNilaiRapor = calculateNilaiRapor(stu);
+        const nilaiRapor = rawNilaiRapor !== undefined && rawNilaiRapor !== null && !isNaN(rawNilaiRapor) ? rawNilaiRapor : "-";
 
-        const nilaiRapor = calculateNilaiRapor(stu);
+        const studentKelasClean = cleanClassName(stu.kelas || "-");
 
-        row.values = [
+        currentRow.values = [
           index + 1,
           stu.nisn || "-",
-          stu.displayName || stu.studentName || "-",
-          stu.kelas || "-",
+          fullName,
+          studentKelasClean,
           presenceScore,
           ...gradesCols,
-          finalGrade,
-          nilaiRapor
+          nilaiRapor,
         ];
 
-        row.eachCell((cell) => {
+        currentRow.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const isNilaiRapor = colNumber === nilaiRaporColIndex;
+          const isNamaSiswa = colNumber === namaSiswaColIndex;
+          const isCellEmptyOrDash =
+            cell.value === "-" ||
+            cell.value === "" ||
+            cell.value === "N/A" ||
+            cell.value === null ||
+            cell.value === undefined;
+
+          // Border tipis pada semua cell
           cell.border = {
             top: { style: 'thin' },
             left: { style: 'thin' },
             bottom: { style: 'thin' },
-            right: { style: 'thin' }
+            right: { style: 'thin' },
           };
+
+          // Posisi font: Semuanya di tengah kecuali Kolom Nama Lengkap Siswa (di kiri)
+          cell.alignment = {
+            horizontal: isNamaSiswa ? 'left' : 'center',
+            vertical: 'middle',
+          };
+
+          const fontSize = isNilaiRapor ? 16 : 12;
+
+          // Jika ada nilai yang kosong (-), tambahkan warna merah pada cell
+          if (isCellEmptyOrDash) {
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFFFC7CE' }, // Soft red fill
+            };
+            cell.font = {
+              name: 'Times New Roman',
+              size: fontSize,
+              bold: true,
+              color: { argb: 'FF9C0006' }, // Teks merah pekat
+            };
+          } else {
+            cell.font = {
+              name: 'Times New Roman',
+              size: fontSize,
+              bold: isNilaiRapor,
+            };
+          }
         });
       });
 
-      // Column widths
+      // 6. Lebar Kolom (Kolom Nama menyesuaikan panjang nama siswa terpanjang)
       const colWidths = [
-        { width: 5 },  // No
-        { width: 15 }, // NIS
-        { width: 30 }, // Nama
-        { width: 10 }, // Kelas
-        { width: 15 }, // Nilai Kehadiran
-        ...sortedEvaluations.map(() => ({ width: 15 })),
-        { width: 12 }, // Nilai Akhir
-        { width: 12 }  // Nilai Rapor
+        { width: 6 },                        // No
+        { width: 16 },                       // NIS
+        { width: Math.max(22, maxNameLength + 4) }, // Nama Lengkap Siswa (menyesuaikan lebar nama)
+        { width: 12 },                       // Kelas
+        { width: 16 },                       // Nilai Kehadiran
+        ...sortedEvaluations.map(() => ({ width: 16 })),
+        { width: 16 }                        // Nilai Rapor (Font 16)
       ];
       worksheet.columns = colWidths;
 
