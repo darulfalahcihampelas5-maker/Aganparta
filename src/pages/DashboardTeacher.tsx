@@ -5431,9 +5431,22 @@ export default function DashboardTeacher() {
       worksheet.columns = colWidths;
 
       const buf = await workbook.xlsx.writeBuffer();
-      const fileName = selectedClassFilter 
-        ? `Laporan_Nilai_${userSettings.subjectName.replace(/\s+/g, "_")}_${selectedClassFilter.replace(/\s+/g, "_")}.xlsx` 
-        : `Laporan_Nilai_${userSettings.subjectName.replace(/\s+/g, "_")}_Semua.xlsx`;
+      
+      const now = new Date();
+      const dd = String(now.getDate()).padStart(2, '0');
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const yyyy = now.getFullYear();
+      const dateStr = `${dd}_${mm}_${yyyy}`;
+
+      const cleanClassNameForFile = (cls?: string) => {
+        if (!cls || cls === "SEMUA_KELAS") return "Semua_Kelas";
+        return cls.replace(/^kelas\s*/i, "").trim().replace(/\s+/g, "_");
+      };
+
+      const classStr = cleanClassNameForFile(selectedClassFilter);
+      const subjectStr = (userSettings?.subjectName || "Informatika").replace(/\s+/g, "_");
+
+      const fileName = `Laporan_Nilai_${subjectStr}_${dateStr}_${classStr}.xlsx`;
       
       saveAs(new Blob([buf]), fileName);
       showAlert("Berhasil", "Laporan Nilai Excel berhasil diunduh.", "alert", "Tutup");
