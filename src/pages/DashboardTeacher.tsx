@@ -8155,6 +8155,12 @@ export default function DashboardTeacher() {
                             <tbody className="divide-y divide-slate-100 text-sm font-semibold text-slate-700">
                               {attendanceClass && absensiList
                                 .filter((a) => a.kelasRef === attendanceClass)
+                                .sort((a, b) => {
+                                  const dateA = a.date ? new Date(a.date).getTime() : 0;
+                                  const dateB = b.date ? new Date(b.date).getTime() : 0;
+                                  if (dateA !== dateB) return dateB - dateA; // Descending: largest/newest first
+                                  return (b.createdAt || "").localeCompare(a.createdAt || "");
+                                })
                                 .map((absData, idx) => {
                                   const cls = classesList.find(c => c.id === absData.kelasRef);
                                   return (
