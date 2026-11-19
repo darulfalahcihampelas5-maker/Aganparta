@@ -8165,12 +8165,23 @@ export default function DashboardTeacher() {
                                   const cls = classesList.find(c => c.id === absData.kelasRef);
                                   return (
                                     <tr key={`abs-hist-${absData.id || idx}-${idx}`} className="hover:bg-slate-50/60 transition-colors group">
-                                      <td className="py-5 px-6 group-hover:bg-slate-50/40">
-                                         <div className="flex flex-col">
-                                           <span className="font-bold text-slate-900">{absData.date}</span>
-                                           {absData.createdAt && <span className="text-[11px] font-medium text-slate-400 mt-0.5">{new Date(absData.createdAt).toLocaleTimeString('id-ID')} WIB</span>}
-                                         </div>
-                                      </td>
+                                       <td className="py-5 px-6 group-hover:bg-slate-50/40">
+                                        <div className="flex flex-col">
+                                          <span className="font-bold text-slate-900">
+                                            {absData.date ? (() => {
+                                              try {
+                                                const dObj = new Date(absData.date);
+                                                if (!isNaN(dObj.getTime())) {
+                                                  const dayName = dObj.toLocaleDateString('id-ID', { weekday: 'long' });
+                                                  return `${dayName}, ${absData.date}`;
+                                                }
+                                              } catch (_) {}
+                                              return absData.date;
+                                            })() : "-"}
+                                          </span>
+                                          {absData.createdAt && <span className="text-[11px] font-medium text-slate-400 mt-0.5">{new Date(absData.createdAt).toLocaleTimeString('id-ID')} WIB</span>}
+                                        </div>
+                                     </td>
                                       <td className="py-5 px-6">
                                         <span className="inline-flex items-center justify-center px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-[11px] font-black uppercase tracking-widest text-slate-600">
                                           {cls?.name || absData.kelasRef}
