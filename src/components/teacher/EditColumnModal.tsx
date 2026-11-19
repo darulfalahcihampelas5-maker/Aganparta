@@ -28,6 +28,7 @@ export interface ColumnEditData {
   selectedClasses: string[];
   startDate: string;
   deadline?: string;
+  durationMinutes?: number;
   description?: string;
 }
 
@@ -75,6 +76,7 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
   const [startDate, setStartDate] = useState<string>("");
   const [deadline, setDeadline] = useState<string>("");
+  const [durationMinutes, setDurationMinutes] = useState<number>(60);
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
 
@@ -99,6 +101,13 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
     setTitle(col.title || "");
     setBab(col.bab || (chaptersList[0]?.name || chaptersList[0]?.id || ""));
     setDescription(col.description || col.rawDoc?.description || "");
+
+    const rawDur = Number(col.rawDoc?.duration);
+    if (rawDur && !isNaN(rawDur) && rawDur > 0) {
+      setDurationMinutes(Math.max(5, Math.round(rawDur / 60)));
+    } else {
+      setDurationMinutes(60);
+    }
 
     const sDate = formatDateForInput(col.startDate || col.date || col.rawDoc?.createdAt);
     setStartDate(sDate || new Date().toISOString().split("T")[0]);
@@ -190,6 +199,7 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
         selectedClasses,
         startDate,
         deadline: type === "Tugas" ? deadline : undefined,
+        durationMinutes: type === "CBT" ? durationMinutes : undefined,
         description: description.trim(),
       });
     } catch (err: any) {
@@ -438,13 +448,45 @@ export const EditColumnModal: React.FC<EditColumnModalProps> = ({
                 />
               </div>
             ) : (
-              <div className="space-y-1.5 opacity-60">
-                <label className="text-xs font-bold text-slate-500 flex items-center gap-1.5">
-                  <Clock className="w-3.5 h-3.5 text-slate-400" />
-                  Batas Waktu CBT
-                </label>
-                <div className="px-4 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs font-medium text-slate-500 italic">
-                  Sesuai durasi sesi CBT aktif
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-600" />
+                    Durasi Waktu Ujian CBT
+                    <span className="text-rose-500">*</span>
+                  </label>
+                  <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                    {durationMinutes} Menit ({durationMinutes * 60} dtk)
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setDurationMinutes((prev) => Math.max(5, prev - 15))}
+                    disabled={durationMinutes <= 15}
+                    className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold disabled:opacity-40 cursor-pointer"
+                    title="Kurangi 15 Menit"
+                  >
+                    -15m
+                  </button>
+                  <input
+                    type="number"
+                    min="5"
+                    max="360"
+                    required
+                    value={durationMinutes || ""}
+                    onChange={(e) => setDurationMinutes(Math.max(1, parseInt(e.target.value) || 0))}
+                    className="w-full text-center px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold font-mono text-slate-800 focus:bg-white focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 outline-none transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setDurationMinutes((prev) => Math.min(360, prev + 15))}
+                    disabled={durationMinutes >= 345}
+                    className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold disabled:opacity-40 cursor-pointer"
+                    title="Tambah 15 Menit"
+                  >
+                    +15m
+                  </button>
                 </div>
               </div>
             )}

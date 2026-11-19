@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Trash2, X, Search, FileText, MonitorPlay, AlertTriangle, CheckCircle2, Pencil, ShieldAlert } from "lucide-react";
+import { Trash2, X, Search, FileText, MonitorPlay, AlertTriangle, CheckCircle2, Pencil, ShieldAlert, RotateCcw } from "lucide-react";
 
 export interface RekapColumnItem {
   id: string;
@@ -13,6 +13,18 @@ export interface RekapColumnItem {
   kelas?: string;
 }
 
+export interface DeletedBackupItem {
+  backupId: string;
+  id: string;
+  title: string;
+  type: "assignment" | "exam";
+  kelas?: string;
+  deletedAt: string;
+  gradesCount?: number;
+  rawDoc?: any;
+  grades?: any[];
+}
+
 interface DeleteColumnModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -20,6 +32,8 @@ interface DeleteColumnModalProps {
   onDeleteColumn: (id: string, title: string, type: "assignment" | "exam", scope?: "class_only" | "all_classes") => Promise<void> | void;
   onEditColumn?: (col: RekapColumnItem) => void;
   selectedClass?: string;
+  deletedBackups?: DeletedBackupItem[];
+  onRestoreBackup?: (backup: DeletedBackupItem) => Promise<void> | void;
 }
 
 export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
@@ -29,10 +43,13 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
   onDeleteColumn,
   onEditColumn,
   selectedClass,
+  deletedBackups = [],
+  onRestoreBackup,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
-  const [typeFilter, setTypeFilter] = useState<"ALL" | "assignment" | "exam">("ALL");
+  const [typeFilter, setTypeFilter] = useState<"ALL" | "assignment" | "exam" | "RESTORE">("ALL");
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
 
   const isSpecificClassActive =
     !!selectedClass &&
@@ -48,12 +65,27 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
     return matchesSearch && matchesType;
   });
 
+  const filteredBackups = deletedBackups.filter((b) =>
+    (b.title || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (b.kelas || "").toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const handleDelete = async (col: RekapColumnItem, scope?: "class_only" | "all_classes") => {
     setDeletingId(col.id);
     try {
       await onDeleteColumn(col.id, col.title, col.type, scope);
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleRestore = async (backup: DeletedBackupItem) => {
+    if (!onRestoreBackup) return;
+    setRestoringId(backup.backupId);
+    try {
+      await onRestoreBackup(backup);
+    } finally {
+      setRestoringId(null);
     }
   };
 
@@ -94,7 +126,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
               <p className="text-xs text-slate-300">
                 {isSpecificClassActive
                   ? `Menghapus kolom hanya akan melepaskan penilaian dari Kelas ${selectedClass} tanpa menghapus data kelas lain`
-                  : "Pilih kolom penilaian (Tugas atau CBT) yang ingin dihapus dari tabel Rekap"}
+                  : "Pilih kolom penilaian (Tugas atau CBT) yang ingin dihapus atau dipulihkan"}
               </p>
             </div>
           </div>
@@ -109,7 +141,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
 
         {/* Filters & Search */}
         <div className="p-4 border-b border-slate-100 bg-slate-50 flex flex-col sm:flex-row gap-3 items-center justify-between">
-          <div className="relative w-full sm:w-64">
+          <div className="relative w-full sm:w-56">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
@@ -124,7 +156,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
             <button
               type="button"
               onClick={() => setTypeFilter("ALL")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
                 typeFilter === "ALL"
                   ? "bg-slate-900 text-white shadow-sm"
                   : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
@@ -135,7 +167,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
             <button
               type="button"
               onClick={() => setTypeFilter("assignment")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
                 typeFilter === "assignment"
                   ? "bg-blue-600 text-white shadow-sm"
                   : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
@@ -147,7 +179,7 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
             <button
               type="button"
               onClick={() => setTypeFilter("exam")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
                 typeFilter === "exam"
                   ? "bg-emerald-600 text-white shadow-sm"
                   : "bg-white text-slate-600 hover:bg-slate-100 border border-slate-200"
@@ -156,26 +188,92 @@ export const DeleteColumnModal: React.FC<DeleteColumnModalProps> = ({
               <MonitorPlay className="w-3.5 h-3.5" />
               CBT ({columns.filter((c) => c.type === "exam").length})
             </button>
+            {deletedBackups.length > 0 && onRestoreBackup && (
+              <button
+                type="button"
+                onClick={() => setTypeFilter("RESTORE")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                  typeFilter === "RESTORE"
+                    ? "bg-amber-600 text-white shadow-sm"
+                    : "bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200"
+                }`}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                Pulihkan ({deletedBackups.length})
+              </button>
+            )}
           </div>
         </div>
 
         {/* Warning Callout */}
-        <div className={`px-5 py-3 border-b flex items-start gap-2.5 text-xs ${
-          isSpecificClassActive
-            ? "bg-blue-50/80 border-blue-200/60 text-blue-900"
-            : "bg-amber-50/80 border-amber-200/60 text-amber-800"
-        }`}>
-          <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${isSpecificClassActive ? "text-blue-600" : "text-amber-600"}`} />
-          <p className="leading-relaxed">
-            {isSpecificClassActive
-              ? `Saat ini Anda memfilter Kelas ${selectedClass}. Tombol "Hapus" hanya akan menghapus kolom dari Kelas ${selectedClass}. Nilai dan tugas kelas lain tetap terjaga aman.`
-              : "Menghapus kolom saat mode 'Semua Kelas' akan menghapus kolom dan seluruh data penilaian terkait secara permanen."}
-          </p>
-        </div>
+        {typeFilter === "RESTORE" ? (
+          <div className="px-5 py-3 border-b flex items-start gap-2.5 text-xs bg-emerald-50/80 border-emerald-200/60 text-emerald-900">
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600" />
+            <p className="leading-relaxed">
+              Riwayat cadangan otomatis menyimpan kolom atau ujian yang pernah Anda hapus beserta nilainya. Klik <strong>Pulihkan</strong> untuk mengembalikannya.
+            </p>
+          </div>
+        ) : (
+          <div className={`px-5 py-3 border-b flex items-start gap-2.5 text-xs ${
+            isSpecificClassActive
+              ? "bg-blue-50/80 border-blue-200/60 text-blue-900"
+              : "bg-amber-50/80 border-amber-200/60 text-amber-800"
+          }`}>
+            <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${isSpecificClassActive ? "text-blue-600" : "text-amber-600"}`} />
+            <p className="leading-relaxed">
+              {isSpecificClassActive
+                ? `Saat ini Anda memfilter Kelas ${selectedClass}. Tombol "Hapus" hanya akan menghapus kolom dari Kelas ${selectedClass}. Nilai dan tugas kelas lain tetap terjaga aman.`
+                : "Menghapus kolom saat mode 'Semua Kelas' akan memindahkannya ke cadangan sementara dan menghapusnya dari tabel Rekap."}
+            </p>
+          </div>
+        )}
 
-        {/* Column List */}
+        {/* Column List or Restore List */}
         <div className="p-4 overflow-y-auto flex-1 space-y-2.5 max-h-[450px]">
-          {filteredColumns.length === 0 ? (
+          {typeFilter === "RESTORE" ? (
+            filteredBackups.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 text-xs">
+                Tidak ada riwayat data terhapus yang tersimpan.
+              </div>
+            ) : (
+              filteredBackups.map((backup) => {
+                const isRestoring = restoringId === backup.backupId;
+                return (
+                  <div
+                    key={backup.backupId}
+                    className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/40 hover:border-amber-300 transition-all flex items-center justify-between gap-4 shadow-sm"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[9px] font-bold uppercase px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300">
+                          {backup.type === "exam" ? "CBT" : "Tugas"}
+                        </span>
+                        <h4 className="text-xs font-bold text-slate-900 truncate">{backup.title}</h4>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500 font-medium">
+                        <span>Kelas: <strong className="text-slate-700">{backup.kelas || "Semua"}</strong></span>
+                        <span>•</span>
+                        <span>Nilai tersimpan: <strong className="text-slate-700">{backup.gradesCount ?? backup.grades?.length ?? 0}</strong></span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRestore(backup)}
+                      disabled={isRestoring}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 disabled:opacity-50 shrink-0"
+                    >
+                      {isRestoring ? (
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      )}
+                      <span>Pulihkan</span>
+                    </button>
+                  </div>
+                );
+              })
+            )
+          ) : filteredColumns.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs">
               Tidak ada kolom penilaian yang cocok dengan pencarian.
             </div>

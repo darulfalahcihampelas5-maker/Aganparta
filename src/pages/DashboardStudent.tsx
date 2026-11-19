@@ -7687,7 +7687,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                             <p className="font-black text-slate-900 text-sm leading-tight">{exam.title}</p>
                                           </div>
                                           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-8">{exam.bab || "BAB BELUM DIATUR"}</p>
-                                          <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider pl-8">{exam.subject}</p>
+                                          <p className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider pl-8">{exam.subject} • ⏱️ {Math.round((exam.duration || 3600) / 60)} Menit</p>
                                         </div>
                                         {isFinished && (
                                            <div className="text-right">
@@ -7793,7 +7793,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                           <td className="py-4 px-4 text-center font-black text-slate-400">{idx + 1}</td>
                                           <td className="py-4 px-4 whitespace-nowrap">
                                             <p className="font-bold text-slate-900">{exam.title}</p>
-                                            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest">{exam.bab || "BAB BELUM DIATUR"} • {exam.subject}</p>
+                                            <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-widest">{exam.bab || "BAB BELUM DIATUR"} • {exam.subject} • ⏱️ {Math.round((exam.duration || 3600) / 60)} Menit</p>
                                             {exam.externalQuizUrl && (
                                               <a
                                                 href={exam.externalQuizUrl}
@@ -9596,9 +9596,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   <h4 className="font-extrabold text-xs sm:text-sm text-slate-900 leading-tight">
                     Token Akses Ujian
                   </h4>
-                  <p className="text-[10px] sm:text-[11px] text-slate-500 font-medium truncate max-w-[200px] sm:max-w-[260px]">
-                    {selectedExamForToken.title}
-                  </p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-[10px] sm:text-[11px] text-slate-500 font-medium truncate max-w-[160px] sm:max-w-[220px]">
+                      {selectedExamForToken.title}
+                    </p>
+                    <span className="text-[10px] font-bold text-amber-750 bg-amber-50 border border-amber-200/90 px-1.5 py-0.5 rounded font-mono shrink-0">
+                      ⏱️ {Math.round((selectedExamForToken.duration || 3600) / 60)} Menit
+                    </span>
+                  </div>
                 </div>
               </div>
               <button

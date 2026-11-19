@@ -98,6 +98,7 @@ import {
   Gamepad2,
   Camera,
   Image as ImageIcon,
+  RotateCcw,
 } from "lucide-react";
 
 const Youtube = (props: React.SVGProps<SVGSVGElement>) => (
@@ -121,11 +122,12 @@ import { AuditSubmissionModal } from "../components/teacher/AuditSubmissionModal
 import { EditStudentModal } from "../components/teacher/EditStudentModal";
 import { PublishExamToClassModal } from "../components/teacher/PublishExamToClassModal";
 import { DownloadExamReportModal } from "../components/teacher/DownloadExamReportModal";
+import { EditExamModal } from "../components/teacher/EditExamModal";
 import { ResetStudentExamModal } from "../components/teacher/ResetStudentExamModal";
 import { ShareCbtExamModal } from "../components/teacher/ShareCbtExamModal";
 import { SupabaseSyncModal } from "../components/teacher/SupabaseSyncModal";
 import { AddManualColumnModal } from "../components/teacher/AddManualColumnModal";
-import { DeleteColumnModal } from "../components/teacher/DeleteColumnModal";
+import { DeleteColumnModal, DeletedBackupItem } from "../components/teacher/DeleteColumnModal";
 import { EditColumnModal, ColumnEditData } from "../components/teacher/EditColumnModal";
 import { AssignmentPreviewModal } from "../components/teacher/AssignmentPreviewModal";
 import type { ImportedExamQuestion } from "../components/teacher/BulkImportQuestionsModal";
@@ -1254,10 +1256,112 @@ export default function DashboardTeacher() {
   const [deletedColumnIds, setDeletedColumnIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem("firas_deleted_column_ids");
-      if (raw) return new Set(JSON.parse(raw));
+      const set = raw ? new Set<string>(JSON.parse(raw)) : new Set<string>();
+      // Ensure accidentally deleted Postes Bab 1 IKG Kelas X3 (EXM-MANUAL-1788919497038) is unhidden once
+      if (!localStorage.getItem("firas_restored_x3_postes_v1")) {
+        localStorage.setItem("firas_restored_x3_postes_v1", "1");
+        if (set.has("EXM-MANUAL-1788919497038")) {
+          set.delete("EXM-MANUAL-1788919497038");
+          localStorage.setItem("firas_deleted_column_ids", JSON.stringify(Array.from(set)));
+        }
+        localStorage.removeItem("firas_cache_exams_v2");
+      }
+      return set;
     } catch (_) {}
     return new Set<string>();
   });
+  const [deletedBackups, setDeletedBackups] = useState<DeletedBackupItem[]>(() => {
+    try {
+      const raw = localStorage.getItem("firas_deleted_backups");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (_) {}
+    return [];
+  });
+  const saveDeletedBackup = async (backup: DeletedBackupItem) => {
+    setDeletedBackups((prev) => {
+      const next = [backup, ...prev.filter((b) => b.id !== backup.id || b.kelas !== backup.kelas)].slice(0, 20);
+      try {
+        localStorage.setItem("firas_deleted_backups", JSON.stringify(next));
+      } catch (_) {}
+      return next;
+    });
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.from("app_collections").upsert({
+          id: `deleted_backups_${backup.backupId}`,
+          collection_name: "deleted_backups",
+          doc_id: backup.backupId,
+          data: backup,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+    }
+  };
+  const handleRestoreBackup = async (backup: DeletedBackupItem) => {
+    try {
+      if (backup.rawDoc) {
+        if (backup.type === "exam") {
+          await setDoc(doc(db, "exams", backup.id), backup.rawDoc, { merge: true });
+          if (isSupabaseConfigured && supabase) {
+            await supabase.from("exams").upsert({
+              id: backup.id,
+              title: backup.rawDoc.title || backup.title,
+              subject: backup.rawDoc.subject || "Informatika",
+              kelas_ref: backup.rawDoc.kelasRef || backup.rawDoc.kelas || backup.kelas || "",
+              token: backup.rawDoc.token || "TOKEN",
+              duration: backup.rawDoc.duration || 3600,
+              kkm: backup.rawDoc.kkm || 75,
+              questions: backup.rawDoc.questions || [],
+              created_at: backup.rawDoc.createdAt || new Date().toISOString(),
+            });
+          }
+        } else {
+          await setDoc(doc(db, "assignments", backup.id), backup.rawDoc, { merge: true });
+        }
+      }
+      if (Array.isArray(backup.grades) && backup.grades.length > 0) {
+        for (const g of backup.grades) {
+          try {
+            await saveFinalGrade(g);
+          } catch (_) {}
+        }
+      }
+      setDeletedColumnIds((prev) => {
+        const next = new Set(prev);
+        next.delete(backup.id);
+        try {
+          localStorage.setItem("firas_deleted_column_ids", JSON.stringify(Array.from(next)));
+        } catch (_) {}
+        return next;
+      });
+      setDeletedBackups((prev) => {
+        const next = prev.filter((b) => b.backupId !== backup.backupId);
+        try {
+          localStorage.setItem("firas_deleted_backups", JSON.stringify(next));
+        } catch (_) {}
+        return next;
+      });
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase.from("app_collections").delete().eq("id", `deleted_backups_${backup.backupId}`);
+        } catch (_) {}
+      }
+      localStorage.removeItem("firas_cache_exams_v2");
+      localStorage.removeItem("firas_cache_assignments_v2");
+      localStorage.removeItem("firas_cache_final_grades");
+      await fetchTeacherData(true);
+      showAlert(
+        "Berhasil Dipulihkan",
+        `Data "${backup.title}" (${backup.kelas || "Semua Kelas"}) berhasil dikembalikan ke sistem.`,
+        "alert"
+      );
+    } catch (err: any) {
+      showAlert("Gagal Memulihkan", err?.message || "Terjadi kesalahan saat memulihkan data.", "danger");
+    }
+  };
   const [isEditColumnModalOpen, setIsEditColumnModalOpen] = useState(false);
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [isSavingEditColumn, setIsSavingEditColumn] = useState(false);
@@ -1582,6 +1686,11 @@ export default function DashboardTeacher() {
     customClasses?: string[];
   }>({ isOpen: false, exam: null });
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const [editingExamModal, setEditingExamModal] = useState<{
+    isOpen: boolean;
+    exam: any;
+  }>({ isOpen: false, exam: null });
+  const [isSavingEditExam, setIsSavingEditExam] = useState(false);
 
   const handleConfirmResetStudentExam = async (examId: string, targetNisn: string) => {
     setIsSavingDuplicateExam(true);
@@ -2995,6 +3104,24 @@ export default function DashboardTeacher() {
         warningText,
         async () => {
           try {
+            // 0. Snapshot backup before deletion so accidental deletes can be restored
+            const relatedGrades = finalGradesList.filter(
+              (g) => g.assignmentId === colId || g.examId === colId || (g.id && g.id.includes(colId))
+            );
+            if (existingItem || relatedGrades.length > 0) {
+              await saveDeletedBackup({
+                backupId: `${colId}_${Date.now()}`,
+                id: colId,
+                title: colTitle,
+                type: colType,
+                kelas: existingItem?.kelasRef || existingItem?.kelas || "Semua Kelas",
+                deletedAt: new Date().toISOString(),
+                gradesCount: relatedGrades.length,
+                rawDoc: existingItem || { id: colId, title: colTitle },
+                grades: relatedGrades,
+              });
+            }
+
             // 1. Delete main assignment or exam document from Firestore AND Supabase
             if (colType === "exam") {
               await dbDeleteDoc(doc(db, "exams", colId), "exams", colId);
@@ -3132,12 +3259,16 @@ export default function DashboardTeacher() {
       if (!typeChanged) {
         if (type === "CBT") {
           const existingExam = examsList.find((e) => e.id === id) || {};
+          const durationSec = editData.durationMinutes
+            ? Math.max(60, Number(editData.durationMinutes) * 60)
+            : (existingExam.duration || 3600);
           const updatedExam = {
             ...existingExam,
             id,
             title: title.trim(),
             materi: title.trim(),
             bab,
+            duration: durationSec,
             targetClasses: selectedClasses,
             kelasRef: kelasRefStr,
             targets: selectedClasses.map((k) => ({ kelas: k, startDate: pubDate })),
@@ -3148,6 +3279,21 @@ export default function DashboardTeacher() {
             type: "CBT",
           };
           await setDoc(doc(db, "exams", id), updatedExam);
+          if (isSupabaseConfigured && supabase) {
+            try {
+              await supabase.from("exams").upsert({
+                id,
+                title: updatedExam.title,
+                subject: updatedExam.subject || "Informatika",
+                kelas_ref: kelasRefStr,
+                token: updatedExam.token,
+                duration: durationSec,
+                kkm: updatedExam.kkm || 75,
+                questions: updatedExam.questions || [],
+                created_at: updatedExam.createdAt || pubDate,
+              });
+            } catch (_) {}
+          }
           const newExamsList = examsList.map((e) => (e.id === id ? updatedExam : e));
           setExamsList(newExamsList);
           setLocalCache("firas_cache_exams_v2", newExamsList);
@@ -3263,6 +3409,94 @@ export default function DashboardTeacher() {
       throw err;
     } finally {
       setIsSavingEditColumn(false);
+    }
+  };
+
+  const handleOpenEditExamModal = (exam: any) => {
+    setEditingExamModal({
+      isOpen: true,
+      exam,
+    });
+  };
+
+  const handleSaveEditedExam = async (updatedData: {
+    id: string;
+    title: string;
+    subject: string;
+    bab: string;
+    durationMinutes: number;
+    kkm: number;
+    token: string;
+    targetClasses: string[];
+    externalQuizUrl?: string;
+    description?: string;
+  }) => {
+    setIsSavingEditExam(true);
+    try {
+      const existingExam = examsList.find((e) => e.id === updatedData.id) || {};
+      const durationSeconds = Math.max(60, Number(updatedData.durationMinutes) * 60);
+      const kelasRefVal =
+        updatedData.targetClasses.length === classesList.length || updatedData.targetClasses.includes("SEMUA_KELAS")
+          ? "SEMUA_KELAS"
+          : updatedData.targetClasses.join(", ");
+
+      const updatedExamDoc = {
+        ...existingExam,
+        id: updatedData.id,
+        title: updatedData.title.trim(),
+        materi: updatedData.title.trim(),
+        subject: (updatedData.subject || existingExam.subject || "Informatika").trim(),
+        bab: updatedData.bab,
+        duration: durationSeconds,
+        kkm: Number(updatedData.kkm) || 75,
+        token: updatedData.token.trim().toUpperCase(),
+        targetClasses: updatedData.targetClasses,
+        kelasRef: kelasRefVal,
+        externalQuizUrl: updatedData.externalQuizUrl ? updatedData.externalQuizUrl.trim() : "",
+        description: updatedData.description !== undefined ? updatedData.description.trim() : existingExam.description,
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 1. Update Firestore
+      await setDoc(doc(db, "exams", updatedData.id), updatedExamDoc, { merge: true });
+
+      // 2. Update Supabase
+      if (isSupabaseConfigured && supabase) {
+        try {
+          await supabase.from("exams").upsert({
+            id: updatedData.id,
+            title: updatedExamDoc.title,
+            subject: updatedExamDoc.subject,
+            kelas_ref: kelasRefVal,
+            token: updatedExamDoc.token,
+            duration: durationSeconds,
+            kkm: updatedExamDoc.kkm,
+            questions: updatedExamDoc.questions || [],
+            created_at: updatedExamDoc.createdAt || new Date().toISOString(),
+          });
+        } catch (err) {
+          console.warn("Supabase upsert exam error:", err);
+        }
+      }
+
+      // 3. Update local state
+      const newExamsList = examsList.map((e) => (e.id === updatedData.id ? updatedExamDoc : e));
+      setExamsList(newExamsList);
+      setLocalCache("firas_cache_exams_v2", newExamsList);
+
+      showAlert(
+        "Berhasil Diperbarui",
+        `Ujian "${updatedExamDoc.title}" berhasil diperbarui. Durasi waktu pengerjaan diatur menjadi ${updatedData.durationMinutes} menit (${durationSeconds.toLocaleString("id-ID")} detik).`,
+        "alert"
+      );
+
+      setEditingExamModal({ isOpen: false, exam: null });
+    } catch (error: any) {
+      console.error("Gagal memperbarui ujian:", error);
+      showAlert("Gagal", `Terjadi kesalahan saat memperbarui ujian: ${error?.message || error}`, "danger");
+      throw error;
+    } finally {
+      setIsSavingEditExam(false);
     }
   };
 
@@ -6333,8 +6567,25 @@ export default function DashboardTeacher() {
       "Apakah Anda yakin ingin menghapus dan membatalkan ujian online ini? Semua siswa tidak akan bisa mengakses ujian ini lagi.",
       async () => {
         try {
+          const examBackup = examsList.find((e) => e.id === id);
+          const relatedGrades = finalGradesList.filter(
+            (g) => g.assignmentId === id || g.examId === id || (g.id && g.id.includes(id))
+          );
+          if (examBackup) {
+            await saveDeletedBackup({
+              backupId: `${id}_${Date.now()}`,
+              id,
+              title: examBackup.title || examBackup.materi || "Ujian CBT",
+              type: "exam",
+              kelas: examBackup.kelasRef || (Array.isArray(examBackup.targetClasses) ? examBackup.targetClasses.join(", ") : examBackup.kelas) || "Semua Kelas",
+              deletedAt: new Date().toISOString(),
+              gradesCount: relatedGrades.length,
+              rawDoc: examBackup,
+              grades: relatedGrades,
+            });
+          }
           await deleteDoc(doc(db, "exams", id));
-          showAlert("Ujian Dihapus", "Ujian online telah dihapus dari database sekolah.", "alert");
+          showAlert("Ujian Dihapus", "Ujian online telah dihapus dari database sekolah (cadangan pemulihan tersimpan).", "alert");
           localStorage.removeItem("firas_cache_exams_v2");
           fetchTeacherData(false);
         } catch (error) {
@@ -10823,6 +11074,16 @@ export default function DashboardTeacher() {
                                 Buat soal pilihan ganda berkualitas tinggi secara instan dibantu AI Gemini, kelola token masuk siswa, serta rilis ujian ke kelas pilihan Anda.
                               </p>
                             </div>
+                            {deletedBackups.some((b) => b.type === "exam") && (
+                              <button
+                                type="button"
+                                onClick={() => setIsDeleteColumnModalOpen(true)}
+                                className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shrink-0 self-start md:self-auto"
+                              >
+                                <RotateCcw className="w-4 h-4" />
+                                <span>Pulihkan Ujian Terhapus ({deletedBackups.filter((b) => b.type === "exam").length})</span>
+                              </button>
+                            )}
                           </div>
 
                           <div className="space-y-6">
@@ -10934,7 +11195,21 @@ export default function DashboardTeacher() {
                                             {exam.title}
                                           </div>
                                           <div className="text-[11px] text-slate-500 font-medium font-mono mt-0.5 flex flex-wrap items-center gap-2">
-                                            <span>{exam.questions?.length || 0} Soal • {exam.duration / 60} Menit</span>
+                                            <span>{exam.questions?.length || 0} Soal</span>
+                                            <span>•</span>
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleOpenEditExamModal(exam);
+                                              }}
+                                              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/80 text-[10px] font-bold font-mono transition-colors cursor-pointer group"
+                                              title="Klik untuk ubah durasi pengerjaan ujian"
+                                            >
+                                              <Clock className="w-3 h-3 text-amber-600" />
+                                              <span>{Math.round((exam.duration || 3600) / 60)} Menit</span>
+                                              <Pencil className="w-2.5 h-2.5 text-amber-500 group-hover:text-amber-700 opacity-60 group-hover:opacity-100" />
+                                            </button>
                                             {exam.externalQuizUrl && (
                                               <a
                                                 href={exam.externalQuizUrl}
@@ -10995,6 +11270,17 @@ export default function DashboardTeacher() {
                                           >
                                             <BarChart3 className="w-3.5 h-3.5" />
                                             <span className="hidden xl:inline">Analisis</span>
+                                          </button>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleOpenEditExamModal(exam);
+                                            }}
+                                            className="px-2.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider"
+                                            title="Edit Durasi Waktu Ujian, Token, & Data Ujian CBT"
+                                          >
+                                            <Pencil className="w-3.5 h-3.5" />
+                                            <span className="hidden xl:inline">Edit</span>
                                           </button>
                                           <button
                                             onClick={(e) => { e.stopPropagation(); 
@@ -12981,6 +13267,31 @@ export default function DashboardTeacher() {
         customClasses={shareCbtExamModal.customClasses}
       />
 
+      {/* Edit Exam & Duration Modal */}
+      <EditExamModal
+        isOpen={editingExamModal.isOpen}
+        onClose={() => setEditingExamModal({ isOpen: false, exam: null })}
+        exam={editingExamModal.exam}
+        classesList={classesList}
+        chaptersList={
+          chaptersList.length > 0
+            ? chaptersList
+            : [
+                { id: "Informatika dan Keterampilan Generik", name: "Informatika dan Keterampilan Generik" },
+                { id: "Berpikir Komputasional", name: "Berpikir Komputasional" },
+                { id: "Teknologi Informasi dan Komunikasi", name: "Teknologi Informasi dan Komunikasi" },
+                { id: "Sistem Komputer", name: "Sistem Komputer" },
+                { id: "Jaringan Komputer dan Internet", name: "Jaringan Komputer dan Internet" },
+                { id: "Analisis Data", name: "Analisis Data" },
+                { id: "Algoritma dan Pemrograman", name: "Algoritma dan Pemrograman" },
+                { id: "Dampak Sosial Informatika", name: "Dampak Sosial Informatika" },
+                { id: "Praktik Lintas Bidang", name: "Praktik Lintas Bidang" },
+              ]
+        }
+        onSave={handleSaveEditedExam}
+        isSaving={isSavingEditExam}
+      />
+
       {/* Add Manual Column Modal */}
       <AddManualColumnModal
         isOpen={isAddManualColumnOpen}
@@ -13040,6 +13351,8 @@ export default function DashboardTeacher() {
         onDeleteColumn={handlePromptDeleteRekapColumn}
         onEditColumn={handleOpenEditColumnModal}
         selectedClass={selectedClassFilter}
+        deletedBackups={deletedBackups}
+        onRestoreBackup={handleRestoreBackup}
       />
 
       {/* Edit Rekap Column Modal */}
