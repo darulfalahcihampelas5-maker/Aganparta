@@ -23,10 +23,12 @@ import {
   formatFriendlyGeminiError,
   getGeminiModelConfigs,
   getSharedCachedReply,
+  isLiveStudentContextQuestion,
   isRetryableGeminiError,
   matchLocalKnowledge,
   normalizeGeminiTurns,
   runWithGeminiQueue,
+  sanitizeSipinterContext,
   setSharedCachedReply,
   streamTextViaSse,
   checkProfanity,
@@ -130,10 +132,11 @@ async function recordAiChatLog(params: {
 async function handleChatRequest(req: any, res: any) {
   const reqStart = Date.now();
   try {
-    const { messages, studentName, stream, debug, bypassLocal } = req.body;
+    const { messages, studentName, sipinterContext, stream, debug, bypassLocal } = req.body;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "Pesan tidak boleh kosong." });
     }
+    const safeSipinterContext = sanitizeSipinterContext(sipinterContext);
 
     const firstName = extractFirstName(studentName);
     const assistantName = "Si Pinter";
@@ -194,8 +197,10 @@ async function handleChatRequest(req: any, res: any) {
       return res.json({ text: warningReply, ...(debug ? { source: "profanity-filter", flaggedWord } : {}) });
     }
 
+    const isLiveContextQuery = Boolean(safeSipinterContext) && isLiveStudentContextQuestion(questionText);
+
     // LAPIS 1: Local Knowledge Base (App Guides + Informatics Bab 1-9) — 0 Gemini Quota
-    if (isStandaloneQuestion && !bypassLocal) {
+    if (isStandaloneQuestion && !bypassLocal && !isLiveContextQuery) {
       const localReply = matchLocalKnowledge(questionText, firstName);
       if (localReply) {
         const durationMs = Date.now() - reqStart;
@@ -208,8 +213,8 @@ async function handleChatRequest(req: any, res: any) {
       }
     }
 
-    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated questions across all 300 students
-    if (isStandaloneQuestion) {
+    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated static questions across all 300 students
+    if (isStandaloneQuestion && !isLiveContextQuery) {
       const cachedReply = getSharedCachedReply(questionText, firstName);
       if (cachedReply) {
         const durationMs = Date.now() - reqStart;
@@ -226,7 +231,7 @@ async function handleChatRequest(req: any, res: any) {
       return res.status(500).json({ error: "Kunci API Gemini belum terkonfigurasi di server." });
     }
 
-    const systemInstruction = buildCompactSystemInstruction(firstName, studentName);
+    const systemInstruction = buildCompactSystemInstruction(firstName, studentName, safeSipinterContext);
     const modelConfigs = getGeminiModelConfigs(systemInstruction);
     const attemptLogs: Array<{ model: string; ms: number; ok: boolean; err?: string }> = [];
 
@@ -258,8 +263,8 @@ async function handleChatRequest(req: any, res: any) {
             clearInterval(queueHeartbeat);
             if (clientDisconnected) return;
 
-            // Double-check Lapis 2 cache after exiting queue (coalesces simultaneous identical requests)
-            if (isStandaloneQuestion) {
+            // Double-check Lapis 2 cache after exiting queue (coalesces simultaneous identical static requests)
+            if (isStandaloneQuestion && !isLiveContextQuery) {
               const queuedCacheHit = getSharedCachedReply(questionText, firstName);
               if (queuedCacheHit) {
                 const durationMs = Date.now() - reqStart;
@@ -323,7 +328,7 @@ async function handleChatRequest(req: any, res: any) {
                   if (hasEmittedAnyChunk) {
                     const durationMs = Date.now() - reqStart;
                     attemptLogs.push({ model: entry.model, ms: Date.now() - attemptStart, ok: true });
-                    if (isStandaloneQuestion && assembledText.trim()) {
+                    if (isStandaloneQuestion && !isLiveContextQuery && assembledText.trim()) {
                       setSharedCachedReply(questionText, assembledText, firstName, studentName);
                     }
                     void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
@@ -388,7 +393,7 @@ async function handleChatRequest(req: any, res: any) {
                   if (response?.text?.trim()) {
                     const durationMs = Date.now() - reqStart;
                     attemptLogs.push({ model: `${entry.model}:sync-fallback`, ms: Date.now() - attemptStart, ok: true });
-                    if (isStandaloneQuestion) {
+                    if (isStandaloneQuestion && !isLiveContextQuery) {
                       setSharedCachedReply(questionText, response.text, firstName, studentName);
                     }
                     void recordAiChatLog({ studentName: studentName || firstName, questionText, durationMs });
@@ -436,7 +441,7 @@ async function handleChatRequest(req: any, res: any) {
 
     // Standard JSON fallback (Lapis 3 queued)
     const jsonResult = await runWithGeminiQueue(async () => {
-      if (isStandaloneQuestion) {
+      if (isStandaloneQuestion && !isLiveContextQuery) {
         const queuedCacheHit = getSharedCachedReply(questionText, firstName);
         if (queuedCacheHit) {
           return { text: queuedCacheHit, source: "cache-coalesced" as const };
@@ -462,7 +467,7 @@ async function handleChatRequest(req: any, res: any) {
 
             if (response?.text?.trim()) {
               attemptLogs.push({ model: entry.model, ms: Date.now() - attemptStart, ok: true });
-              if (isStandaloneQuestion) {
+              if (isStandaloneQuestion && !isLiveContextQuery) {
                 setSharedCachedReply(questionText, response.text, firstName, studentName);
               }
               return { text: response.text, source: "gemini" as const };

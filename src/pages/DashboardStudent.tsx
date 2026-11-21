@@ -4753,6 +4753,203 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   const isDataError = errAnnouncements || errAssignments || errSubmissions || errFinalGrades || errExams;
 
+  const sipinterContext = useMemo(() => {
+    if (!student) return undefined;
+    const now = new Date();
+    const todayYear = now.getFullYear();
+    const todayMonth = now.getMonth();
+    const todayDate = now.getDate();
+
+    const parseSafeDate = (raw: any): Date | null => {
+      if (!raw) return null;
+      if (typeof raw?.toDate === "function") {
+        const d = raw.toDate();
+        return isNaN(d.getTime()) ? null : d;
+      }
+      if (typeof raw === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+        const [y, m, d] = raw.trim().split("-").map(Number);
+        return new Date(y, m - 1, d);
+      }
+      const d = new Date(raw);
+      return isNaN(d.getTime()) ? null : d;
+    };
+
+    const isSameDayAsToday = (raw: any): boolean => {
+      const d = parseSafeDate(raw);
+      if (!d) return false;
+      return d.getFullYear() === todayYear && d.getMonth() === todayMonth && d.getDate() === todayDate;
+    };
+
+    const studentAnns = (announcementsList || [])
+      .filter((ann: any) => ann.kelasRef === student.kelas || ann.kelasRef === "SEMUA_KELAS")
+      .sort((a: any, b: any) => {
+        const ta = parseSafeDate(a.publishDate || a.createdAt)?.getTime() || 0;
+        const tb = parseSafeDate(b.publishDate || b.createdAt)?.getTime() || 0;
+        return tb - ta;
+      });
+
+    const todayMessages: Array<{ source: string; title: string; content: string; timeLabel?: string }> = [];
+
+    studentAnns.forEach((ann: any) => {
+      const rawDate = ann.publishDate || ann.createdAt;
+      if (isSameDayAsToday(rawDate)) {
+        const d = parseSafeDate(rawDate);
+        todayMessages.push({
+          source: "Pengumuman",
+          title: ann.title || "Pengumuman Pak Agan",
+          content: String(ann.content || "").replace(/\s+/g, " ").trim().slice(0, 220),
+          timeLabel: d ? d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "Hari ini",
+        });
+      }
+    });
+
+    (allNotifications || []).forEach((n: any) => {
+      if (isSameDayAsToday(n.timestamp)) {
+        const d = parseSafeDate(n.timestamp);
+        todayMessages.push({
+          source: "Notifikasi",
+          title: n.title || "Info Aplikasi",
+          content: String(n.message || "").replace(/\s+/g, " ").trim().slice(0, 220),
+          timeLabel: d ? d.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "Hari ini",
+        });
+      }
+    });
+
+    (studentAttendanceData || []).forEach((att: any) => {
+      if (isSameDayAsToday(att.date)) {
+        todayMessages.push({
+          source: "Presensi",
+          title: `Kehadiran Hari Ini: ${att.status || "Hadir"}`,
+          content: att.keterangan
+            ? `Status ${att.status || "Hadir"} (${att.keterangan}).`
+            : `Tercatat ${att.status || "Hadir"} pada pertemuan pembelajaran Informatika hari ini.`,
+          timeLabel: formattedToday,
+        });
+      }
+    });
+
+    const recentAnnouncements = studentAnns.slice(0, 3).map((ann: any) => {
+      const d = parseSafeDate(ann.publishDate || ann.createdAt);
+      return {
+        title: ann.title || "Pengumuman",
+        content: String(ann.content || "").replace(/\s+/g, " ").trim().slice(0, 200),
+        dateLabel: d
+          ? d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })
+          : "-",
+      };
+    });
+
+    const pendingAssignments = (assignmentsList || [])
+      .filter((a: any) => {
+        const pubDate = getAssignmentPublishedAtForStudent(a, student.kelas);
+        if (pubDate > now) return false;
+        const isSubmitted = submissionsList.some(
+          (s: any) =>
+            (String(s.assignmentId) === String(a.id) || s.id === `SUB-${student.nisn}-${a.id}`) &&
+            (isSameNisn(s.nisn, student.nisn) || !s.nisn)
+        );
+        return !isSubmitted;
+      })
+      .slice(0, 8)
+      .map((a: any) => {
+        const rawDl = getAssignmentDeadlineForStudent(a, student.kelas);
+        const dlDate = parseSafeDate(rawDl);
+        return {
+          title: a.title || a.materi || "Tugas Informatika",
+          bab: a.bab || "Informatika",
+          deadlineLabel: dlDate
+            ? dlDate.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+            : "Belum ditentukan",
+        };
+      });
+
+    const rejectedAssignments = (submissionsList || [])
+      .filter((s: any) => s.status === "ditolak")
+      .slice(0, 5)
+      .map((s: any) => {
+        const matchedAssign = assignmentsList.find((a: any) => String(a.id) === String(s.assignmentId));
+        return {
+          title: matchedAssign?.title || matchedAssign?.materi || s.materi || "Tugas",
+          feedback: String(s.catatan || s.feedback || s.rejectionReason || "Periksa kembali izin link atau isi berkas tugas.").slice(0, 160),
+        };
+      });
+
+    // Strictly non-confidential exam info only (NEVER include token, questions, or answer keys)
+    const activeExams = (examsList || []).slice(0, 6).map((exam: any) => {
+      const finalGrade = finalGradesList.find(
+        (f: any) =>
+          (f.assignmentId === exam.id || f.examId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))) &&
+          (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
+          ((f.nilai !== undefined && f.nilai !== null && f.nilai !== "") ||
+            (f.score !== undefined && f.score !== null && f.score !== "") ||
+            f.status === "selesai")
+      );
+      const histEntry = examHistoryList.find((h: any) => h.examId === exam.id);
+      return {
+        title: exam.title || "Ujian CBT",
+        bab: exam.bab || "Informatika",
+        durationMinutes: Math.max(1, Math.round((exam.duration || 3600) / 60)),
+        isFinished: Boolean(finalGrade || histEntry),
+      };
+    });
+
+    const materials = (classMaterials || []).slice(0, 10).map((m: any) => ({
+      title: m.title || "Materi Informatika",
+      bab: m.bab || "Umum",
+      progressStatus: materialsProgress[m.id]?.status || "Belum Dimulai",
+    }));
+
+    return {
+      kelas: student.kelas || "",
+      todayDateLabel: formattedToday,
+      todayMessages: todayMessages.slice(0, 8),
+      recentAnnouncements,
+      pendingAssignments,
+      rejectedAssignments,
+      waitingReviewCount: menungguTugasDinilaiCount,
+      completedTasksCount: submissionsList.filter((s: any) => s.status !== "ditolak").length,
+      activeExams,
+      materials,
+      attendanceSummary: attendanceSummary
+        ? {
+            percentage: attendanceSummary.percentage,
+            totalMeetings: attendanceSummary.totalMeetings,
+            hadir: attendanceSummary.Hadir,
+            sakit: attendanceSummary.Sakit,
+            izin: attendanceSummary.Izin,
+            alpa: attendanceSummary.Alpa,
+            dispen: attendanceSummary.Dispen,
+            rubricStatus: attendanceSummary.rubricStatus,
+          }
+        : null,
+      gradesSummary: {
+        gradedCount: combinedGrades.length,
+        avgTugas: rataRataNilaiTugas,
+        avgUjian: rataRataNilaiUjian,
+      },
+      isSimulasiEnabled,
+    };
+  }, [
+    student,
+    formattedToday,
+    announcementsList,
+    allNotifications,
+    studentAttendanceData,
+    assignmentsList,
+    submissionsList,
+    examsList,
+    finalGradesList,
+    examHistoryList,
+    classMaterials,
+    materialsProgress,
+    menungguTugasDinilaiCount,
+    attendanceSummary,
+    combinedGrades.length,
+    rataRataNilaiTugas,
+    rataRataNilaiUjian,
+    isSimulasiEnabled,
+  ]);
+
   if (isLoadingInitialData) {
     return (
       <CuteLoadingScreen
@@ -4965,6 +5162,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
             onClose={() => setIsAiChatOpen(false)}
             studentName={student?.displayName || student?.name || student?.nama || student?.studentName || "Siswa"}
             studentPhotoUrl={student?.profilePhotoUrl || ""}
+            sipinterContext={sipinterContext}
           />
         </Suspense>
       )}
@@ -11511,7 +11709,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   setIsAiChatOpen(true);
                 }}
                 className="flex flex-col items-center justify-center gap-1 py-1 px-1.5 text-[#85cc00] transition-all cursor-pointer group active:scale-95"
-                title="Tanya Si Pinter"
+                title="Tanya Si Pinter (Gemini AI)"
               >
                 <div className="relative w-8 h-8 rounded-full overflow-hidden flex items-center justify-center border border-emerald-200/90 shadow-2xs group-hover:scale-105 group-hover:border-[#85cc00] transition-all">
                   <SipinterAvatar sizeClass="w-full h-full" />

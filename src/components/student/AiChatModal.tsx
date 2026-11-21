@@ -20,6 +20,9 @@ import {
   Sparkles,
   User,
   ShieldAlert,
+  ExternalLink,
+  Copy,
+  Check,
 } from "lucide-react";
 import { SipinterAvatar, CuteMascotSvg } from "../CuteLoadingScreen";
 import { getDriveImageUrl, getDriveImageFallbackUrl } from "../../lib/driveUtils";
@@ -27,12 +30,25 @@ import { EtikaDigitalModal } from "./EtikaDigitalModal";
 import { addDoc, collection } from "firebase/firestore";
 import { db } from "../../lib/firebase";
 import { OperationType, handleFirestoreError } from "../../lib/firestoreUtils";
+import {
+  type SipinterStudentContext,
+  checkClientProfanity,
+  buildProfanityWarningMessage,
+  resolveLocalSipinterReply,
+  buildStudentGeminiPrompt,
+} from "../../lib/siPinterLocalEngine";
+
+export type { SipinterStudentContext };
+
+const GEMINI_STUDENT_URL = "https://gemini.google.com/app";
 
 interface Message {
   id: string;
   role: "user" | "bot";
   content: string;
   timestamp: Date;
+  geminiPromptToCopy?: string;
+  isConfidentialBlock?: boolean;
 }
 
 interface AiChatModalProps {
@@ -40,6 +56,7 @@ interface AiChatModalProps {
   onClose: () => void;
   studentName: string;
   studentPhotoUrl?: string;
+  sipinterContext?: SipinterStudentContext;
 }
 
 interface GuideArticle {
@@ -269,21 +286,31 @@ function renderFormattedMessage(text: string, isUser: boolean, isStreaming: bool
   );
 }
 
+const QUICK_PROMPTS = [
+  "Apakah ada pesan hari ini?",
+  "Tugas apa saja yang belum saya kerjakan?",
+  "Apakah ada tugas yang ditolak dan perlu diperbaiki?",
+  "Bagaimana ringkasan kehadiran dan nilai saya?",
+  "Apakah ada jadwal ujian aktif saat ini?",
+  "Materi apa saja yang tersedia dan belum selesai saya baca?",
+  "Cara upload tugas Google Drive agar tidak ditolak"
+];
+
 export const AiChatModal: React.FC<AiChatModalProps> = ({
   isOpen,
   onClose,
   studentName,
-  studentPhotoUrl
+  studentPhotoUrl,
+  sipinterContext
 }) => {
   const firstName = getFirstName(studentName);
-  const assistantName = "Si Pinter";
+  const assistantName = "Si Pinter · Gemini AI";
 
   const [activeTab, setActiveTab] = useState<"chat" | "guide">("chat");
   const [selectedGuideId, setSelectedGuideId] = useState<string | null>(null);
   const [guideSearch, setGuideSearch] = useState("");
   const [guideCategory, setGuideCategory] = useState<string>("Semua");
   const [checkedSteps, setCheckedSteps] = useState<Record<string, boolean>>({});
-  const [avatarFailed, setAvatarFailed] = useState(false);
   const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = useState(false);
   const [studentAvatarStage, setStudentAvatarStage] = useState<"primary" | "fallback" | "initials">("primary");
 
@@ -292,12 +319,12 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isEtikaModalOpen, setIsEtikaModalOpen] = useState(false);
   const [isEtikaMandatory, setIsEtikaMandatory] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const wordTimerRef = useRef<number | null>(null);
-  const sessionCacheRef = useRef<Map<string, string>>(new Map());
 
   // Otomatis tampilkan Modal Etika Digital pada akses pertama siswa
   useEffect(() => {
@@ -347,7 +374,8 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    const greetingText = `Halo **${firstName}**, selamat datang! Saya **${assistantName}**, asisten cerdas resmi dari aplikasi **Si-Pinter App** SMAN 1 Cililin.\n\nDengan senang hati saya siap membantu ${firstName} mendalami materi **Informatika Kelas X** maupun menjawab pertanyaan seputar penggunaan aplikasi ini. Silakan ketik pertanyaan Anda atau buka tab **Panduan Aplikasi** di atas.`;
+    const kelasInfo = sipinterContext?.kelas ? ` (Kelas **${sipinterContext.kelas}**)` : "";
+    const greetingText = `Halo **${firstName}**${kelasInfo}, selamat datang di **Si Pinter · Gemini AI**!\n\nPertanyaan cepat seputar **pesan hari ini**, **tugas belum selesai/ditolak**, **kehadiran & nilai**, **jadwal ujian aktif**, serta **panduan & rangkuman Bab 1–9** langsung dijawab seketika di sini.\n\nUntuk pertanyaan bebas atau diskusi mendalam, kamu akan diarahkan ke **Gemini AI menggunakan akun Google-mu sendiri** (konteks Si-Pinter non-rahasia otomatis tersalin agar tinggal *Paste*, dan tutup tab Gemini kapan saja untuk kembali ke Si-Pinter).`;
 
     setMessages((prev) => {
       if (prev.length === 0) {
@@ -370,7 +398,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       }
       return prev;
     });
-  }, [isOpen, firstName, assistantName]);
+  }, [isOpen, firstName, assistantName, sipinterContext?.kelas]);
 
   useEffect(() => {
     if (activeTab === "chat") {
@@ -405,13 +433,31 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
     return getDriveImageUrl(studentPhotoUrl);
   }, [studentPhotoUrl, studentAvatarStage]);
 
+  const copyPromptToClipboard = (textToCopy: string, feedbackId: string) => {
+    if (!textToCopy) return;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        void navigator.clipboard.writeText(textToCopy);
+      }
+    } catch {
+      // Ignore clipboard permission edge cases
+    }
+    setCopiedId(feedbackId);
+    window.setTimeout(() => {
+      setCopiedId((prev) => (prev === feedbackId ? null : prev));
+    }, 2200);
+  };
+
+  const defaultGeminiPrompt = useMemo(
+    () => buildStudentGeminiPrompt(firstName, "", sipinterContext),
+    [firstName, sipinterContext]
+  );
+
   const sendMessageText = async (rawText: string) => {
     const trimmed = rawText.trim();
     if (!trimmed || isLoading || streamingMsgId) return;
 
     stopActiveStream();
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
 
     const userMessage: Message = {
       id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -420,8 +466,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       timestamp: new Date()
     };
 
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
+    setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setError(null);
 
@@ -471,335 +516,62 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
 
     const reqStartTime = performance.now();
 
-    // Microsecond client-side cache hit for repeated standalone questions
-    const normalizedKey = trimmed.toLowerCase().replace(/\s+/g, " ");
-    const hasPriorUserTurn = messages.some((m) => m.role === "user");
-    const cachedSessionAnswer = !hasPriorUserTurn ? sessionCacheRef.current.get(normalizedKey) : undefined;
-
-    if (cachedSessionAnswer) {
-      const botMsgId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    // 1. Etika Digital / Profanity check (tetap aktif menjaga tata tertib)
+    const flaggedWord = checkClientProfanity(trimmed);
+    if (flaggedWord) {
+      const warningText = buildProfanityWarningMessage(firstName, flaggedWord);
       setMessages((prev) => [
         ...prev,
         {
-          id: botMsgId,
+          id: `bot-warn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           role: "bot",
-          content: cachedSessionAnswer,
-          timestamp: new Date()
-        }
+          content: warningText,
+          timestamp: new Date(),
+          isConfidentialBlock: true,
+        },
       ]);
-      void logAiInteraction(trimmed, cachedSessionAnswer, performance.now() - reqStartTime);
+      void logAiInteraction(trimmed, warningText, performance.now() - reqStartTime);
       return;
     }
 
-    setIsLoading(true);
-
-    try {
-      const response = await fetch(`${window.location.origin}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify({
-          studentName,
-          stream: true,
-          messages: nextMessages.map((m) => ({
-            role: m.role === "user" ? "user" : "assistant",
-            content: m.content
-          }))
-        })
-      });
-
-      const contentType = response.headers.get("content-type") || "";
-
-      if (!response.ok) {
-        if (contentType.includes("application/json")) {
-          const errData = await response.json();
-          throw new Error(errData.error || `Gagal mendapatkan respon dari ${assistantName}.`);
-        }
-        const textErr = await response.text();
-        throw new Error(textErr || `Gagal mendapatkan respon valid dari ${assistantName}.`);
-      }
-
-      if (contentType.includes("text/event-stream") && response.body) {
-        // Consume ReadableStream via Web TextDecoderStream (with byte-reader fallback)
-        const textStream =
-          typeof TextDecoderStream !== "undefined"
-            ? response.body.pipeThrough(new TextDecoderStream())
-            : new ReadableStream<string>({
-                async start(streamController) {
-                  const byteReader = response.body!.getReader();
-                  const decoder = new TextDecoder();
-                  try {
-                    while (true) {
-                      const { done, value } = await byteReader.read();
-                      if (done) {
-                        const tail = decoder.decode();
-                        if (tail) streamController.enqueue(tail);
-                        streamController.close();
-                        break;
-                      }
-                      streamController.enqueue(decoder.decode(value, { stream: true }));
-                    }
-                  } catch (err) {
-                    streamController.error(err);
-                  }
-                }
-              });
-
-        const reader = textStream.getReader();
-        const botMsgId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        const wordQueue: string[] = [];
-        let sseBuffer = "";
-        let displayedText = "";
-        let hasCreatedBotMessage = false;
-        let streamDone = false;
-        let streamError: Error | null = null;
-
-        const ensureBotBubble = () => {
-          if (!hasCreatedBotMessage) {
-            hasCreatedBotMessage = true;
-            setIsLoading(false);
-            setStreamingMsgId(botMsgId);
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: botMsgId,
-                role: "bot",
-                content: "",
-                timestamp: new Date()
-              }
-            ]);
-          }
-        };
-
-        const enqueueTextWords = (chunk: string) => {
-          const tokens = chunk.match(/\S+\s*|\n+/g);
-          if (tokens && tokens.length > 0) {
-            wordQueue.push(...tokens);
-          } else if (chunk) {
-            wordQueue.push(chunk);
-          }
-        };
-
-        const drainFinishedPromise = new Promise<void>((resolve, reject) => {
-          // Ultra-fast 8ms word flush eliminates artificial client-side delay
-          wordTimerRef.current = window.setInterval(() => {
-            if (controller.signal.aborted) {
-              if (wordTimerRef.current !== null) {
-                window.clearInterval(wordTimerRef.current);
-                wordTimerRef.current = null;
-              }
-              resolve();
-              return;
-            }
-
-            if (wordQueue.length > 0) {
-              ensureBotBubble();
-              const wordsPerTick = Math.max(1, Math.ceil(wordQueue.length / 5));
-              const nextSlice = wordQueue.splice(0, wordsPerTick).join("");
-              displayedText += nextSlice;
-
-              setMessages((prev) =>
-                prev.map((m) => (m.id === botMsgId ? { ...m, content: displayedText } : m))
-              );
-            }
-
-            if (streamDone && wordQueue.length === 0) {
-              if (wordTimerRef.current !== null) {
-                window.clearInterval(wordTimerRef.current);
-                wordTimerRef.current = null;
-              }
-              setStreamingMsgId(null);
-              if (streamError) {
-                reject(streamError);
-              } else {
-                resolve();
-              }
-            }
-          }, 8);
-        });
-
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            sseBuffer += value;
-            const events = sseBuffer.split(/\r?\n\r?\n/);
-            sseBuffer = events.pop() || "";
-
-            for (const evt of events) {
-              const lines = evt.split(/\r?\n/);
-              for (const line of lines) {
-                if (!line.startsWith("data:")) continue;
-                const rawPayload = line.slice(5).trim();
-                if (!rawPayload) continue;
-
-                let parsed: any;
-                try {
-                  parsed = JSON.parse(rawPayload);
-                } catch {
-                  continue;
-                }
-
-                if (parsed.error) {
-                  streamError = new Error(parsed.error);
-                  break;
-                }
-
-                if (parsed.text) {
-                  enqueueTextWords(parsed.text);
-                }
-              }
-              if (streamError) break;
-            }
-            if (streamError) break;
-          }
-        } catch (readErr: any) {
-          if (readErr?.name !== "AbortError") {
-            streamError = readErr;
-          }
-        } finally {
-          streamDone = true;
-        }
-
-        try {
-          await drainFinishedPromise;
-          if (!controller.signal.aborted && !displayedText.trim()) {
-            throw new Error(`Respon ${assistantName} kosong.`);
-          }
-        } catch (streamFailure: any) {
-          if (controller.signal.aborted) return;
-          // Automatic one-shot fallback to standard JSON endpoint if SSE failed or emitted no text
-          if (!displayedText.trim()) {
-            const fallbackRes = await fetch(`${window.location.origin}/api/chat`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              signal: controller.signal,
-              body: JSON.stringify({
-                studentName,
-                stream: false,
-                messages: nextMessages.map((m) => ({
-                  role: m.role === "user" ? "user" : "assistant",
-                  content: m.content
-                }))
-              })
-            });
-            if (fallbackRes.ok) {
-              const fallbackData = await fallbackRes.json();
-              if (fallbackData?.text) {
-                if (!hasPriorUserTurn) {
-                  sessionCacheRef.current.set(normalizedKey, fallbackData.text);
-                }
-                setMessages((prev) => [
-                  ...prev,
-                  {
-                    id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-                    role: "bot",
-                    content: fallbackData.text,
-                    timestamp: new Date()
-                  }
-                ]);
-                void logAiInteraction(trimmed, fallbackData.text, performance.now() - reqStartTime);
-                return;
-              }
-            } else {
-              const errJson = await fallbackRes.json().catch(() => null);
-              if (errJson?.error) {
-                throw new Error(errJson.error);
-              }
-            }
-          }
-          throw streamFailure;
-        }
-
-        if (!controller.signal.aborted && displayedText.trim()) {
-          if (!hasPriorUserTurn) {
-            sessionCacheRef.current.set(normalizedKey, displayedText);
-          }
-          void logAiInteraction(trimmed, displayedText, performance.now() - reqStartTime);
-        }
-        return;
-      }
-
-      if (contentType.includes("application/json")) {
-        const data = await response.json();
-        if (!data.text) {
-          throw new Error(`Respon ${assistantName} kosong.`);
-        }
-        if (!hasPriorUserTurn) {
-          sessionCacheRef.current.set(normalizedKey, data.text);
-        }
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `bot-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            role: "bot",
-            content: data.text,
-            timestamp: new Date()
-          }
-        ]);
-        void logAiInteraction(trimmed, data.text, performance.now() - reqStartTime);
-      } else {
-        const textErr = await response.text();
-        throw new Error(textErr || "Gagal mendapatkan respon valid dari server.");
-      }
-    } catch (err: any) {
-      if (err?.name === "AbortError") return;
-      console.error("Chat Error:", err);
-      const rawMsg = String(err?.message || "").trim();
-      const lowerMsg = rawMsg.toLowerCase();
-
-      let naturalChatReply = rawMsg;
-      const isQuotaLike =
-        lowerMsg.includes("429") ||
-        lowerMsg.includes("resource_exhausted") ||
-        lowerMsg.includes("quota") ||
-        lowerMsg.includes("kuota") ||
-        lowerMsg.includes("limit") ||
-        lowerMsg.includes("jatah gratisan");
-
-      if (!rawMsg || lowerMsg.includes("failed to fetch") || lowerMsg.includes("networkerror")) {
-        naturalChatReply =
-          `Aduh ${firstName}, maaf ya koneksinya ke server lagi putus nyambung nih 😅 Cek sinyal internetmu sebentar terus coba tanya lagi ya!`;
-      } else if (
-        isQuotaLike &&
-        !rawMsg.includes("jatah gratisan AI aku")
-      ) {
-        naturalChatReply =
-          `Eh ${firstName}, jujur nih jatah gratisan AI aku buat hari ini kebetulan lagi habis kepake bareng temen-temen yang lain 😅\n\n` +
-          `Jadi buat pertanyaan bebas yang perlu mikir panjang, aku istirahat dulu sebentar sampai kuotanya ke-reset lagi ya. Tapi santai aja, kamu masih bisa buka tab **Panduan Aplikasi** di atas atau tanya seputar **cara upload tugas, info nilai/CBT, sama rangkuman materi Informatika Bab 1–9**—itu masih aman dan langsung aku bantu kok! 😊`;
-      } else if (
-        lowerMsg.includes("500") ||
-        lowerMsg.includes("502") ||
-        lowerMsg.includes("504") ||
-        lowerMsg.includes("function_invocation_failed") ||
-        lowerMsg.includes("a server error has occurred") ||
-        lowerMsg.includes("<!doctype") ||
-        lowerMsg.includes("<html") ||
-        lowerMsg.includes("kunci api") ||
-        lowerMsg.includes("permission_denied")
-      ) {
-        naturalChatReply =
-          `Eh ${firstName}, kayaknya akses AI aku di server lagi ada kendala teknis sebentar nih 🙏 Coba kirim ulang pertanyaannya sebentar lagi ya, atau kabarin Pak Agan kalau masih berlanjut. Sementara itu, kamu masih bisa tanya soal cara kirim tugas, aturan CBT, atau rangkuman materi Informatika Bab 1–9 di sini!`;
-      }
-
-      setError(null);
+    // 2. Zero-quota local engine for live Si-Pinter non-confidential data & Bab 1-9 guides
+    const localResult = resolveLocalSipinterReply(trimmed, firstName, sipinterContext);
+    if (localResult.handled) {
+      const promptWithQuestion = buildStudentGeminiPrompt(firstName, trimmed, sipinterContext);
       setMessages((prev) => [
         ...prev,
         {
-          id: `bot-info-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `bot-local-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           role: "bot",
-          content: naturalChatReply,
+          content: localResult.reply,
           timestamp: new Date(),
+          isConfidentialBlock: localResult.isConfidentialBlock,
+          ...(!localResult.isConfidentialBlock ? { geminiPromptToCopy: promptWithQuestion } : {}),
         },
       ]);
-    } finally {
-      setIsLoading(false);
-      setStreamingMsgId(null);
-      if (abortControllerRef.current === controller) {
-        abortControllerRef.current = null;
-      }
+      void logAiInteraction(trimmed, localResult.reply, performance.now() - reqStartTime);
+      return;
     }
+
+    // 3. Open-ended / custom questions: route cleanly to student's own Gemini AI account (0 server quota)
+    const preparedPrompt = buildStudentGeminiPrompt(firstName, trimmed, sipinterContext);
+    const botMsgId = `bot-gemini-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const handoffReply =
+      `Pertanyaan bebasmu sudah saya siapkan lengkap bersama konteks non-rahasia **Si-Pinter App** untuk dijawab oleh **Gemini AI menggunakan kuota akun Google milikmu sendiri**.\n\n` +
+      `Klik tombol **Buka Gemini AI (Akun Siswa)** di bawah — prompt akan tersalin otomatis sehingga kamu tinggal **Tempel (Paste) & Kirim**. Untuk kembali ke Si-Pinter, cukup tutup tab Gemini.`;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: botMsgId,
+        role: "bot",
+        content: handoffReply,
+        timestamp: new Date(),
+        geminiPromptToCopy: preparedPrompt,
+      },
+    ]);
+    copyPromptToClipboard(preparedPrompt, botMsgId);
+    void logAiInteraction(trimmed, "[Handoff ke Gemini AI Akun Siswa]", performance.now() - reqStartTime);
   };
 
   const handleSend = () => {
@@ -814,7 +586,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
       {
         id: `greeting-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
         role: "bot",
-        content: `Halo **${firstName}**, sesi percakapan telah dibersihkan. Silakan ajukan pertanyaan seputar fitur aplikasi **Si-Pinter** atau materi **Informatika Kelas X**.`,
+        content: `Halo **${firstName}**, sesi percakapan telah dibersihkan.\n\nPilih pertanyaan cepat di bawah untuk cek info **Si-Pinter**, atau ketik pertanyaan bebas untuk dilanjutkan ke **Gemini AI (limit akun siswa)**.`,
         timestamp: new Date()
       }
     ]);
@@ -890,11 +662,22 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                   {renderTeacherAvatar("w-11 h-11 border-2 border-white/60 shadow-sm")}
                 </button>
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-base font-bold tracking-tight truncate">{assistantName}</h3>
+                  <h3 className="text-base font-bold tracking-tight truncate">Si Pinter · Gemini AI</h3>
                   <p className="text-[11px] text-emerald-100/90 font-medium truncate">
-                    Chat {firstName} · Informatika & Panduan
+                    {firstName} · Limit Akun Siswa · Data Si-Pinter
                   </p>
                 </div>
+                <a
+                  href={GEMINI_STUDENT_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => copyPromptToClipboard(defaultGeminiPrompt, "header-gemini")}
+                  className="min-h-[40px] px-3 py-1.5 rounded-xl bg-white text-[#075e54] hover:bg-emerald-50 text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors whitespace-nowrap shrink-0"
+                  title="Buka Gemini AI memakai akun Google siswa (konteks Si-Pinter otomatis tersalin)"
+                >
+                  <span>{copiedId === "header-gemini" ? "Tersalin · Buka" : "Buka Gemini"}</span>
+                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                </a>
                 <button
                   type="button"
                   onClick={() => {
@@ -926,24 +709,24 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                 </button>
               </div>
 
-              {/* Interactive Tab Bar: Chat SiPinter & Panduan Aplikasi */}
+              {/* Interactive Tab Bar: Chat Gemini AI & Panduan Aplikasi */}
               <div className="grid grid-cols-2 gap-1.5 p-1 bg-black/15 rounded-2xl">
                 <button
                   type="button"
                   onClick={() => setActiveTab("chat")}
-                  className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                  className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
                     activeTab === "chat"
                       ? "bg-white text-[#075e54] shadow-sm"
                       : "text-emerald-50/90 hover:bg-white/10"
                   }`}
                 >
-                  <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                  <span>Chat Si Pinter</span>
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                  <span>Chat & Gemini AI</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab("guide")}
-                  className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
+                  className={`min-h-[40px] px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer whitespace-nowrap ${
                     activeTab === "guide"
                       ? "bg-white text-[#075e54] shadow-sm"
                       : "text-emerald-50/90 hover:bg-white/10"
@@ -969,7 +752,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                     if (isUser) {
                       return (
                         <div key={`msg-${msg.id || mIdx}-${mIdx}`} className="flex items-end gap-2.5 justify-end">
-                          <div className="max-w-[80%] space-y-1 flex flex-col items-end">
+                          <div className="max-w-[82%] space-y-1 flex flex-col items-end">
                             <div className="flex items-center gap-1.5 px-1 text-[11px] text-slate-500">
                               <span className="tabular-nums">{timeText}</span>
                               <span aria-hidden="true">·</span>
@@ -985,18 +768,52 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                     }
 
                     const isCurrentlyStreaming = msg.id === streamingMsgId;
+                    const msgKey = msg.id || `bot-${mIdx}`;
 
                     return (
-                      <div key={`msg-${msg.id || mIdx}-${mIdx}`} className="flex items-end gap-2.5 justify-start">
+                      <div key={`msg-${msgKey}-${mIdx}`} className="flex items-end gap-2.5 justify-start">
                         {renderTeacherAvatar("w-8 h-8 mb-0.5")}
-                        <div className="max-w-[80%] space-y-1">
+                        <div className="max-w-[85%] space-y-1">
                           <div className="flex items-center gap-1.5 px-1 text-[11px] text-slate-500">
                             <span className="font-semibold text-slate-700">{assistantName}</span>
                             <span aria-hidden="true">·</span>
                             <span className="tabular-nums">{timeText}</span>
                           </div>
-                          <div className="bg-white text-slate-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-slate-200/80 shadow-[0_3px_12px_-4px_rgba(15,23,42,0.08)]">
+                          <div className="bg-white text-slate-800 px-4 py-3 rounded-2xl rounded-bl-sm border border-slate-200/80 shadow-[0_3px_12px_-4px_rgba(15,23,42,0.08)] space-y-3">
                             {renderFormattedMessage(msg.content, false, isCurrentlyStreaming)}
+
+                            {msg.geminiPromptToCopy && !msg.isConfidentialBlock && (
+                              <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-2">
+                                <a
+                                  href={GEMINI_STUDENT_URL}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  onClick={() => copyPromptToClipboard(msg.geminiPromptToCopy!, msgKey)}
+                                  className="min-h-[40px] px-3.5 py-2 rounded-xl bg-[#075e54] hover:bg-[#0b7a6d] text-white text-xs font-bold inline-flex items-center gap-2 shadow-xs transition-colors whitespace-nowrap shrink-0"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                  <span>Buka Gemini AI (Akun Siswa)</span>
+                                  <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => copyPromptToClipboard(msg.geminiPromptToCopy!, msgKey)}
+                                  className="min-h-[40px] px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                                >
+                                  {copiedId === msgKey ? (
+                                    <>
+                                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                      <span className="text-emerald-700">Prompt Tersalin</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy className="w-3.5 h-3.5 shrink-0" />
+                                      <span>Salin Konteks</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1007,19 +824,15 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                   {messages.length === 1 && !isLoading && !streamingMsgId && (
                     <div className="pl-10 space-y-2 pt-1">
                       <p className="text-[11px] font-medium text-slate-500 px-0.5">
-                        Contoh pertanyaan cepat:
+                        Pertanyaan cepat Si-Pinter (langsung terjawab tanpa batas kuota):
                       </p>
                       <div className="flex flex-wrap gap-2">
-                        {[
-                          "Cara upload tugas Google Drive agar tidak ditolak",
-                          "Bagaimana aturan Ujian Online CBT?",
-                          "Jelaskan materi Berpikir Komputasional"
-                        ].map((prompt, pIdx) => (
+                        {QUICK_PROMPTS.map((prompt, pIdx) => (
                           <button
                             key={`prompt-${pIdx}`}
                             type="button"
                             onClick={() => void sendMessageText(prompt)}
-                            className="text-left text-xs font-medium text-[#075e54] bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 px-3 py-2 rounded-xl shadow-2xs transition-colors cursor-pointer"
+                            className="min-h-[40px] text-left text-xs font-medium text-[#075e54] bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 px-3.5 py-2 rounded-xl shadow-2xs transition-colors cursor-pointer"
                           >
                             {prompt}
                           </button>
@@ -1056,7 +869,21 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                 </div>
 
                 {/* Modern Input Area */}
-                <div className="shrink-0 p-3 bg-white border-t border-slate-200/80">
+                <div className="shrink-0 p-3 bg-white border-t border-slate-200/80 space-y-2">
+                  {messages.length > 1 && !isLoading && !streamingMsgId && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 custom-scrollbar">
+                      {QUICK_PROMPTS.map((prompt, pIdx) => (
+                        <button
+                          key={`quick-bar-${pIdx}`}
+                          type="button"
+                          onClick={() => void sendMessageText(prompt)}
+                          className="min-h-[40px] px-3 py-2 rounded-lg text-[11px] font-semibold text-[#075e54] bg-emerald-50/70 hover:bg-emerald-100 border border-emerald-200/70 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                        >
+                          {prompt}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <form
                     onSubmit={(e) => {
                       e.preventDefault();
@@ -1069,7 +896,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
                       type="text"
                       value={input}
                       onChange={(e) => setInput(e.target.value)}
-                      placeholder="Tanyakan materi Informatika atau cara pakai aplikasi..."
+                      placeholder="Tanya info Si-Pinter, materi, atau lanjut ke Gemini AI..."
                       className="flex-1 min-h-[44px] bg-slate-50 border border-slate-200 focus:border-[#0f766e] focus:bg-white rounded-2xl px-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none transition-colors"
                     />
                     <button

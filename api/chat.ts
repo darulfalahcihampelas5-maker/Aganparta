@@ -5,10 +5,12 @@ import {
   formatFriendlyGeminiError,
   getGeminiModelConfigs,
   getSharedCachedReply,
+  isLiveStudentContextQuestion,
   isRetryableGeminiError,
   matchLocalKnowledge,
   normalizeGeminiTurns,
   runWithGeminiQueue,
+  sanitizeSipinterContext,
   setSharedCachedReply,
   streamTextViaSse,
   checkProfanity,
@@ -52,10 +54,11 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const { messages, studentName, stream, bypassLocal } = body || {};
+    const { messages, studentName, sipinterContext, stream, bypassLocal } = body || {};
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: "Pesan tidak boleh kosong." });
     }
+    const safeSipinterContext = sanitizeSipinterContext(sipinterContext);
 
     const firstName = extractFirstName(studentName);
     const assistantName = "Si Pinter";
@@ -79,8 +82,10 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ text: warningReply });
     }
 
+    const isLiveContextQuery = Boolean(safeSipinterContext) && isLiveStudentContextQuestion(questionText);
+
     // LAPIS 1: Local Knowledge Base (App Guides + Informatics Bab 1-9) — 0 Gemini Quota
-    if (isStandaloneQuestion && !bypassLocal) {
+    if (isStandaloneQuestion && !bypassLocal && !isLiveContextQuery) {
       const localReply = matchLocalKnowledge(questionText, firstName);
       if (localReply) {
         if (stream) {
@@ -90,8 +95,8 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated questions
-    if (isStandaloneQuestion) {
+    // LAPIS 2: Cross-Student Shared Cache — 0 Gemini Quota for repeated static questions
+    if (isStandaloneQuestion && !isLiveContextQuery) {
       const cachedReply = getSharedCachedReply(questionText, firstName);
       if (cachedReply) {
         if (stream) {
@@ -115,7 +120,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const ai = sharedAi || createGeminiClient(apiKey);
-    const systemInstruction = buildCompactSystemInstruction(firstName, studentName);
+    const systemInstruction = buildCompactSystemInstruction(firstName, studentName, safeSipinterContext);
     const modelConfigs = getGeminiModelConfigs(systemInstruction);
 
     if (stream) {
@@ -171,7 +176,7 @@ export default async function handler(req: any, res: any) {
               return;
             }
 
-            if (isStandaloneQuestion) {
+            if (isStandaloneQuestion && !isLiveContextQuery) {
               const queuedCacheHit = getSharedCachedReply(questionText, firstName);
               if (queuedCacheHit) {
                 safeWrite(`data: ${JSON.stringify({ text: queuedCacheHit })}\n\n`);
@@ -236,7 +241,7 @@ export default async function handler(req: any, res: any) {
                   if (firstTokenTimer) clearTimeout(firstTokenTimer);
 
                   if (hasEmittedAnyChunk) {
-                    if (isStandaloneQuestion && assembledText.trim()) {
+                    if (isStandaloneQuestion && !isLiveContextQuery && assembledText.trim()) {
                       setSharedCachedReply(questionText, assembledText, firstName, studentName);
                     }
                     safeWrite(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -301,7 +306,7 @@ export default async function handler(req: any, res: any) {
                   clearTimeout(fallbackTimer);
 
                   if (response?.text?.trim()) {
-                    if (isStandaloneQuestion) {
+                    if (isStandaloneQuestion && !isLiveContextQuery) {
                       setSharedCachedReply(questionText, response.text, firstName, studentName);
                     }
                     safeWrite(`data: ${JSON.stringify({ text: response.text })}\n\n`);
@@ -343,7 +348,7 @@ export default async function handler(req: any, res: any) {
     }
 
     const jsonText = await runWithGeminiQueue(async () => {
-      if (isStandaloneQuestion) {
+      if (isStandaloneQuestion && !isLiveContextQuery) {
         const queuedCacheHit = getSharedCachedReply(questionText, firstName);
         if (queuedCacheHit) return queuedCacheHit;
       }
@@ -367,7 +372,7 @@ export default async function handler(req: any, res: any) {
             clearTimeout(attemptTimer);
 
             if (response?.text?.trim()) {
-              if (isStandaloneQuestion) {
+              if (isStandaloneQuestion && !isLiveContextQuery) {
                 setSharedCachedReply(questionText, response.text, firstName, studentName);
               }
               return response.text;

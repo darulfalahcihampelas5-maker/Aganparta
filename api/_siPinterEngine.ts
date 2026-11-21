@@ -7,27 +7,317 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 // Lapis 3: Concurrency Queue + Pacing + Multi-Model Gemini Fallback
 // ============================================================================
 
+export interface SipinterStudentContext {
+  kelas?: string;
+  todayDateLabel?: string;
+  todayMessages?: Array<{
+    source: string;
+    title: string;
+    content: string;
+    timeLabel?: string;
+  }>;
+  recentAnnouncements?: Array<{
+    title: string;
+    content: string;
+    dateLabel: string;
+  }>;
+  pendingAssignments?: Array<{
+    title: string;
+    bab: string;
+    deadlineLabel: string;
+  }>;
+  rejectedAssignments?: Array<{
+    title: string;
+    feedback: string;
+  }>;
+  waitingReviewCount?: number;
+  completedTasksCount?: number;
+  activeExams?: Array<{
+    title: string;
+    bab: string;
+    durationMinutes: number;
+    isFinished: boolean;
+  }>;
+  materials?: Array<{
+    title: string;
+    bab: string;
+    progressStatus: string;
+  }>;
+  attendanceSummary?: {
+    percentage: string;
+    totalMeetings: number;
+    hadir: number;
+    sakit: number;
+    izin: number;
+    alpa: number;
+    dispen: number;
+    rubricStatus: string;
+  } | null;
+  gradesSummary?: {
+    gradedCount: number;
+    avgTugas: number;
+    avgUjian: number;
+  };
+  isSimulasiEnabled?: boolean;
+}
+
+const cleanStr = (val: unknown, maxLen = 160): string => {
+  if (typeof val !== "string") return "";
+  return val.replace(/\s+/g, " ").trim().slice(0, maxLen);
+};
+
+export function sanitizeSipinterContext(raw: any): SipinterStudentContext | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+
+  const safeTodayMessages = Array.isArray(raw.todayMessages)
+    ? raw.todayMessages
+        .slice(0, 8)
+        .map((m: any) => ({
+          source: cleanStr(m?.source, 30) || "Pesan",
+          title: cleanStr(m?.title, 100),
+          content: cleanStr(m?.content, 240),
+          timeLabel: cleanStr(m?.timeLabel, 40),
+        }))
+        .filter((m: any) => m.title || m.content)
+    : [];
+
+  const safeRecentAnnouncements = Array.isArray(raw.recentAnnouncements)
+    ? raw.recentAnnouncements
+        .slice(0, 4)
+        .map((a: any) => ({
+          title: cleanStr(a?.title, 100),
+          content: cleanStr(a?.content, 220),
+          dateLabel: cleanStr(a?.dateLabel, 50),
+        }))
+        .filter((a: any) => a.title || a.content)
+    : [];
+
+  const safePendingAssignments = Array.isArray(raw.pendingAssignments)
+    ? raw.pendingAssignments
+        .slice(0, 8)
+        .map((t: any) => ({
+          title: cleanStr(t?.title, 100),
+          bab: cleanStr(t?.bab, 60),
+          deadlineLabel: cleanStr(t?.deadlineLabel, 60),
+        }))
+        .filter((t: any) => t.title)
+    : [];
+
+  const safeRejectedAssignments = Array.isArray(raw.rejectedAssignments)
+    ? raw.rejectedAssignments
+        .slice(0, 5)
+        .map((r: any) => ({
+          title: cleanStr(r?.title, 100),
+          feedback: cleanStr(r?.feedback, 180),
+        }))
+        .filter((r: any) => r.title)
+    : [];
+
+  const safeActiveExams = Array.isArray(raw.activeExams)
+    ? raw.activeExams
+        .slice(0, 6)
+        .map((e: any) => ({
+          title: cleanStr(e?.title, 100),
+          bab: cleanStr(e?.bab, 60),
+          durationMinutes: Number.isFinite(Number(e?.durationMinutes)) ? Math.max(1, Math.round(Number(e.durationMinutes))) : 60,
+          isFinished: Boolean(e?.isFinished),
+        }))
+        .filter((e: any) => e.title)
+    : [];
+
+  const safeMaterials = Array.isArray(raw.materials)
+    ? raw.materials
+        .slice(0, 12)
+        .map((m: any) => ({
+          title: cleanStr(m?.title, 100),
+          bab: cleanStr(m?.bab, 60),
+          progressStatus: cleanStr(m?.progressStatus, 30) || "Belum Dimulai",
+        }))
+        .filter((m: any) => m.title)
+    : [];
+
+  const att = raw.attendanceSummary && typeof raw.attendanceSummary === "object"
+    ? {
+        percentage: cleanStr(String(raw.attendanceSummary.percentage ?? "0"), 10),
+        totalMeetings: Math.max(0, Number(raw.attendanceSummary.totalMeetings) || 0),
+        hadir: Math.max(0, Number(raw.attendanceSummary.hadir) || 0),
+        sakit: Math.max(0, Number(raw.attendanceSummary.sakit) || 0),
+        izin: Math.max(0, Number(raw.attendanceSummary.izin) || 0),
+        alpa: Math.max(0, Number(raw.attendanceSummary.alpa) || 0),
+        dispen: Math.max(0, Number(raw.attendanceSummary.dispen) || 0),
+        rubricStatus: cleanStr(raw.attendanceSummary.rubricStatus, 40),
+      }
+    : null;
+
+  const gr = raw.gradesSummary && typeof raw.gradesSummary === "object"
+    ? {
+        gradedCount: Math.max(0, Number(raw.gradesSummary.gradedCount) || 0),
+        avgTugas: Math.max(0, Number(raw.gradesSummary.avgTugas) || 0),
+        avgUjian: Math.max(0, Number(raw.gradesSummary.avgUjian) || 0),
+      }
+    : undefined;
+
+  return {
+    kelas: cleanStr(raw.kelas, 20),
+    todayDateLabel: cleanStr(raw.todayDateLabel, 60),
+    todayMessages: safeTodayMessages,
+    recentAnnouncements: safeRecentAnnouncements,
+    pendingAssignments: safePendingAssignments,
+    rejectedAssignments: safeRejectedAssignments,
+    waitingReviewCount: Math.max(0, Number(raw.waitingReviewCount) || 0),
+    completedTasksCount: Math.max(0, Number(raw.completedTasksCount) || 0),
+    activeExams: safeActiveExams,
+    materials: safeMaterials,
+    attendanceSummary: att,
+    gradesSummary: gr,
+    isSimulasiEnabled: Boolean(raw.isSimulasiEnabled),
+  };
+}
+
+export function isLiveStudentContextQuestion(text: string): boolean {
+  const lower = text.toLowerCase();
+  const liveSignals = [
+    "pesan hari ini",
+    "ada pesan",
+    "pengumuman",
+    "notifikasi",
+    "tugas saya",
+    "tugas ku",
+    "tugasku",
+    "belum dikerjakan",
+    "belum saya kerjakan",
+    "deadline tugas",
+    "tugas yang ditolak",
+    "revisi tugas",
+    "ujian hari ini",
+    "ujian aktif",
+    "jadwal ujian",
+    "ujian yang aktif",
+    "nilai saya",
+    "nilaiku",
+    "rata rata nilai",
+    "rata-rata nilai",
+    "kehadiran saya",
+    "absensi saya",
+    "persentase kehadiran",
+    "materi apa",
+    "materi yang tersedia",
+    "simulasi aktif",
+    "menu simulasi",
+    "ringkasan belajar",
+    "status belajar",
+  ];
+  return liveSignals.some((sig) => lower.includes(sig));
+}
+
 export function extractFirstName(fullName?: string): string {
   if (!fullName || typeof fullName !== "string" || !fullName.trim()) return "Siswa";
   const firstWord = fullName.trim().split(/\s+/)[0] || "Siswa";
   return firstWord.charAt(0).toUpperCase() + firstWord.slice(1).toLowerCase();
 }
 
-export function buildCompactSystemInstruction(firstName: string, fullName?: string): string {
+export function buildCompactSystemInstruction(
+  firstName: string,
+  fullName?: string,
+  sipinterContext?: SipinterStudentContext
+): string {
   const identityLabel = fullName && fullName !== firstName ? `${firstName} (${fullName})` : firstName;
-  return `Anda "Si Pinter", asisten belajar AI resmi **Si-Pinter App** (Informatika Kelas X, SMAN 1 Cililin bersama Pak Agan).
+
+  let contextSection = "";
+  if (sipinterContext) {
+    const lines: string[] = [];
+    lines.push(
+      `DATA SI-PINTER SISWA SAAT INI (REAL-TIME & NON-RAHASIA):`,
+      `- Kelas: ${sipinterContext.kelas || "Informatika Kelas X"} | Tanggal Hari Ini: ${sipinterContext.todayDateLabel || "Hari Ini"}`
+    );
+
+    if (sipinterContext.todayMessages && sipinterContext.todayMessages.length > 0) {
+      lines.push(`- Pesan / Notifikasi Hari Ini (${sipinterContext.todayMessages.length}):`);
+      sipinterContext.todayMessages.forEach((m, i) => {
+        lines.push(`  ${i + 1}. [${m.source}] ${m.title}${m.timeLabel ? ` (${m.timeLabel})` : ""}: ${m.content}`);
+      });
+    } else {
+      lines.push(`- Pesan / Notifikasi Hari Ini: Tidak ada pesan atau pengumuman baru khusus hari ini.`);
+    }
+
+    if (sipinterContext.recentAnnouncements && sipinterContext.recentAnnouncements.length > 0) {
+      lines.push(`- Pengumuman Guru Terbaru (termasuk hari sebelumnya):`);
+      sipinterContext.recentAnnouncements.forEach((a, i) => {
+        lines.push(`  ${i + 1}. "${a.title}" (${a.dateLabel}): ${a.content}`);
+      });
+    }
+
+    if (sipinterContext.pendingAssignments && sipinterContext.pendingAssignments.length > 0) {
+      lines.push(`- Tugas Belum Dikerjakan (${sipinterContext.pendingAssignments.length}):`);
+      sipinterContext.pendingAssignments.forEach((t, i) => {
+        lines.push(`  ${i + 1}. ${t.title} [${t.bab || "Informatika"}] — Tenggat: ${t.deadlineLabel || "Tidak dibatasi"}`);
+      });
+    } else {
+      lines.push(`- Tugas Belum Dikerjakan: Semua tugas aktif sudah dikumpulkan!`);
+    }
+
+    if (sipinterContext.rejectedAssignments && sipinterContext.rejectedAssignments.length > 0) {
+      lines.push(`- Tugas Ditolak / Perlu Perbaikan (${sipinterContext.rejectedAssignments.length}):`);
+      sipinterContext.rejectedAssignments.forEach((r, i) => {
+        lines.push(`  ${i + 1}. ${r.title}${r.feedback ? ` (Catatan Guru: ${r.feedback})` : ""}`);
+      });
+    }
+
+    lines.push(
+      `- Status Tugas Lainnya: ${sipinterContext.waitingReviewCount || 0} menunggu penilaian, ${sipinterContext.completedTasksCount || 0} sudah selesai/dinilai.`
+    );
+
+    if (sipinterContext.activeExams && sipinterContext.activeExams.length > 0) {
+      lines.push(`- Daftar Ujian Online (CBT) Kelas Ini (${sipinterContext.activeExams.length}):`);
+      sipinterContext.activeExams.forEach((ex, i) => {
+        lines.push(
+          `  ${i + 1}. ${ex.title} [${ex.bab || "Informatika"}] · Durasi ${ex.durationMinutes} menit · Status: ${ex.isFinished ? "Sudah Selesai" : "Belum Dikerjakan"}`
+        );
+      });
+    } else {
+      lines.push(`- Ujian Online (CBT): Belum ada jadwal ujian aktif untuk kelas ini.`);
+    }
+
+    if (sipinterContext.materials && sipinterContext.materials.length > 0) {
+      lines.push(`- Materi Ajar Tersedia (${sipinterContext.materials.length} modul):`);
+      sipinterContext.materials.slice(0, 8).forEach((mat, i) => {
+        lines.push(`  ${i + 1}. ${mat.title} (${mat.bab || "Umum"}) — Progres: ${mat.progressStatus}`);
+      });
+    }
+
+    if (sipinterContext.attendanceSummary) {
+      const a = sipinterContext.attendanceSummary;
+      lines.push(
+        `- Ringkasan Kehadiran: ${a.percentage}% (${a.rubricStatus}) dari ${a.totalMeetings} pertemuan [Hadir: ${a.hadir}, Sakit: ${a.sakit}, Izin: ${a.izin}, Alpa: ${a.alpa}, Dispen: ${a.dispen}].`
+      );
+    }
+
+    if (sipinterContext.gradesSummary) {
+      lines.push(
+        `- Ringkasan Nilai Pribadi: ${sipinterContext.gradesSummary.gradedCount} penilaian masuk, rata-rata tugas ${sipinterContext.gradesSummary.avgTugas}, rata-rata ujian ${sipinterContext.gradesSummary.avgUjian}.`
+      );
+    }
+
+    lines.push(`- Status Menu Simulasi: ${sipinterContext.isSimulasiEnabled ? "Aktif untuk kelas ini" : "Belum diaktifkan guru"}.`);
+
+    contextSection = `\n\n${lines.join("\n")}`;
+  }
+
+  return `Anda adalah "Si Pinter", asisten belajar Gemini AI resmi yang terintegrasi langsung di dalam aplikasi **Si-Pinter App** (Informatika Kelas X, SMAN 1 Cililin bersama Pak Agan).
 KARAKTER: Profesional, modern, cerdas, sopan santun, rendah hati, jujur. Sapa pengguna dengan nama ${identityLabel}.
-GAYA JAWAB: Langsung ke inti, ringkas (maksimal 3-5 kalimat atau poin singkat kecuali diminta rinci), terstruktur rapi, mudah dipahami.
+GAYA JAWAB: Langsung ke inti, ringkas, terstruktur rapi dengan poin bila perlu, mudah dipahami.
 
 PENGETAHUAN SI-PINTER APP:
-1. Dasbor Siswa: Beranda, Tugas Siswa (filter Semua/Selesai/Belum/Ditolak, tombol Lihat Tugas, kirim link Drive/Canva/CamScanner/kamera), Nilai (gabungan rekap nilai & tugas ditolak; lencana merah = ditolak, hijau berkedip = nilai baru masuk), Kehadiran, Materi Ajar, Ujian Online CBT (mode layar penuh & anti pindah tab), Simulasi interaktif, Pesan, Pengguna (foto profil & ganti password), Si Pinter (Chat & Panduan Aplikasi).
-2. Panduan Guru Buat Tugas: Manajemen Tugas -> Buat Tugas -> pilih Bab & judul -> pilih kelas target -> atur terbit & deadline -> isi instruksi + Link Berkas Soal (akses publik) -> Simpan & Terbitkan. Nilai melalui Manajemen Nilai -> Audit Pengumpulan.
+1. Dasbor Siswa: Beranda, Tugas Siswa (filter Semua/Selesai/Belum/Ditolak, tombol Lihat Tugas, kirim link Drive/Canva/CamScanner/kamera), Nilai (gabungan rekap nilai & tugas ditolak; lencana merah = ditolak, hijau berkedip = nilai baru masuk), Kehadiran, Materi Ajar, Ujian Online CBT (mode layar penuh & anti pindah tab), Simulasi interaktif, Pesan (pengumuman Pak Agan & catatan presensi), Pengguna (foto profil & ganti password), Si Pinter (Gemini AI & Panduan Aplikasi).
+2. Panduan Guru Buat Tugas: Manajemen Tugas -> Buat Tugas -> pilih Bab & judul -> pilih kelas target -> atur terbit & deadline -> isi instruksi + Link Berkas Soal (akses publik) -> Simpan & Terbitkan.
 3. Kunci Tugas Siswa Tidak Ditolak: Ubah izin link Google Drive/Cloud ke "Siapa saja yang memiliki link dapat melihat" (Anyone with the link) sebelum dikirim. Jika ditolak, cek catatan di menu Nilai lalu klik Perbaiki & Kirim Ulang.
-4. Materi Informatika Kelas X (9 Bab): Bab 1 Informatika & Keterampilan Generik, Bab 2 Berpikir Komputasional, Bab 3 TIK, Bab 4 Sistem Komputer, Bab 5 Jaringan Komputer & Internet, Bab 6 Analisis Data, Bab 7 Algoritma & Pemrograman, Bab 8 Dampak Sosial Informatika, Bab 9 Praktik Lintas Bidang.
+4. Materi Informatika Kelas X (9 Bab): Bab 1 Informatika & Keterampilan Generik, Bab 2 Berpikir Komputasional, Bab 3 TIK, Bab 4 Sistem Komputer, Bab 5 Jaringan Komputer & Internet, Bab 6 Analisis Data, Bab 7 Algoritma & Pemrograman, Bab 8 Dampak Sosial Informatika, Bab 9 Praktik Lintas Bidang.${contextSection}
 
-BATASAN KETAT:
-- Jawab tuntas hanya pertanyaan seputar aplikasi Si-Pinter App (guru/siswa) dan Informatika Kelas X.
-- Jika di luar topik tersebut, tolak dengan sangat sopan dan arahkan kembali ke aplikasi Si-Pinter atau Informatika Kelas X.`;
+ATURAN JAWAB & KEAMANAN DATA RAHASIA:
+- Jika siswa bertanya tentang pesan hari ini, pengumuman, tugas belum dikerjakan, ujian aktif, kehadiran, nilai pribadi, atau materi tersedia, jawablah secara akurat berdasarkan DATA SI-PINTER SISWA SAAT INI di atas.
+- Jika "Pesan / Notifikasi Hari Ini" kosong, sampaikan dengan ramah bahwa hari ini belum ada pesan/pengumuman baru, lalu sebutkan pengumuman guru terakhir jika tersedia di data.
+- DILARANG KERAS memberikan atau mengarang data rahasia: token ujian, soal atau kunci jawaban ujian CBT, password akun, serta data atau nilai milik siswa lain. Jika ditanya token/kunci jawaban/password, tolak dengan sopan dan jelaskan bahwa token hanya dibagikan langsung oleh guru.
+- Fokuslah pada aplikasi Si-Pinter App dan pelajaran Informatika Kelas X. Jika di luar topik tersebut, tolak dengan sangat sopan dan arahkan kembali ke Si-Pinter atau Informatika Kelas X.`;
 }
 
 export function normalizeGeminiTurns(
