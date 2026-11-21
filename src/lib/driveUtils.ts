@@ -44,10 +44,19 @@ export const getDriveImageFallbackUrl = (url: string | null | undefined): string
   return cleanUrl;
 };
 
-// Helper for embedding Google Drive PDF preview in iframe
+// Helper for embedding Google Drive PDF preview or folder list in iframe
 export const getDrivePdfEmbedUrl = (url: string | null | undefined): string => {
   if (!url) return "";
   const cleanUrl = url.trim();
+
+  // 1. Check if Google Drive Folder link (e.g. drive.google.com/drive/folders/ABC123xyz or drive.google.com/drive/u/0/folders/ABC123xyz)
+  const matchFolder = cleanUrl.match(/\/folders\/([-\w]{25,})/i);
+  if (matchFolder && matchFolder[1]) {
+    // Google Drive folder embed URL (publicly shared folders render file list nicely inside iframe without 404)
+    return `https://drive.google.com/embeddedfolderview?id=${matchFolder[1]}#list`;
+  }
+
+  // 2. Check file ID
   const matchD = cleanUrl.match(/\/(?:file\/)?d\/([-\w]{25,})/i);
   const matchQuery = cleanUrl.match(/[?&]id=([-\w]{25,})/i);
   const fileId = matchD ? matchD[1] : (matchQuery ? matchQuery[1] : "");
@@ -142,7 +151,16 @@ export const getMediaEmbedUrl = (url: string | null | undefined, autoplay = fals
     };
   }
 
-  // 2. Google Drive preview (PDF, docs, slides, videos stored on Drive)
+  // 2. Google Drive Folder
+  const matchFolder = clean.match(/\/folders\/([-\w]{25,})/i);
+  if (matchFolder && matchFolder[1]) {
+    return {
+      type: "pdf",
+      embedUrl: `https://drive.google.com/embeddedfolderview?id=${matchFolder[1]}#list`
+    };
+  }
+
+  // 3. Google Drive preview (PDF, docs, slides, videos stored on Drive)
   const matchD = clean.match(/\/(?:file\/)?d\/([-\w]{25,})/i);
   const matchQuery = clean.match(/[?&]id=([-\w]{25,})/i);
   const driveFileId = matchD ? matchD[1] : (matchQuery ? matchQuery[1] : "");

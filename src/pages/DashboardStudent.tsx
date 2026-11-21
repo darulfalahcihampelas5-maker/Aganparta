@@ -5700,7 +5700,11 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                               whileTap={{ scale: 0.98 }}
                               onClick={() => {
                                 if (item.isDisabled) {
-                                  alert("Menu Simulasi belum diaktifkan oleh Guru. Silakan tunggu hingga guru mengaktifkannya.");
+                                  showAlert(
+                                    "Fitur Belum Diaktifkan",
+                                    "Menu Simulasi (BK & Minat Bakat) saat ini belum diaktifkan oleh guru pengampu. Silakan menunggu hingga sesi simulasi dibuka untuk kelas Anda.",
+                                    "alert"
+                                  );
                                   return;
                                 }
                                 handleMenuChange(item.id as any, item.order);
