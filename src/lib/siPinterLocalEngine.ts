@@ -16,6 +16,7 @@ export interface SipinterStudentContext {
     title: string;
     bab: string;
     deadlineLabel: string;
+    isOverdue?: boolean;
   }>;
   rejectedAssignments?: Array<{
     title: string;
@@ -49,6 +50,40 @@ export interface SipinterStudentContext {
     avgTugas: number;
     avgUjian: number;
   };
+  reportCard?: {
+    finalScore: number;
+    predikat: string;
+    kkm: number;
+    nilaiKehadiran: number;
+    avgTugas: number;
+    nilaiUts: number;
+    nilaiUas: number;
+    rubric: {
+      kehadiran: number;
+      tugas: number;
+      uts: number;
+      uas: number;
+    };
+  };
+  classRanking?: {
+    rank: number | string;
+    total: number | string;
+    topStudents: Array<{
+      rank: number;
+      name: string;
+      score: number;
+    }>;
+  };
+  integritySummary?: {
+    statusText: string;
+    violationCount: number;
+  };
+  kisiKisiList?: Array<{
+    title: string;
+    category: string;
+    bab: string;
+    hasDriveLink: boolean;
+  }>;
   isSimulasiEnabled?: boolean;
 }
 
@@ -353,7 +388,150 @@ function answerLiveSipinterData(
     );
   }
 
-  // 2. Tugas yang ditolak / perlu perbaikan
+  // 2. Siswa dengan Nilai Rapor Tertinggi di Kelas (Top Student)
+  if (
+    (normalized.includes("tertinggi") ||
+      normalized.includes("paling tinggi") ||
+      normalized.includes("juara") ||
+      normalized.includes("peringkat 1") ||
+      normalized.includes("rank 1") ||
+      normalized.includes("ranking 1")) &&
+    (normalized.includes("rapor") || normalized.includes("nilai") || normalized.includes("kelas") || normalized.includes("siswa"))
+  ) {
+    const cr = ctx.classRanking;
+    const top = cr?.topStudents || [];
+    if (top.length === 0) {
+      return `Halo **${firstName}**${kelasLabel}, data peringkat kelas saat ini belum tersedia. Pastikan sinkronisasi data sudah selesai ya.`;
+    }
+
+    const leader = top[0];
+    const topListLines = top
+      .map((item) => `${item.rank}. **${item.name}** — Skor Rapor Sementara: **${item.score}**`)
+      .join("\n");
+
+    const selfRankNote =
+      cr && cr.rank !== "-"
+        ? `\n\nPosisi kamu saat ini berada di **Peringkat ${cr.rank} dari ${cr.total} siswa** sekelas. Terus semangat belajar dan lengkapi semua tugas untuk mengejar posisi puncak!`
+        : "";
+
+    return (
+      `Halo **${firstName}**${kelasLabel}, siswa dengan estimasi nilai rapor paling tinggi di kelasmu saat ini adalah **${leader.name}** (Skor: **${leader.score}**).\n\n` +
+      `**3 Besar Nilai Rapor Sementara Kelas ${ctx.kelas || ""}:**\n` +
+      `${topListLines}` +
+      `${selfRankNote}`
+    );
+  }
+
+  // 3. Nilai Rapor Sementara & Rincian Rubrik
+  if (
+    normalized.includes("rapor") ||
+    normalized.includes("nilai akhir") ||
+    normalized.includes("predikat") ||
+    normalized.includes("kkm")
+  ) {
+    const rc = ctx.reportCard;
+    if (!rc) {
+      return `Halo **${firstName}**${kelasLabel}, estimasi nilai rapor sementara belum tersedia saat ini. Kamu dapat mengecek rinciannya langsung di menu **Nilai**.`;
+    }
+
+    const isTuntas = rc.finalScore >= rc.kkm;
+    const statusKkmText = isTuntas
+      ? `**Tuntas KKM (${rc.kkm})**`
+      : `**Belum Mencapai KKM (${rc.kkm})** — perlu tambah **${rc.kkm - rc.finalScore} poin**`;
+
+    const rankText =
+      ctx.classRanking && ctx.classRanking.rank !== "-"
+        ? ` · Peringkat **${ctx.classRanking.rank} / ${ctx.classRanking.total}**`
+        : "";
+
+    return (
+      `Halo **${firstName}**${kelasLabel}, berikut **Estimasi Nilai Rapor Sementara** milikmu (dihitung *real-time* dari rubrik guru):\n\n` +
+      `* **Skor Akhir Rapor:** **${rc.finalScore}** (Predikat **${rc.predikat}**${rankText})\n` +
+      `* **Status Ketuntasan:** ${statusKkmText}\n\n` +
+      `**Rincian 4 Komponen Penilaian:**\n` +
+      `1. **Kehadiran (${rc.rubric.kehadiran}%):** **${rc.nilaiKehadiran}**\n` +
+      `2. **Tugas & Ujian Harian (${rc.rubric.tugas}%):** **${rc.avgTugas}**\n` +
+      `3. **PTS / UTS (${rc.rubric.uts}%):** **${rc.nilaiUts}**\n` +
+      `4. **PAS / SAS / UAS (${rc.rubric.uas}%):** **${rc.nilaiUas}**\n\n` +
+      `*Catatan: Nilai ini bersifat estimasi sementara selama semester berjalan. Kamu dapat mengunduh PDF rapornya di menu **Nilai → Unduh Rapor PDF**.*`
+    );
+  }
+
+  // 4. Analisis Komponen Nilai yang Perlu Ditingkatkan
+  if (
+    normalized.includes("ditingkatkan") ||
+    normalized.includes("tingkatkan") ||
+    normalized.includes("perbaiki nilai") ||
+    normalized.includes("naikkan nilai") ||
+    normalized.includes("komponen nilai") ||
+    normalized.includes("masih kurang")
+  ) {
+    const rc = ctx.reportCard;
+    if (!rc) {
+      return `Halo **${firstName}**${kelasLabel}, data komponen rapor belum tersedia. Cek menu **Nilai** untuk melihat rincian nilaimu.`;
+    }
+
+    const components = [
+      { label: "Kehadiran", score: rc.nilaiKehadiran, weight: rc.rubric.kehadiran, tip: "Jaga presensi agar tidak ada Alpa." },
+      {
+        label: "Tugas & Ujian Harian",
+        score: rc.avgTugas,
+        weight: rc.rubric.tugas,
+        tip:
+          (ctx.pendingAssignments?.length || 0) > 0
+            ? `Masih ada ${ctx.pendingAssignments!.length} tugas belum dikerjakan yang bernilai 0 di rata-rata jika belum dikumpul.`
+            : (ctx.rejectedAssignments?.length || 0) > 0
+            ? `Segera perbaiki ${ctx.rejectedAssignments!.length} tugas yang berstatus ditolak di menu Nilai.`
+            : "Pertahankan ketepatan waktu dan kualitas pengerjaan tugas.",
+      },
+      { label: "PTS / UTS", score: rc.nilaiUts, weight: rc.rubric.uts, tip: "Jika nilai UTS masih 0 atau di bawah KKM, tanyakan jadwal susulan/remedial ke Pak Agan." },
+      { label: "PAS / SAS / UAS", score: rc.nilaiUas, weight: rc.rubric.uas, tip: "Jika PAS/UAS belum dilaksanakan, fokus maksimalkan tugas dan latihan materi Bab 1–9." },
+    ].filter((c) => c.weight > 0);
+
+    components.sort((a, b) => a.score - b.score);
+    const lowest = components[0];
+    const rankingLines = components
+      .map((c, idx) => `${idx + 1}. **${c.label}** (Bobot ${c.weight}%): **${c.score}** — ${c.tip}`)
+      .join("\n");
+
+    return (
+      `Halo **${firstName}**${kelasLabel}, dari estimasi skor rapor saat ini (**${rc.finalScore}** · Predikat **${rc.predikat}**), komponen yang paling perlu diprioritaskan adalah **${lowest?.label || "Tugas"}** (skor saat ini: **${lowest?.score ?? 0}**).\n\n` +
+      `**Urutan Prioritas Peningkatan Nilai:**\n` +
+      `${rankingLines}`
+    );
+  }
+
+  // 5. Peringkat Saya & Status Integritas Ujian
+  if (
+    normalized.includes("peringkat") ||
+    normalized.includes("ranking") ||
+    normalized.includes("integritas") ||
+    normalized.includes("pelanggaran") ||
+    /\brank\b/.test(normalized)
+  ) {
+    const cr = ctx.classRanking;
+    const integ = ctx.integritySummary;
+    const rc = ctx.reportCard;
+
+    const rankSection =
+      cr && cr.rank !== "-"
+        ? `**Peringkat Sementara Kelas ${ctx.kelas || ""}:** **Peringkat ${cr.rank} dari ${cr.total} siswa**` +
+          (rc ? ` (Estimasi Nilai Rapor: **${rc.finalScore}** · Predikat **${rc.predikat}**)` : "")
+        : `**Peringkat Kelas:** Belum dapat dihitung saat ini.`;
+
+    const integSection = integ
+      ? `**Status Integritas Ujian:** **${integ.statusText}** (Total pelanggaran keluar *fullscreen* / pindah tab: **${integ.violationCount}x**)`
+      : `**Status Integritas Ujian:** Terpantau baik.`;
+
+    return (
+      `Halo **${firstName}**${kelasLabel}, berikut status peringkat dan integritas belajarmu:\n\n` +
+      `* ${rankSection}\n` +
+      `* ${integSection}\n\n` +
+      `*Tips: Jaga integritas dengan tidak berpindah tab atau keluar dari mode layar penuh saat ujian CBT berlangsung.*`
+    );
+  }
+
+  // 6. Tugas yang ditolak / perlu perbaikan
   if (
     normalized.includes("tugas") &&
     (normalized.includes("ditolak") || normalized.includes("revisi") || normalized.includes("diperbaiki") || normalized.includes("perbaikan"))
@@ -377,10 +555,10 @@ function answerLiveSipinterData(
     );
   }
 
-  // 3. Tugas belum dikerjakan / status tugas saya
+  // 7. Tugas belum dikerjakan / tenggat terdekat
   if (
     normalized.includes("tugas") &&
-    (normalized.includes("belum") || normalized.includes("saya") || normalized.includes("ku") || normalized.includes("apa saja") || normalized.includes("deadline") || normalized.includes("tenggat"))
+    (normalized.includes("belum") || normalized.includes("saya") || normalized.includes("ku") || normalized.includes("apa saja") || normalized.includes("deadline") || normalized.includes("tenggat") || normalized.includes("terdekat"))
   ) {
     const pending = ctx.pendingAssignments || [];
     const rejectedCount = ctx.rejectedAssignments?.length || 0;
@@ -397,12 +575,16 @@ function answerLiveSipinterData(
       );
     }
 
+    const nearestTask = pending[0];
     const listText = pending
-      .map((t, idx) => `${idx + 1}. **${t.title}** (${t.bab}) — Tenggat: ${t.deadlineLabel}`)
+      .map((t, idx) => {
+        const overdueTag = t.isOverdue ? " *(Melewati tenggat)*" : idx === 0 ? " *(Tenggat terdekat)*" : "";
+        return `${idx + 1}. **${t.title}** (${t.bab}) — Tenggat: ${t.deadlineLabel}${overdueTag}`;
+      })
       .join("\n");
 
     return (
-      `Halo **${firstName}**${kelasLabel}, masih ada **${pending.length} tugas yang belum dikerjakan**:\n\n` +
+      `Halo **${firstName}**${kelasLabel}, masih ada **${pending.length} tugas yang belum dikerjakan** (prioritas terdekat: **${nearestTask.title}** — *${nearestTask.deadlineLabel}*):\n\n` +
       `${listText}\n\n` +
       `Status lainnya: **${waitingCount}** menunggu dinilai · **${doneCount}** sudah terkumpul` +
       (rejectedCount > 0 ? ` · **${rejectedCount}** ditolak (perlu revisi)` : "") +
@@ -410,7 +592,7 @@ function answerLiveSipinterData(
     );
   }
 
-  // 4. Jadwal Ujian Aktif (Non-Rahasia: tanpa token/kunci)
+  // 8. Jadwal Ujian Aktif (Non-Rahasia: tanpa token/kunci)
   if (
     normalized.includes("jadwal ujian") ||
     normalized.includes("ujian aktif") ||
@@ -439,7 +621,7 @@ function answerLiveSipinterData(
     );
   }
 
-  // 5. Ringkasan Kehadiran & Nilai Pribadi
+  // 9. Ringkasan Kehadiran & Nilai Pribadi
   if (
     normalized.includes("kehadiran") ||
     normalized.includes("absensi") ||
@@ -450,6 +632,7 @@ function answerLiveSipinterData(
   ) {
     const att = ctx.attendanceSummary;
     const gr = ctx.gradesSummary;
+    const rc = ctx.reportCard;
 
     const attSection = att
       ? `**Kehadiran (${att.percentage}% · ${att.rubricStatus}):**\n` +
@@ -458,36 +641,72 @@ function answerLiveSipinterData(
 
     const gradeSection = gr
       ? `**Ringkasan Nilai Pribadi:**\n` +
-        `Penilaian masuk: **${gr.gradedCount} item** · Rata-rata Tugas: **${gr.avgTugas}** · Rata-rata Ujian: **${gr.avgUjian}**`
+        `Penilaian masuk: **${gr.gradedCount} item** · Rata-rata Tugas: **${gr.avgTugas}** · Rata-rata Ujian: **${gr.avgUjian}**` +
+        (rc ? `\nEstimasi Nilai Rapor Sementara: **${rc.finalScore}** (Predikat **${rc.predikat}**)` : "")
       : `**Nilai:** Cek rincian nilai per tugas/ujian pada menu **Nilai**.`;
 
     return `Halo **${firstName}**${kelasLabel}, berikut ringkasan data belajarmu:\n\n${attSection}\n\n${gradeSection}`;
   }
 
-  // 6. Materi Ajar Tersedia & Progres
+  // 10. Materi Ajar Tersedia & Status Simulasi
   if (
     normalized.includes("materi") &&
-    (normalized.includes("tersedia") || normalized.includes("apa saja") || normalized.includes("belum selesai") || normalized.includes("progres"))
+    (normalized.includes("tersedia") ||
+      normalized.includes("apa saja") ||
+      normalized.includes("belum selesai") ||
+      normalized.includes("progres") ||
+      normalized.includes("simulasi"))
   ) {
     const mats = ctx.materials || [];
-    if (mats.length === 0) {
-      return `Halo **${firstName}**${kelasLabel}, saat ini belum ada modul materi yang diterbitkan pada menu **Materi Ajar**.`;
-    }
+    const matsSection =
+      mats.length === 0
+        ? `Saat ini belum ada modul materi yang diterbitkan pada menu **Materi Ajar**.`
+        : `Ada **${mats.length} modul Materi Ajar** yang tersedia:\n` +
+          mats
+            .slice(0, 8)
+            .map((m, idx) => `${idx + 1}. **${m.title}** (${m.bab}) — *${m.progressStatus}*`)
+            .join("\n");
 
-    const listText = mats
-      .slice(0, 8)
-      .map((m, idx) => `${idx + 1}. **${m.title}** (${m.bab}) — *${m.progressStatus}*`)
-      .join("\n");
+    const simulasiSection = normalized.includes("simulasi")
+      ? `\n\n**Status Menu Simulasi Interaktif:** ${
+          ctx.isSimulasiEnabled
+            ? "**Aktif** — kamu bisa langsung membuka menu **Simulasi** dari Beranda!"
+            : "**Belum diaktifkan** oleh Pak Agan untuk kelasmu saat ini."
+        }`
+      : "";
 
     return (
-      `Halo **${firstName}**${kelasLabel}, ada **${mats.length} modul Materi Ajar** yang tersedia:\n\n` +
-      `${listText}\n\n` +
+      `Halo **${firstName}**${kelasLabel}, berikut info modul belajarmu:\n\n` +
+      `${matsSection}` +
+      `${simulasiSection}\n\n` +
       `Buka menu **Materi Ajar** untuk membaca modul PDF dan menandai progres belajarmu.`
     );
   }
 
-  // 7. Status Simulasi
-  if (normalized.includes("simulasi") && (normalized.includes("aktif") || normalized.includes("kenapa") || normalized.includes("tidak bisa"))) {
+  // 11. Kisi-Kisi Ujian
+  if (normalized.includes("kisi")) {
+    const kList = ctx.kisiKisiList || [];
+    if (kList.length === 0) {
+      return `Halo **${firstName}**${kelasLabel}, saat ini belum ada data **Kisi-Kisi Ujian** (PTS/PSAS/Preetes/Postes) yang diterbitkan untuk kelasmu. Cek berkala di menu **Kisi-Kisi** pada Beranda ya.`;
+    }
+    const listText = kList
+      .slice(0, 8)
+      .map(
+        (k, idx) =>
+          `${idx + 1}. **[${k.category}] ${k.title}** (${k.bab}) — ${
+            k.hasDriveLink ? "Link Drive tersedia" : "Menunggu link Drive guru"
+          }`
+      )
+      .join("\n");
+    return (
+      `Halo **${firstName}**${kelasLabel}, berikut daftar **Kisi-Kisi Ujian** yang tersedia untuk kelasmu:\n\n` +
+      `${listText}\n\n` +
+      `Buka menu **Kisi-Kisi** di Beranda untuk langsung mengklik tautan Google Drive masing-masing kisi-kisi.`
+    );
+  }
+
+  // 12. Status Simulasi standalone
+  if (normalized.includes("simulasi") && (normalized.includes("aktif") || normalized.includes("status") || normalized.includes("kenapa") || normalized.includes("tidak bisa"))) {
     return ctx.isSimulasiEnabled
       ? `Halo **${firstName}**${kelasLabel}, menu **Simulasi** saat ini **sudah aktif** dan bisa kamu buka langsung dari Beranda!`
       : `Halo **${firstName}**${kelasLabel}, menu **Simulasi** saat ini memang **belum diaktifkan** oleh Pak Agan untuk kelasmu. Nantikan pengumuman selanjutnya ya!`;

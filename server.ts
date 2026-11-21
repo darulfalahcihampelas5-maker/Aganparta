@@ -678,7 +678,7 @@ async function startServer() {
       let prompt = "";
 
       if (pastedText && pastedText.trim()) {
-        prompt = `Konversikan teks butir soal/materi kuis berikut menjadi tepat ${questionCount} soal terstruktur dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}".
+        prompt = `Konversikan teks butir soal/materi kuis berikut menjadi tepat ${questionCount} soal terstruktur dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}"${materi ? ` dan fokus materi yang diujikan: "${materi}"` : ""}.
 
 Teks Referensi Soal/Kuis:
 ---
@@ -687,7 +687,9 @@ ${pastedText}
 
 Instruksi Tambahan:
 1. Ekstrak pertanyaan, tipe soal, pilihan opsi, dan kunci jawaban dari teks di atas secara akurat.
-2. ${formatInstruction}`;
+2. ${formatInstruction}
+3. Untuk setiap soal wajib isi field "indikator" berupa Tujuan Indikator Pencapaian Kompetensi (IPK) yang JELAS, LENGKAP, MUDAH DIPAHAMI SISWA, dan menyatu langsung dengan materi yang diujikan serta isi pertanyaan soal (tidak membocorkan langsung teks opsi kunci jawaban). Awali dengan "Peserta didik mampu ..." atau "Disajikan [konteks soal/materi], peserta didik mampu ...".
+4. Untuk setiap soal wajib isi field "lingkupMateri" berupa Ruang Lingkup Materi yang jelas dan lengkap (5–10 kata) yang menghubungkan materi ajar dengan sub-konsep yang diukur pada soal (misal: "Sistem Komputer: Peran dan Fungsi Unit Pemroses CPU", bukan sekadar 2 kata umum dan tidak menyalin opsi jawaban benar).`;
       } else {
         prompt = `Buatlah ${questionCount} soal berkualitas tinggi (berstandar AKM/UTBK jika relevan) dalam bahasa Indonesia untuk mata pelajaran "${subject}" dengan bahasan Bab: "${bab}"`;
         
@@ -696,14 +698,14 @@ Instruksi Tambahan:
         }
         
         if (materi) {
-          prompt += `, cakupan materi spesifik (sub bab): "${materi}"`;
+          prompt += `, cakupan materi yang diujikan: "${materi}"`;
         }
 
         if (description) {
-          prompt += `, deskripsi/instruksi tambahan khusus untuk soal: "${description}"`;
+          prompt += `, rincian materi / fokus soal: "${description}"`;
         }
         
-        prompt += `.\n\nAturan Format Soal:\n${formatInstruction}`;
+        prompt += `.\n\nAturan Format Soal:\n${formatInstruction}\n\nAturan Kisi-Kisi (Ruang Lingkup Materi & Tujuan Indikator Pencapaian Kompetensi):\n- Untuk setiap soal wajib isi field "indikator" berupa kalimat Tujuan Indikator Pencapaian Kompetensi (mulai dengan "Peserta didik mampu ..." atau "Disajikan ..., peserta didik mampu ...", 12–24 kata) yang SEMPURNA, LENGKAP, JELAS, dan MUDAH DIPAHAMI SISWA. Kalimat indikator harus merujuk langsung pada materi yang diujikan serta hal spesifik yang ditanyakan oleh soal tersebut tanpa membocorkan langsung opsi kunci jawaban.\n- Untuk setiap soal wajib isi field "lingkupMateri" berupa Ruang Lingkup Materi yang deskriptif dan jelas (5–10 kata, mencakup topik materi utama dan sub-bahasan soal, misal: "Pengolahan Data Spreadsheet: Penggunaan Rumus Statistik Dasar" atau "Keamanan Digital: Pencegahan Phishing dan Perlindungan OTP"). Jangan hanya 2 kata umum dan jangan menyalin mentah opsi jawaban benar.`;
       }
 
       // Handle YouTube URLs (up to 3 links)
@@ -775,9 +777,21 @@ Instruksi Tambahan:
                 correctAnswerText: {
                   type: Type.STRING,
                   description: "Kunci jawaban untuk short_answer (variasi dipisah |) atau rubrik kunci jawaban untuk essay"
+                },
+                indikator: {
+                  type: Type.STRING,
+                  description: "Tujuan Indikator Pencapaian Kompetensi (IPK) yang lengkap, jelas, mudah dipahami siswa, merujuk pada materi yang diujikan dan konteks spesifik soal, tanpa membocorkan langsung teks kunci jawaban"
+                },
+                lingkupMateri: {
+                  type: Type.STRING,
+                  description: "Ruang Lingkup Materi yang lengkap dan jelas (5-10 kata) mencakup pokok materi dan sub-konsep yang diukur butir soal tanpa menyalin langsung kunci jawaban"
+                },
+                levelKognitif: {
+                  type: Type.STRING,
+                  description: "Level kognitif soal: L1 (Pemahaman), L2 (Penerapan), atau L3 (Penalaran)"
                 }
               },
-              required: ["text", "options", "correctIndex"]
+              required: ["text", "options", "correctIndex", "indikator", "lingkupMateri"]
             }
           }
         }
@@ -789,16 +803,23 @@ Instruksi Tambahan:
         const qType = (q.type === "short_answer" || q.type === "essay" || q.type === "multiple_choice")
           ? q.type
           : (Array.isArray(q.options) && q.options.length > 0 ? "multiple_choice" : "essay");
+        const normalizedOptions = qType === "multiple_choice"
+          ? (Array.isArray(q.options) && q.options.length === 5
+              ? q.options.map(String)
+              : ["Opsi A", "Opsi B", "Opsi C", "Opsi D", "Opsi E"].map((def, idx) => String(q.options?.[idx] || def)))
+          : [];
+        const normalizedCorrectIndex = typeof q.correctIndex === "number" ? q.correctIndex : 0;
+        const normalizedCorrectAnswerText = String(q.correctAnswerText || "");
+
         return {
           type: qType,
           text: String(q.text || ""),
-          options: qType === "multiple_choice"
-            ? (Array.isArray(q.options) && q.options.length === 5
-                ? q.options.map(String)
-                : ["Opsi A", "Opsi B", "Opsi C", "Opsi D", "Opsi E"].map((def, idx) => String(q.options?.[idx] || def)))
-            : [],
-          correctIndex: typeof q.correctIndex === "number" ? q.correctIndex : 0,
-          correctAnswerText: String(q.correctAnswerText || ""),
+          options: normalizedOptions,
+          correctIndex: normalizedCorrectIndex,
+          correctAnswerText: normalizedCorrectAnswerText,
+          indikator: String(q.indikator || "").trim(),
+          lingkupMateri: String(q.lingkupMateri || "").trim(),
+          levelKognitif: String(q.levelKognitif || "").trim(),
         };
       }) : [];
       res.json({ questions });
@@ -808,6 +829,79 @@ Instruksi Tambahan:
         error: "Gagal membuat soal ujian menggunakan AI.", 
         details: error.message || String(error),
         stack: error.stack
+      });
+    }
+  });
+
+  // API Route for synthesizing Ruang Lingkup Materi & Tujuan Indikator Pencapaian from uploaded/selected Materi
+  app.post("/api/generate-kisi-kisi", upload.single("document"), async (req, res) => {
+    try {
+      const { subject, category, materiTitle, materiText, driveUrl } = req.body;
+      const cleanTitle = String(materiTitle || "").trim();
+      const cleanText = String(materiText || "").trim();
+      const file = req.file;
+
+      if (!cleanTitle && !cleanText && !file) {
+        return res.status(400).json({ error: "Masukkan judul/rangkuman materi atau unggah file PDF materi terlebih dahulu." });
+      }
+
+      const parts: any[] = [];
+      if (file) {
+        parts.push({
+          inlineData: {
+            data: file.buffer.toString("base64"),
+            mimeType: file.mimetype || "application/pdf",
+          },
+        });
+      }
+
+      const prompt = `Anda adalah penyusun perangkat asesmen Kurikulum Merdeka SMA.
+Buatlah **Ruang Lingkup Materi** dan **Tujuan Indikator Pencapaian Kompetensi (IPK)** yang jelas, lengkap, terstruktur, dan mudah dipahami oleh guru maupun siswa berdasarkan materi ajar berikut yang akan diunggah/diujikan:
+
+- Mata Pelajaran: "${subject || "Informatika"}"
+- Jenis Evaluasi: "${category || "Ujian / Evaluasi"}"
+${cleanTitle ? `- Judul Materi yang Di-Up: "${cleanTitle}"` : ""}
+${cleanText ? `- Rangkuman / Poin Materi:\n${cleanText}` : ""}
+${driveUrl ? `- Tautan Referensi Materi: ${driveUrl}` : ""}
+${file ? `- File dokumen PDF materi terlampir di atas: analisis seluruh sub-bab dan konsep intinya.` : ""}
+
+Instruksi Output:
+1. "lingkupMateri": Susun Ruang Lingkup Materi yang jelas, runtut, dan informatif (sekitar 20–45 kata atau poin terstruktur dipisah titik koma), berisi cakupan konsep inti dari materi yang akan di-up agar siswa tahu persis sub-topik apa saja yang perlu dipelajari (tanpa membocorkan kunci jawaban soal).
+2. "indikatorPencapaian": Susun Tujuan Indikator Pencapaian Kompetensi yang sempurna, jelas, operasional (menggunakan kata kerja terukur seperti memahami, mengidentifikasi, menerapkan, membandingkan, menganalisis), dan spesifik terhadap materi di atas (diawali "Peserta didik mampu ...").`;
+
+      parts.push({ text: prompt });
+
+      const response = await generateContentWithFallback({
+        contents: { parts },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              lingkupMateri: {
+                type: Type.STRING,
+                description: "Ruang Lingkup Materi yang jelas, terstruktur, dan lengkap sesuai materi yang akan di-up",
+              },
+              indikatorPencapaian: {
+                type: Type.STRING,
+                description: "Tujuan Indikator Pencapaian Kompetensi (IPK) yang jelas, operasional, lengkap, dan mudah dipahami siswa sesuai materi",
+              },
+            },
+            required: ["lingkupMateri", "indikatorPencapaian"],
+          },
+        },
+      });
+
+      const parsed = JSON.parse(response.text ? response.text.trim() : "{}");
+      res.json({
+        lingkupMateri: String(parsed.lingkupMateri || "").trim(),
+        indikatorPencapaian: String(parsed.indikatorPencapaian || "").trim(),
+      });
+    } catch (error: any) {
+      console.error("Error generating kisi-kisi from materi:", error);
+      res.status(500).json({
+        error: "Gagal menyusun Ruang Lingkup & IPK dari materi.",
+        details: error?.message || String(error),
       });
     }
   });

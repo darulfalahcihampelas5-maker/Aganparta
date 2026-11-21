@@ -18,8 +18,10 @@ import { fetchWithRetry } from "../lib/fetchWithRetry";
 import { Toast } from "../components/Toast";
 import { CuteLoadingScreen, SipinterAvatar } from "../components/CuteLoadingScreen";
 import { getLocalCache, setLocalCache, clearStudentCaches } from "../lib/firestoreUtils";
+import { getDisplayCallName } from "../lib/nameUtils";
 import { saveFinalGrade } from "../lib/supabaseSync";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
+import { stripBabAndLingkupFromKisiTitle } from "../lib/examKisiKisiPdf";
 
 export function handleOpenFileLink(rawUrl: string, e?: React.MouseEvent) {
   if (e) {
@@ -328,6 +330,8 @@ import {
   Battery,
   Wifi,
   Play,
+  Copy,
+  BookMarked,
 } from "lucide-react";
 const AiChatModal = React.lazy(() =>
   import("../components/student/AiChatModal").then((m) => ({ default: m.AiChatModal }))
@@ -1078,6 +1082,10 @@ export default function DashboardStudent() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [syncToastMessage, setSyncToastMessage] = useState("");
   const [isSyncingData, setIsSyncingData] = useState(false);
+  const hasAutoSyncedRef = useRef(false);
+  const [kisiKisiFilterCategory, setKisiKisiFilterCategory] = useState<string>("Semua");
+  const [kisiKisiSearch, setKisiKisiSearch] = useState<string>("");
+  const [copiedKisiId, setCopiedKisiId] = useState<string | null>(null);
   const [motivationalQuote, setMotivationalQuote] = useState("Sukses adalah hasil dari persiapan, kerja keras, dan belajar dari kegagalan.");
   const [academicPeriod, setAcademicPeriod] = useState({ academicYear: "2026/2027", semester: "Ganjil" });
   const [teacherPhotoUrl, setTeacherPhotoUrl] = useState<string | null>(() => {
@@ -1279,37 +1287,6 @@ export default function DashboardStudent() {
       if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
     };
   }, []);
-
-  const handleSyncData = async () => {
-    if (isSyncingData) return;
-    setIsSyncingData(true);
-    try {
-      if (student?.nisn) {
-        clearStudentCaches(student.nisn, student?.kelas);
-      }
-      const syncTasks: Promise<any>[] = [fetchLatestTeacherProfileSettings()];
-      if (typeof mutateAnnouncements === "function") syncTasks.push(Promise.resolve(mutateAnnouncements()));
-      if (typeof mutateAssignments === "function") syncTasks.push(Promise.resolve(mutateAssignments()));
-      if (typeof mutateSubmissions === "function") syncTasks.push(Promise.resolve(mutateSubmissions()));
-      if (typeof mutateFinalGrades === "function") syncTasks.push(Promise.resolve(mutateFinalGrades()));
-      if (typeof mutateAllStudents === "function") syncTasks.push(Promise.resolve(mutateAllStudents()));
-      if (typeof mutateAllFinalGrades === "function") syncTasks.push(Promise.resolve(mutateAllFinalGrades()));
-      if (typeof mutateExams === "function") syncTasks.push(Promise.resolve(mutateExams()));
-
-      const minAnimationDelay = new Promise((resolve) => setTimeout(resolve, 900));
-      const [results] = await Promise.all([Promise.allSettled(syncTasks), minAnimationDelay]);
-
-      setIsSyncingData(false);
-      if (results.length > 0 && results.every((r) => r.status === "rejected")) {
-        showAlert("Gagal Sinkronisasi", "Gagal memperbarui data dari server. Periksa koneksi internet Anda.", "danger");
-      } else {
-        showAlert("Sinkronisasi Berhasil", "Semua data terbaru berhasil disinkronkan dengan server.", "alert");
-      }
-    } catch (err) {
-      setIsSyncingData(false);
-      showAlert("Gagal Sinkronisasi", "Gagal memperbarui data dari server.", "danger");
-    }
-  };
 
   // Profile edit form state variables
   const [editName, setEditName] = useState("");
@@ -3267,6 +3244,80 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     { refreshInterval: 0, revalidateOnFocus: false }
   );
 
+  const fetchExamKisiKisi = async () => {
+    const cacheKey = `firas_cache_exam_kisi_kisi_${student?.nisn || 'guest'}`;
+    const cached = getLocalCache<any[]>(cacheKey, 10 * 60 * 1000);
+    if (cached) return cached;
+
+    try {
+      const snap = await getDoc(doc(db, "config", "exam_kisi_kisi"));
+      trackUsage(1, 0);
+      const items = snap.exists() && Array.isArray(snap.data()?.items) ? snap.data().items : [];
+      setLocalCache(cacheKey, items);
+      return items;
+    } catch (e: any) {
+      console.warn("SWR fetch error exam_kisi_kisi:", e?.message || e);
+      dispatchIfQuotaError(e);
+      const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
+      return stale || [];
+    }
+  };
+
+  const { data: rawKisiKisiList = EMPTY_ARRAY, mutate: mutateKisiKisi } = useSWR(
+    student ? ['exam_kisi_kisi', student?.nisn] : null,
+    fetchExamKisiKisi,
+    { refreshInterval: 0, revalidateOnFocus: false }
+  );
+
+  const runSyncData = async (isAuto = false) => {
+    if (isSyncingData) return;
+    setIsSyncingData(true);
+    try {
+      if (student?.nisn) {
+        clearStudentCaches(student.nisn, student?.kelas);
+      }
+      const syncTasks: Promise<any>[] = [fetchLatestTeacherProfileSettings()];
+      if (typeof mutateAnnouncements === "function") syncTasks.push(Promise.resolve(mutateAnnouncements()));
+      if (typeof mutateAssignments === "function") syncTasks.push(Promise.resolve(mutateAssignments()));
+      if (typeof mutateSubmissions === "function") syncTasks.push(Promise.resolve(mutateSubmissions()));
+      if (typeof mutateFinalGrades === "function") syncTasks.push(Promise.resolve(mutateFinalGrades()));
+      if (typeof mutateAllStudents === "function") syncTasks.push(Promise.resolve(mutateAllStudents()));
+      if (typeof mutateAllFinalGrades === "function") syncTasks.push(Promise.resolve(mutateAllFinalGrades()));
+      if (typeof mutateExams === "function") syncTasks.push(Promise.resolve(mutateExams()));
+      if (typeof mutateKisiKisi === "function") syncTasks.push(Promise.resolve(mutateKisiKisi()));
+
+      const minAnimationDelay = new Promise((resolve) => setTimeout(resolve, 900));
+      const [results] = await Promise.all([Promise.allSettled(syncTasks), minAnimationDelay]);
+
+      setIsSyncingData(false);
+      if (results.length > 0 && results.every((r) => r.status === "rejected")) {
+        if (!isAuto) {
+          showAlert("Gagal Sinkronisasi", "Gagal memperbarui data dari server. Periksa koneksi internet Anda.", "danger");
+        }
+      } else {
+        if (isAuto) {
+          setSyncToastMessage("Data dashboard tersinkron dengan server.");
+          setTimeout(() => setSyncToastMessage(""), 3000);
+        } else {
+          showAlert("Sinkronisasi Berhasil", "Semua data terbaru berhasil disinkronkan dengan server.", "alert");
+        }
+      }
+    } catch (err) {
+      setIsSyncingData(false);
+      if (!isAuto) {
+        showAlert("Gagal Sinkronisasi", "Gagal memperbarui data dari server.", "danger");
+      }
+    }
+  };
+
+  const handleSyncData = () => runSyncData(false);
+
+  useEffect(() => {
+    if (!student?.nisn || hasAutoSyncedRef.current) return;
+    hasAutoSyncedRef.current = true;
+    void runSyncData(true);
+  }, [student?.nisn]);
+
   const [isRefreshingData, setIsRefreshingData] = useState(false);
 
   const handleManualRefresh = async () => {
@@ -3284,6 +3335,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         mutateAllStudents(),
         mutateAllFinalGrades(),
         mutateExams(),
+        mutateKisiKisi(),
       ]);
       setSyncToastMessage("Data berhasil diperbarui!");
       setTimeout(() => setSyncToastMessage(""), 3000);
@@ -3298,6 +3350,72 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     if (!student) return EMPTY_ARRAY;
     return rawExams.filter((exam: any) => isExamForClass(exam, student.kelas));
   }, [rawExams, student]);
+
+  const mergedKisiKisiList = useMemo(() => {
+    if (!student) return EMPTY_ARRAY;
+    const standalone = (Array.isArray(rawKisiKisiList) ? rawKisiKisiList : [])
+      .filter((item: any) => {
+        if (!item?.driveUrl) return false;
+        const resolvedRef =
+          item.kelasRef ||
+          (Array.isArray(item.targetClasses) && item.targetClasses.length > 0
+            ? item.targetClasses.join(", ")
+            : "SEMUA_KELAS");
+        return isExamForClass({ kelasRef: resolvedRef, targetClasses: item.targetClasses }, student.kelas);
+      })
+      .map((item: any) => ({
+        id: item.id || `kisi-${item.title}`,
+        title: stripBabAndLingkupFromKisiTitle(item.title || "Kisi-Kisi Ujian"),
+        category: item.category || "Ujian",
+        bab: item.bab || "Informatika Fase E",
+        materiTitle: item.materiTitle || "",
+        lingkupMateri: item.lingkupMateri || "",
+        kelasRef:
+          item.kelasRef ||
+          (Array.isArray(item.targetClasses) && item.targetClasses.length > 0
+            ? item.targetClasses.join(", ")
+            : "SEMUA_KELAS"),
+        driveUrl: String(item.driveUrl).trim(),
+        notes: item.notes || "",
+        createdAt: item.updatedAt || item.createdAt || "",
+      }));
+
+    const fromExams = (examsList || [])
+      .filter(
+        (exam: any) =>
+          exam?.kisiKisiDriveUrl &&
+          String(exam.kisiKisiDriveUrl).trim() !== "" &&
+          isExamForClass(exam, student.kelas)
+      )
+      .map((exam: any) => ({
+        id: `exam-kisi-${exam.id}`,
+        title: stripBabAndLingkupFromKisiTitle(`Kisi-Kisi ${exam.title || "Ujian CBT"}`),
+        category:
+          exam.tema === "Penilaian Tengah Semester"
+            ? "PTS"
+            : exam.tema === "Penilaian Sumatif Akhir Semester"
+            ? "PSAS"
+            : exam.tema || "Ujian CBT",
+        bab: exam.bab || exam.materi || "Informatika",
+        materiTitle: exam.materi || exam.bab || "",
+        lingkupMateri: exam.materi || "",
+        kelasRef: exam.kelasRef || "SEMUA_KELAS",
+        driveUrl: String(exam.kisiKisiDriveUrl).trim(),
+        notes: exam.description || "",
+        createdAt: exam.updatedAt || exam.createdAt || "",
+      }));
+
+    const seenUrls = new Set<string>();
+    const combined: any[] = [];
+    [...standalone, ...fromExams].forEach((entry) => {
+      const urlKey = `${entry.driveUrl}__${entry.title}`.toLowerCase();
+      if (!seenUrls.has(urlKey)) {
+        seenUrls.add(urlKey);
+        combined.push(entry);
+      }
+    });
+    return combined;
+  }, [rawKisiKisiList, examsList, student]);
 
   const combinedGrades = useMemo(() => {
     if (!student) return [];
@@ -3614,7 +3732,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   const rankings = useMemo(() => {
     if (!student || !rubric || allStudentsList.length === 0) {
-      return { rank: "-", total: "-" };
+      return { rank: "-", total: "-", topStudents: [] as Array<{ rank: number; name: string; score: number }> };
     }
     
     // Normalize class names for more robust matching
@@ -3623,7 +3741,19 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       String(s.kelas || "").trim().toLowerCase() === myClass
     );
 
-    if (studentsInClass.length === 0) return { rank: 1, total: 1 };
+    if (studentsInClass.length === 0) {
+      return {
+        rank: 1,
+        total: 1,
+        topStudents: [
+          {
+            rank: 1,
+            name: String(student.name || student.displayName || student.studentName || "Siswa").trim(),
+            score: rataRataSemester,
+          },
+        ],
+      };
+    }
     
     const studentPerformance = studentsInClass.map((stu: any) => {
       // 1. Nilai Kehadiran
@@ -3677,6 +3807,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
       return {
         nisn: stu.nisn,
+        name: String(stu.name || stu.displayName || stu.studentName || "Siswa").trim(),
         finalScore: finalScore
       };
     });
@@ -3686,9 +3817,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     const myIndex = studentPerformance.findIndex((item) => item.nisn === student.nisn);
     const rank = myIndex !== -1 ? myIndex + 1 : 1;
     const total = studentsInClass.length;
+    const topStudents = studentPerformance.slice(0, 3).map((item, idx) => ({
+      rank: idx + 1,
+      name: item.name,
+      score: Math.round(item.finalScore),
+    }));
 
-    return { rank, total };
-  }, [allStudentsList, allFinalGrades, absensiList, examsList, student, rubric]);
+    return { rank, total, topStudents };
+  }, [allStudentsList, allFinalGrades, absensiList, examsList, student, rubric, rataRataSemester]);
 
   const predikatAkhir = useMemo(() => {
     const avg = rataRataSemester;
@@ -4839,6 +4975,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       };
     });
 
+    const nowMs = now.getTime();
     const pendingAssignments = (assignmentsList || [])
       .filter((a: any) => {
         const pubDate = getAssignmentPublishedAtForStudent(a, student.kelas);
@@ -4850,18 +4987,23 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         );
         return !isSubmitted;
       })
-      .slice(0, 8)
       .map((a: any) => {
         const rawDl = getAssignmentDeadlineForStudent(a, student.kelas);
         const dlDate = parseSafeDate(rawDl);
+        const dlMs = dlDate ? dlDate.getTime() : Number.MAX_SAFE_INTEGER;
         return {
           title: a.title || a.materi || "Tugas Informatika",
           bab: a.bab || "Informatika",
           deadlineLabel: dlDate
             ? dlDate.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
             : "Belum ditentukan",
+          isOverdue: Boolean(dlDate && dlMs < nowMs),
+          _sortMs: dlMs,
         };
-      });
+      })
+      .sort((a, b) => a._sortMs - b._sortMs)
+      .slice(0, 8)
+      .map(({ _sortMs, ...rest }) => rest);
 
     const rejectedAssignments = (submissionsList || [])
       .filter((s: any) => s.status === "ditolak")
@@ -4899,6 +5041,18 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       progressStatus: materialsProgress[m.id]?.status || "Belum Dimulai",
     }));
 
+    const effectiveRaporScore = reportCardGrade?.finalScore ?? rataRataSemester ?? 0;
+    const effectivePredikat =
+      effectiveRaporScore === 0
+        ? "-"
+        : effectiveRaporScore >= 92
+        ? "A"
+        : effectiveRaporScore >= 84
+        ? "B"
+        : effectiveRaporScore >= 75
+        ? "C"
+        : "D";
+
     return {
       kelas: student.kelas || "",
       todayDateLabel: formattedToday,
@@ -4927,6 +5081,38 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         avgTugas: rataRataNilaiTugas,
         avgUjian: rataRataNilaiUjian,
       },
+      reportCard: rubric
+        ? {
+            finalScore: effectiveRaporScore,
+            predikat: effectivePredikat || predikatAkhir,
+            kkm: 75,
+            nilaiKehadiran: reportCardGrade?.nilaiKehadiran ?? 0,
+            avgTugas: reportCardGrade?.avgTugas ?? 0,
+            nilaiUts: reportCardGrade?.nilaiUts ?? 0,
+            nilaiUas: reportCardGrade?.nilaiUas ?? 0,
+            rubric: {
+              kehadiran: rubric.kehadiran,
+              tugas: rubric.tugas,
+              uts: rubric.uts,
+              uas: rubric.uas,
+            },
+          }
+        : undefined,
+      classRanking: {
+        rank: rankings.rank,
+        total: rankings.total,
+        topStudents: rankings.topStudents || [],
+      },
+      integritySummary: {
+        statusText: integrityStatus.text,
+        violationCount: examViolationCount,
+      },
+      kisiKisiList: (mergedKisiKisiList || []).slice(0, 10).map((k: any) => ({
+        title: k.title || "Kisi-Kisi Ujian",
+        category: k.category || "Ujian",
+        bab: k.bab || "Informatika",
+        hasDriveLink: Boolean(k.driveUrl),
+      })),
       isSimulasiEnabled,
     };
   }, [
@@ -4938,6 +5124,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     assignmentsList,
     submissionsList,
     examsList,
+    mergedKisiKisiList,
     finalGradesList,
     examHistoryList,
     classMaterials,
@@ -4947,6 +5134,13 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     combinedGrades.length,
     rataRataNilaiTugas,
     rataRataNilaiUjian,
+    reportCardGrade,
+    rataRataSemester,
+    predikatAkhir,
+    rubric,
+    rankings,
+    integrityStatus,
+    examViolationCount,
     isSimulasiEnabled,
   ]);
 
@@ -4985,6 +5179,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     { id: "kehadiran", label: "Kehadiran Siswa", icon: Clock },
     { id: "materi", label: "Materi Ajar", icon: BookOpen },
     { id: "ujian-online", label: "Ujian Online", icon: FileEdit },
+    { id: "kisi-kisi", label: "Kisi-Kisi", icon: BookMarked },
   ];
 
   const menus = allMenus.filter(m => m.id !== "simulasi" || isSimulasiEnabled);
@@ -5719,6 +5914,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
                       {/* Student Name & NIS & Kelas Beneath the Photo */}
                       <div className="mt-4 text-center space-y-1">
+                        <p className="text-xs font-extrabold text-emerald-700 tracking-wide">
+                          Halo, {getDisplayCallName(student?.displayName || student?.name || student?.nama)}!
+                        </p>
                         <h2 className="text-xl sm:text-2xl font-black text-slate-800 tracking-tight leading-tight font-display">
                           {student?.displayName || student?.name || "Nama Siswa"}
                         </h2>
@@ -5798,7 +5996,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       )}
                     </AnimatePresence>
 
-                    {/* Menu Utama Grid: Tugas, Nilai, Kehadiran, Materi, Ujian Online, Simulasi */}
+                    {/* Menu Utama Grid: Tugas, Nilai, Kehadiran, Materi, Ujian Online, Kisi-Kisi, Simulasi */}
                     <section className="space-y-4">
                       <motion.div 
                         initial="hidden"
@@ -5812,7 +6010,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                             }
                           }
                         }}
-                        className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5 sm:gap-4.5 transform-gpu"
+                        className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3.5 sm:gap-4.5 transform-gpu"
                       >
                         {[
                           { 
@@ -5859,6 +6057,15 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                             order: 6
                           },
                           { 
+                            id: "kisi-kisi", 
+                            title: "Kisi-Kisi", 
+                            subtitle: "Link Drive ujian", 
+                            icon: BookMarked, 
+                            color: "teal",
+                            badge: mergedKisiKisiList.length > 0 ? mergedKisiKisiList.length : null,
+                            order: 7
+                          },
+                          { 
                             id: "simulasi", 
                             title: "Simulasi", 
                             subtitle: isSimulasiEnabled ? "BK & minat bakat" : "Belum diaktifkan", 
@@ -5867,20 +6074,44 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                             isDisabled: !isSimulasiEnabled,
                             order: 1
                           }
-                        ].map((item, idx) => {
+                        ].map((item) => {
                           const Icon = item.icon;
-                          const colorClasses: Record<string, string> = {
-                            amber: "bg-amber-50 text-amber-600 border-amber-100 hover:border-amber-300 hover:bg-amber-50/60 group-hover:bg-amber-500 group-hover:text-white",
-                            blue: "bg-blue-50 text-blue-600 border-blue-100 hover:border-blue-300 hover:bg-blue-50/60 group-hover:bg-blue-600 group-hover:text-white",
-                            emerald: "bg-emerald-50 text-emerald-600 border-emerald-100 hover:border-emerald-300 hover:bg-emerald-50/60 group-hover:bg-emerald-500 group-hover:text-white",
-                            sky: "bg-sky-50 text-sky-600 border-sky-100 hover:border-sky-300 hover:bg-sky-50/60 group-hover:bg-sky-600 group-hover:text-white",
-                            purple: "bg-purple-50 text-purple-600 border-purple-100 hover:border-purple-300 hover:bg-purple-50/60 group-hover:bg-purple-600 group-hover:text-white",
-                            fuchsia: item.isDisabled ? "bg-slate-200 text-slate-400 border-slate-300" : "bg-fuchsia-50 text-fuchsia-600 border-fuchsia-100 hover:border-fuchsia-300 hover:bg-fuchsia-50/60 group-hover:bg-fuchsia-600 group-hover:text-white"
+                          const iconClasses: Record<string, string> = {
+                            amber: "bg-amber-50 text-amber-600 group-hover:bg-amber-500 group-hover:text-white",
+                            blue: "bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white",
+                            emerald: "bg-emerald-50 text-emerald-600 group-hover:bg-emerald-500 group-hover:text-white",
+                            sky: "bg-sky-50 text-sky-600 group-hover:bg-sky-600 group-hover:text-white",
+                            purple: "bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white",
+                            teal: "bg-teal-50 text-teal-600 group-hover:bg-teal-600 group-hover:text-white",
+                            fuchsia: item.isDisabled ? "bg-slate-200 text-slate-400" : "bg-fuchsia-50 text-fuchsia-600 group-hover:bg-fuchsia-600 group-hover:text-white",
                           };
-
-                          const baseColorClass = colorClasses[item.color].split(' hover:')[0];
-                          const hoverColorClass = colorClasses[item.color].split(' hover:')[1] ? 'hover:' + colorClasses[item.color].split(' hover:')[1] : '';
-                          const iconBgHoverClass = colorClasses[item.color].split(' group-hover:')[1] ? 'group-hover:' + colorClasses[item.color].split(' group-hover:')[1] : '';
+                          const cardBorderClasses: Record<string, string> = {
+                            amber: "border-amber-100 hover:border-amber-300 hover:bg-amber-50/40",
+                            blue: "border-blue-100 hover:border-blue-300 hover:bg-blue-50/40",
+                            emerald: "border-emerald-100 hover:border-emerald-300 hover:bg-emerald-50/40",
+                            sky: "border-sky-100 hover:border-sky-300 hover:bg-sky-50/40",
+                            purple: "border-purple-100 hover:border-purple-300 hover:bg-purple-50/40",
+                            teal: "border-teal-100 hover:border-teal-300 hover:bg-teal-50/40",
+                            fuchsia: "border-fuchsia-100 hover:border-fuchsia-300 hover:bg-fuchsia-50/40",
+                          };
+                          const badgeClasses: Record<string, string> = {
+                            amber: "bg-amber-500",
+                            blue: "bg-blue-600",
+                            emerald: "bg-emerald-500",
+                            sky: "bg-sky-600",
+                            purple: "bg-purple-600",
+                            teal: "bg-teal-600",
+                            fuchsia: "bg-fuchsia-600",
+                          };
+                          const titleHoverClasses: Record<string, string> = {
+                            amber: "text-slate-700 group-hover:text-amber-700",
+                            blue: "text-slate-700 group-hover:text-blue-700",
+                            emerald: "text-slate-700 group-hover:text-emerald-700",
+                            sky: "text-slate-700 group-hover:text-sky-700",
+                            purple: "text-slate-700 group-hover:text-purple-700",
+                            teal: "text-slate-700 group-hover:text-teal-700",
+                            fuchsia: "text-slate-700 group-hover:text-fuchsia-700",
+                          };
 
                           return (
                             <motion.div
@@ -5907,10 +6138,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                 }
                                 handleMenuChange(item.id as any, item.order);
                               }}
-                              className={`bg-white ${item.isDisabled ? 'opacity-60 grayscale cursor-not-allowed border-slate-200' : 'cursor-pointer ' + hoverColorClass + ' border-' + item.color + '-100'} border-2 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-colors duration-150 transform-gpu will-change-transform shadow-xs hover:shadow-md group relative min-h-[145px] sm:min-h-[160px]`}
+                              className={`bg-white ${item.isDisabled ? 'opacity-60 grayscale cursor-not-allowed border-slate-200' : 'cursor-pointer ' + cardBorderClasses[item.color]} border-2 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-colors duration-150 transform-gpu will-change-transform shadow-xs hover:shadow-md group relative min-h-[145px] sm:min-h-[160px]`}
                             >
                               {item.badge !== undefined && item.badge !== null && (
-                                <span className={`absolute top-2.5 right-2.5 px-2 py-0.5 bg-${item.color}-500 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs`}>
+                                <span className={`absolute top-2.5 right-2.5 px-2 py-0.5 ${badgeClasses[item.color]} text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs`}>
                                   {item.badge}
                                 </span>
                               )}
@@ -5919,10 +6150,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                   Nonaktif
                                 </span>
                               )}
-                              <div className={`w-13 h-13 sm:w-15 sm:h-15 rounded-2xl flex items-center justify-center shadow-xs transition-all duration-200 transform-gpu ${baseColorClass.replace('bg-white ', '')} ${iconBgHoverClass.replace(' group-hover:bg-white', '')} group-hover:scale-110`}>
+                              <div className={`w-13 h-13 sm:w-15 sm:h-15 rounded-2xl flex items-center justify-center shadow-xs transition-all duration-200 transform-gpu ${iconClasses[item.color]} group-hover:scale-110`}>
                                 <Icon className="w-6 h-6 sm:w-7 sm:h-7" />
                               </div>
-                              <span className={`text-xs sm:text-sm font-black ${item.isDisabled ? 'text-slate-500' : 'text-slate-700 group-hover:text-' + item.color + '-700'} leading-tight mt-3 transition-colors`}>
+                              <span className={`text-xs sm:text-sm font-black ${item.isDisabled ? 'text-slate-500' : titleHoverClasses[item.color]} leading-tight mt-3 transition-colors`}>
                                 {item.title}
                               </span>
                               <span className="text-[10px] sm:text-[11px] text-slate-400 font-medium mt-1 line-clamp-1">
@@ -8061,6 +8292,187 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   </div>
                 </div>
               )}
+
+              {/* Kisi-Kisi Ujian (Link Google Drive) */}
+              {activeMenu === "kisi-kisi" && (() => {
+                const categories = ["Semua", "PTS", "PSAS", "Preetes", "Postes", "Ulangan Harian", "Lainnya"];
+                const queryLower = kisiKisiSearch.trim().toLowerCase();
+                const filteredKisi = mergedKisiKisiList.filter((item: any) => {
+                  const catMatch =
+                    kisiKisiFilterCategory === "Semua" ||
+                    String(item.category || "").toLowerCase() === kisiKisiFilterCategory.toLowerCase();
+                  if (!catMatch) return false;
+                  if (!queryLower) return true;
+                  return (
+                    String(item.title || "").toLowerCase().includes(queryLower) ||
+                    String(item.bab || "").toLowerCase().includes(queryLower) ||
+                    String(item.materiTitle || "").toLowerCase().includes(queryLower) ||
+                    String(item.lingkupMateri || "").toLowerCase().includes(queryLower) ||
+                    String(item.category || "").toLowerCase().includes(queryLower) ||
+                    String(item.notes || "").toLowerCase().includes(queryLower)
+                  );
+                });
+
+                const getCategoryBadgeStyle = (cat: string) => {
+                  const c = String(cat || "").toLowerCase();
+                  if (c.includes("pts")) return "bg-amber-50 text-amber-800 border-amber-200";
+                  if (c.includes("psas") || c.includes("pas")) return "bg-purple-50 text-purple-800 border-purple-200";
+                  if (c.includes("preetes") || c.includes("pretest")) return "bg-sky-50 text-sky-800 border-sky-200";
+                  if (c.includes("postes") || c.includes("posttest")) return "bg-emerald-50 text-emerald-800 border-emerald-200";
+                  if (c.includes("ulangan")) return "bg-blue-50 text-blue-800 border-blue-200";
+                  return "bg-teal-50 text-teal-800 border-teal-200";
+                };
+
+                return (
+                  <div className="space-y-6 max-w-5xl mx-auto pb-12 animate-in fade-in duration-300">
+                    {/* Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+                      <div>
+                        <button
+                          type="button"
+                          onClick={() => handleMenuChange("dashboard", 0)}
+                          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 mb-2 cursor-pointer"
+                        >
+                          <ArrowLeft className="w-3.5 h-3.5" />
+                          <span>Kembali ke Beranda</span>
+                        </button>
+                        <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight flex items-center gap-2.5">
+                          <BookMarked className="w-7 h-7 text-teal-600" />
+                          <span>Kisi-Kisi Ujian & Evaluasi</span>
+                        </h2>
+                        <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
+                          Akses langsung tautan Google Drive kisi-kisi untuk persiapan <strong>PTS</strong>, <strong>PSAS</strong>, <strong>Preetes</strong>, <strong>Postes</strong>, dan <strong>Ulangan Harian</strong>.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Filter Kategori + Pencarian */}
+                    <div className="bg-white rounded-3xl border border-slate-200 p-4 sm:p-5 shadow-2xs space-y-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {categories.map((cat) => {
+                          const isActive = kisiKisiFilterCategory === cat;
+                          return (
+                            <button
+                              key={`kisi-cat-${cat}`}
+                              type="button"
+                              onClick={() => setKisiKisiFilterCategory(cat)}
+                              className={`px-3.5 py-2 min-h-[38px] rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                                isActive
+                                  ? "bg-teal-600 text-white shadow-xs"
+                                  : "bg-slate-50 text-slate-600 border border-slate-200 hover:bg-teal-50 hover:text-teal-700"
+                              }`}
+                            >
+                              {cat}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="relative">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={kisiKisiSearch}
+                          onChange={(e) => setKisiKisiSearch(e.target.value)}
+                          placeholder="Cari judul kisi-kisi, materi, ruang lingkup, atau jenis ujian..."
+                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs sm:text-sm font-medium text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-teal-500 outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* List Kisi-Kisi Cards */}
+                    {filteredKisi.length === 0 ? (
+                      <div className="bg-white rounded-3xl border-2 border-dashed border-slate-200 p-12 text-center space-y-3">
+                        <div className="w-16 h-16 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center mx-auto">
+                          <BookMarked className="w-8 h-8" />
+                        </div>
+                        <h3 className="text-base sm:text-lg font-bold text-slate-800">
+                          {mergedKisiKisiList.length === 0
+                            ? "Belum Ada Kisi-Kisi Ujian yang Dirilis"
+                            : "Kisi-Kisi Tidak Ditemukan"}
+                        </h3>
+                        <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto leading-relaxed">
+                          {mergedKisiKisiList.length === 0
+                            ? "Guru pengampu belum menambahkan tautan Google Drive kisi-kisi untuk kelas Anda. Klik tombol Sinkron di kanan atas untuk mengecek pembaruan."
+                            : "Coba ubah kata kunci pencarian atau pilih kategori 'Semua'."}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {filteredKisi.map((item: any, idx: number) => (
+                          <div
+                            key={`student-kisi-${item.id || idx}`}
+                            className="bg-white rounded-3xl border border-slate-200 hover:border-teal-300 p-5 shadow-xs hover:shadow-md transition-all flex flex-col justify-between gap-4"
+                          >
+                            <div className="space-y-2.5">
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                <span className={`px-2 py-0.5 rounded-md border text-[10px] font-black uppercase tracking-wider ${getCategoryBadgeStyle(item.category)}`}>
+                                  {item.category || "Ujian"}
+                                </span>
+                                {item.bab && (
+                                  <span className="font-semibold text-slate-600">{item.bab}</span>
+                                )}
+                              </div>
+                              <h3 className="text-base font-black text-slate-900 leading-snug">
+                                {item.title}
+                              </h3>
+                              {item.materiTitle && (
+                                <p className="text-[11px] font-semibold text-slate-600">
+                                  <span className="font-bold text-slate-700">Materi:</span> {item.materiTitle}
+                                </p>
+                              )}
+                              {item.lingkupMateri && (
+                                <p className="text-[11px] font-medium text-teal-800 leading-relaxed">
+                                  <span className="font-bold">Ruang Lingkup Materi:</span> {item.lingkupMateri}
+                                </p>
+                              )}
+                              {item.notes && (
+                                <p className="text-xs text-slate-600 leading-relaxed">
+                                  <span className="font-bold text-slate-700">Tujuan Indikator:</span> {item.notes}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+                              <a
+                                href={item.driveUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-1 min-h-[40px] px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-2 transition-colors shadow-2xs whitespace-nowrap"
+                              >
+                                <ExternalLink className="w-4 h-4 shrink-0" />
+                                <span>Buka Link Google Drive</span>
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(item.driveUrl);
+                                  setCopiedKisiId(item.id);
+                                  setTimeout(() => setCopiedKisiId(null), 2000);
+                                }}
+                                className="min-h-[40px] px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0 whitespace-nowrap"
+                                title="Salin Link Drive"
+                              >
+                                {copiedKisiId === item.id ? (
+                                  <>
+                                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                    <span>Disalin</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3.5 h-3.5" />
+                                    <span>Salin</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Simulasi Berpikir Komputasional Menu */}
               {activeMenu === "simulasi" && (
@@ -10701,7 +11113,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                     const dateFormatted = !isNaN(dateObj.getTime())
                       ? dateObj.toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
                       : att.date;
-                    const studentName = student?.studentName || student?.displayName || "Siswa";
+                    const studentName = getDisplayCallName(student?.studentName || student?.displayName || student?.name || student?.nama || "Siswa");
                     const status = att.status || "Hadir";
                     let contentSentence = "";
                     let motivationalText = "";
@@ -11058,7 +11470,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                     );
                   }
 
-                  const studentName = student?.nama || student?.name || student?.displayName || "Siswa";
+                  const studentName = getDisplayCallName(student?.nama || student?.name || student?.displayName || "Siswa");
 
                   return (
                     <>

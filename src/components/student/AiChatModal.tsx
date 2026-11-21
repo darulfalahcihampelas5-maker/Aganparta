@@ -37,6 +37,7 @@ import {
   resolveLocalSipinterReply,
   buildStudentGeminiPrompt,
 } from "../../lib/siPinterLocalEngine";
+import { getDisplayCallName } from "../../lib/nameUtils";
 
 export type { SipinterStudentContext };
 
@@ -234,11 +235,7 @@ const GUIDE_ARTICLES: GuideArticle[] = [
   }
 ];
 
-function getFirstName(name?: string): string {
-  if (!name || typeof name !== "string" || !name.trim()) return "Siswa";
-  const firstWord = name.trim().split(/\s+/)[0] || "Siswa";
-  return firstWord.charAt(0).toUpperCase() + firstWord.slice(1).toLowerCase();
-}
+
 
 function renderFormattedLine(line: string, lineIdx: number): React.ReactNode {
   const parts = line.split(/(\*\*[^*]+\*\*)/g);
@@ -288,11 +285,15 @@ function renderFormattedMessage(text: string, isUser: boolean, isStreaming: bool
 
 const QUICK_PROMPTS = [
   "Apakah ada pesan hari ini?",
-  "Tugas apa saja yang belum saya kerjakan?",
+  "Berapa nilai rapor sementara saya dan rinciannya?",
+  "Siapa siswa dengan nilai rapor tertinggi di kelas?",
+  "Komponen nilai mana yang perlu saya tingkatkan?",
+  "Bagaimana peringkat saya dan status integritas ujian?",
+  "Tugas apa saja yang belum saya kerjakan & tenggat terdekat?",
   "Apakah ada tugas yang ditolak dan perlu diperbaiki?",
   "Bagaimana ringkasan kehadiran dan nilai saya?",
   "Apakah ada jadwal ujian aktif saat ini?",
-  "Materi apa saja yang tersedia dan belum selesai saya baca?",
+  "Materi apa saja yang tersedia dan status simulasi?",
   "Cara upload tugas Google Drive agar tidak ditolak"
 ];
 
@@ -303,7 +304,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   studentPhotoUrl,
   sipinterContext
 }) => {
-  const firstName = getFirstName(studentName);
+  const firstName = getDisplayCallName(studentName);
   const assistantName = "Si Pinter · Gemini AI";
 
   const [activeTab, setActiveTab] = useState<"chat" | "guide">("chat");
@@ -375,7 +376,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const kelasInfo = sipinterContext?.kelas ? ` (Kelas **${sipinterContext.kelas}**)` : "";
-    const greetingText = `Halo **${firstName}**${kelasInfo}, selamat datang di **Si Pinter · Gemini AI**!\n\nPertanyaan cepat seputar **pesan hari ini**, **tugas belum selesai/ditolak**, **kehadiran & nilai**, **jadwal ujian aktif**, serta **panduan & rangkuman Bab 1–9** langsung dijawab seketika di sini.\n\nUntuk pertanyaan bebas atau diskusi mendalam, kamu akan diarahkan ke **Gemini AI menggunakan akun Google-mu sendiri** (konteks Si-Pinter non-rahasia otomatis tersalin agar tinggal *Paste*, dan tutup tab Gemini kapan saja untuk kembali ke Si-Pinter).`;
+    const greetingText = `Halo **${firstName}**${kelasInfo}, selamat datang di **Si Pinter · Gemini AI**!\n\nPertanyaan cepat seputar **pesan hari ini**, **nilai rapor sementara**, **peringkat & juara kelas**, **komponen nilai**, **tugas & tenggat terdekat**, **jadwal ujian aktif**, **materi & simulasi**, serta **rangkuman Bab 1–9** langsung dijawab seketika di sini.\n\nUntuk pertanyaan bebas atau diskusi mendalam, kamu akan diarahkan ke **Gemini AI menggunakan akun Google-mu sendiri** (konteks Si-Pinter non-rahasia otomatis tersalin agar tinggal *Paste*, dan tutup tab Gemini kapan saja untuk kembali ke Si-Pinter).`;
 
     setMessages((prev) => {
       if (prev.length === 0) {

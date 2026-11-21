@@ -34,6 +34,7 @@ export interface EditExamModalProps {
     token: string;
     targetClasses: string[];
     externalQuizUrl?: string;
+    kisiKisiDriveUrl?: string;
     description?: string;
   }) => Promise<void>;
   isSaving: boolean;
@@ -56,6 +57,7 @@ export const EditExamModal: React.FC<EditExamModalProps> = ({
   const [token, setToken] = useState("");
   const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
   const [externalQuizUrl, setExternalQuizUrl] = useState("");
+  const [kisiKisiDriveUrl, setKisiKisiDriveUrl] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [copiedToken, setCopiedToken] = useState(false);
@@ -80,6 +82,7 @@ export const EditExamModal: React.FC<EditExamModalProps> = ({
       setKkm(Number(exam.kkm) || 75);
       setToken(exam.token ? String(exam.token).toUpperCase() : "");
       setExternalQuizUrl(exam.externalQuizUrl || "");
+      setKisiKisiDriveUrl(exam.kisiKisiDriveUrl || "");
       setDescription(exam.description || exam.materi_desc || "");
 
       // Classes
@@ -195,6 +198,7 @@ export const EditExamModal: React.FC<EditExamModalProps> = ({
         token: token.trim().toUpperCase(),
         targetClasses: selectedClasses,
         externalQuizUrl: externalQuizUrl.trim(),
+        kisiKisiDriveUrl: kisiKisiDriveUrl.trim(),
         description: description.trim(),
       });
     } catch (err: any) {
@@ -523,6 +527,21 @@ export const EditExamModal: React.FC<EditExamModalProps> = ({
                   onChange={(e) => setExternalQuizUrl(e.target.value)}
                   placeholder="https://drive.google.com/... atau https://notebooklm.google.com/..."
                   className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-[#85cc00] outline-none transition-all"
+                />
+              </div>
+
+              {/* 5b. Link Google Drive Kisi-Kisi Ujian (Opsional) */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-teal-600" />
+                  Link Google Drive Kisi-Kisi Ujian (Opsional — tampil di Menu Kisi-Kisi Siswa)
+                </label>
+                <input
+                  type="url"
+                  value={kisiKisiDriveUrl}
+                  onChange={(e) => setKisiKisiDriveUrl(e.target.value)}
+                  placeholder="https://drive.google.com/file/d/..."
+                  className="w-full px-4 py-2 bg-teal-50/40 border border-teal-200 rounded-xl text-xs font-mono text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-teal-500 outline-none transition-all"
                 />
               </div>
 

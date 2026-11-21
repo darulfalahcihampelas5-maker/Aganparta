@@ -99,6 +99,7 @@ import {
   Camera,
   Image as ImageIcon,
   RotateCcw,
+  BookMarked,
 } from "lucide-react";
 
 const Youtube = (props: React.SVGProps<SVGSVGElement>) => (
@@ -137,6 +138,7 @@ const BulkImportQuestionsModal = React.lazy(() =>
 import { ExamItemAnalysisModal } from "../components/teacher/ExamItemAnalysisModal";
 import { LiveProctoringModal } from "../components/teacher/LiveProctoringModal";
 import { generateStudentRaporPdf, buildParentWaReportText } from "../lib/studentReportPdf";
+import { generateExamKisiKisiPdf, stripBabAndLingkupFromKisiTitle } from "../lib/examKisiKisiPdf";
 import { getFinalGrades, getExams, saveFinalGrade, subscribeToFinalGrades, dbSetDoc, dbDeleteDoc } from "../lib/supabaseSync";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
 import { isAssignmentForClass, isExamForClass, isClassMatch, normalizeClassName, isPTSItem, isPASItem, isSameNisn } from "../lib/gradeUtils";
@@ -1151,6 +1153,36 @@ export default function DashboardTeacher() {
   const [examDocuments, setExamDocuments] = useState<File[]>([]);
   const [examQuestions, setExamQuestions] = useState<any[]>([]);
   const [examToken, setExamToken] = useState("");
+  const [examKisiKisiDriveUrl, setExamKisiKisiDriveUrl] = useState("");
+  const [lastCreatedExamForKisi, setLastCreatedExamForKisi] = useState<any | null>(null);
+  const [inlineExamDriveDraft, setInlineExamDriveDraft] = useState("");
+  const [isSavingInlineDrive, setIsSavingInlineDrive] = useState(false);
+  const [isDownloadingKisiPdfId, setIsDownloadingKisiPdfId] = useState<string | null>(null);
+  const [kisiKisiList, setKisiKisiList] = useState<any[]>([]);
+  const [activeKisiTab, setActiveKisiTab] = useState<"daftar" | "tambah">("daftar");
+  const [kisiFilterKelas, setKisiFilterKelas] = useState("");
+  const [kisiFilterCategory, setKisiFilterCategory] = useState("");
+  const [kisiSaveMessage, setKisiSaveMessage] = useState({ text: "", type: "" });
+  const [isSavingKisiKisi, setIsSavingKisiKisi] = useState(false);
+  const [editingKisiId, setEditingKisiId] = useState<string | null>(null);
+  const [kisiTitle, setKisiTitle] = useState("");
+  const [kisiCategory, setKisiCategory] = useState("PTS");
+  const [kisiBab, setKisiBab] = useState("");
+  const [kisiLingkupMateri, setKisiLingkupMateri] = useState("");
+  const [kisiKelasRef, setKisiKelasRef] = useState("SEMUA_KELAS");
+  const [selectedKisiClasses, setSelectedKisiClasses] = useState<string[]>(["SEMUA_KELAS"]);
+  const [kisiDriveUrl, setKisiDriveUrl] = useState("");
+  const [kisiNotes, setKisiNotes] = useState("");
+  const [kisiMateriTitle, setKisiMateriTitle] = useState("");
+  const [kisiMateriText, setKisiMateriText] = useState("");
+  const [kisiMateriFile, setKisiMateriFile] = useState<File | null>(null);
+  const [isGeneratingKisiFromMateri, setIsGeneratingKisiFromMateri] = useState(false);
+  const [kisiClassModal, setKisiClassModal] = useState<{
+    isOpen: boolean;
+    item: any | null;
+    selectedClasses: string[];
+    isSaving: boolean;
+  }>({ isOpen: false, item: null, selectedClasses: [], isSaving: false });
   const [isGeneratingExam, setIsGeneratingExam] = useState(false);
   const [isSavingExam, setIsSavingExam] = useState(false);
   const [examSaveMessage, setExamSaveMessage] = useState({ text: "", type: "" });
@@ -2509,6 +2541,26 @@ export default function DashboardTeacher() {
             }
           }
         })(),
+
+        // 12. Kisi-Kisi Ujian Links
+        (async () => {
+          const cachedKisi = !forceRefresh && getLocalCache<any[]>("firas_cache_exam_kisi_kisi", 6 * 60 * 60 * 1000);
+          if (cachedKisi && Array.isArray(cachedKisi)) {
+            setKisiKisiList(cachedKisi);
+          } else {
+            try {
+              const docSnap = await getDoc(doc(db, "config", "exam_kisi_kisi"));
+              trackUsage(1, 0);
+              if (docSnap.exists()) {
+                const items = Array.isArray(docSnap.data()?.items) ? docSnap.data().items : [];
+                setKisiKisiList(items);
+                setLocalCache("firas_cache_exam_kisi_kisi", items);
+              }
+            } catch (e) {
+              console.warn("Failed fetching exam_kisi_kisi:", e);
+            }
+          }
+        })(),
       ]);
     } finally {
       setTimeout(() => setIsRefreshingTeacherData(false), 500);
@@ -3429,6 +3481,7 @@ export default function DashboardTeacher() {
     token: string;
     targetClasses: string[];
     externalQuizUrl?: string;
+    kisiKisiDriveUrl?: string;
     description?: string;
   }) => {
     setIsSavingEditExam(true);
@@ -3453,6 +3506,7 @@ export default function DashboardTeacher() {
         targetClasses: updatedData.targetClasses,
         kelasRef: kelasRefVal,
         externalQuizUrl: updatedData.externalQuizUrl ? updatedData.externalQuizUrl.trim() : "",
+        kisiKisiDriveUrl: updatedData.kisiKisiDriveUrl !== undefined ? updatedData.kisiKisiDriveUrl.trim() : (existingExam.kisiKisiDriveUrl || ""),
         description: updatedData.description !== undefined ? updatedData.description.trim() : existingExam.description,
         updatedAt: new Date().toISOString(),
       };
@@ -3498,6 +3552,364 @@ export default function DashboardTeacher() {
     } finally {
       setIsSavingEditExam(false);
     }
+  };
+
+  const handleDownloadExamKisiKisiPdf = async (examObj: any) => {
+    if (!examObj) return;
+    const keyId = examObj.id || "draft";
+    setIsDownloadingKisiPdfId(keyId);
+    try {
+      await generateExamKisiKisiPdf({
+        exam: examObj,
+        userSettings,
+      });
+    } catch (err: any) {
+      console.error("Gagal mengunduh PDF Kisi-Kisi:", err);
+      showAlert("Gagal Unduh PDF", `Tidak dapat membuat file PDF Kisi-Kisi: ${err?.message || err}`, "danger");
+    } finally {
+      setIsDownloadingKisiPdfId(null);
+    }
+  };
+
+  const handleSaveExamKisiDriveUrl = async (examObj: any, driveUrl: string) => {
+    if (!examObj?.id) return;
+    const cleanUrl = driveUrl.trim();
+    if (!cleanUrl) {
+      showAlert("Link Kosong", "Masukkan tautan Google Drive PDF Kisi-Kisi terlebih dahulu.", "danger");
+      return;
+    }
+    setIsSavingInlineDrive(true);
+    try {
+      await setDoc(
+        doc(db, "exams", examObj.id),
+        { kisiKisiDriveUrl: cleanUrl, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
+      const updatedList = examsList.map((e) =>
+        e.id === examObj.id ? { ...e, kisiKisiDriveUrl: cleanUrl } : e
+      );
+      setExamsList(updatedList);
+      setLocalCache("firas_cache_exams_v2", updatedList);
+      if (lastCreatedExamForKisi?.id === examObj.id) {
+        setLastCreatedExamForKisi({ ...lastCreatedExamForKisi, kisiKisiDriveUrl: cleanUrl });
+      }
+      showAlert("Link Kisi-Kisi Tersimpan", "Link Google Drive Kisi-Kisi berhasil disimpan dan langsung muncul di Menu Kisi-Kisi siswa.", "alert");
+    } catch (err: any) {
+      console.error("Gagal menyimpan kisiKisiDriveUrl:", err);
+      showAlert("Gagal Menyimpan", `Gagal menyimpan link Drive kisi-kisi: ${err?.message || err}`, "danger");
+    } finally {
+      setIsSavingInlineDrive(false);
+    }
+  };
+
+  const deriveKisiLingkupFromNotes = (notesText: string, babText: string): string => {
+    const cleanNotes = String(notesText || "").trim();
+    if (cleanNotes) {
+      let focused = cleanNotes
+        .replace(/^Disajikan\s+[^,]+,\s*/i, "")
+        .replace(
+          /^Peserta\s+didik\s+(?:dapat|mampu)\s+(?:memahami|menjelaskan|mengidentifikasi|menentukan|menerapkan|menganalisis|mengevaluasi|membandingkan|menyimpulkan|menunjukkan|menyebutkan|menguraikan|mengurutkan|menghitung)(?:\s+(?:serta|dan)\s+[a-z]+)?(?:\s+secara\s+(?:tepat|logis|konseptual|benar))?\s*/i,
+          ""
+        )
+        .replace(/^(?:bahwa|mengenai|tentang|konsep|prinsip|fungsi|peran)\s+/i, "")
+        .replace(/\.+$/, "")
+        .trim();
+      if (focused.length > 75) {
+        focused = `${focused.slice(0, 72).trim()}...`;
+      }
+      if (focused.length >= 6) {
+        return focused.charAt(0).toUpperCase() + focused.slice(1);
+      }
+    }
+    return String(babText || "").trim() || "Informatika Fase E";
+  };
+
+  const parseKisiTargetClasses = (item: any): string[] => {
+    if (!item) return ["SEMUA_KELAS"];
+    if (Array.isArray(item.targetClasses) && item.targetClasses.length > 0) {
+      return item.targetClasses;
+    }
+    const rawRef = String(item.kelasRef || "SEMUA_KELAS").trim();
+    if (!rawRef || rawRef === "SEMUA_KELAS") return ["SEMUA_KELAS"];
+    return rawRef
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
+
+  const handleGenerateKisiFromMateri = async () => {
+    if (!kisiMateriTitle.trim() && !kisiMateriText.trim() && !kisiMateriFile) {
+      showAlert(
+        "Materi Belum Diisi",
+        "Pilih materi ajar, tulis judul/rangkuman materi, atau unggah file PDF materi yang akan di-up terlebih dahulu.",
+        "danger"
+      );
+      return;
+    }
+    setIsGeneratingKisiFromMateri(true);
+    setKisiSaveMessage({ text: "", type: "" });
+    try {
+      const formData = new FormData();
+      formData.append("subject", userSettings?.subjectName || "Informatika");
+      formData.append("category", kisiCategory || "Ujian");
+      formData.append("materiTitle", kisiMateriTitle.trim());
+      formData.append("materiText", kisiMateriText.trim());
+      formData.append("driveUrl", kisiDriveUrl.trim());
+      if (kisiMateriFile) {
+        formData.append("document", kisiMateriFile);
+      }
+
+      const response = await fetchWithRetry("/api/generate-kisi-kisi", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        let errMsg = "Gagal menyusun Ruang Lingkup & IPK dari materi.";
+        try {
+          const errJson = await response.json();
+          errMsg = errJson.details || errJson.error || errMsg;
+        } catch {}
+        throw new Error(errMsg);
+      }
+
+      const data = await response.json();
+      if (data.lingkupMateri) {
+        setKisiLingkupMateri(data.lingkupMateri);
+      }
+      if (data.indikatorPencapaian) {
+        setKisiNotes(data.indikatorPencapaian);
+      }
+      if (!kisiTitle.trim()) {
+        setKisiTitle(`Kisi-Kisi ${kisiCategory || "PTS"} ${userSettings?.subjectName || "Informatika"}`);
+      }
+      setKisiSaveMessage({
+        text: "Ruang Lingkup Materi dan Tujuan Indikator Pencapaian Kompetensi berhasil disusun otomatis dari materi yang di-up!",
+        type: "success",
+      });
+    } catch (err: any) {
+      console.error("Gagal generate kisi-kisi dari materi:", err);
+      setKisiSaveMessage({
+        text: err?.message || "Gagal menyusun Ruang Lingkup & IPK dari materi.",
+        type: "error",
+      });
+    } finally {
+      setIsGeneratingKisiFromMateri(false);
+    }
+  };
+
+  const handleSaveKisiKisiItem = async () => {
+    setKisiSaveMessage({ text: "", type: "" });
+    if (!kisiTitle.trim() || !kisiDriveUrl.trim()) {
+      setKisiSaveMessage({
+        text: "Mohon lengkapi Judul Kisi-Kisi dan Link Google Drive terlebih dahulu.",
+        type: "error",
+      });
+      showAlert("Data Belum Lengkap", "Judul Kisi-Kisi dan Link Google Drive wajib diisi.", "danger");
+      return;
+    }
+    setIsSavingKisiKisi(true);
+    try {
+      const nowIso = new Date().toISOString();
+      const chosenClasses = selectedKisiClasses.length > 0
+        ? selectedKisiClasses
+        : (kisiKelasRef && kisiKelasRef !== "" ? kisiKelasRef.split(",").map((s) => s.trim()).filter(Boolean) : ["SEMUA_KELAS"]);
+      const isAll =
+        chosenClasses.includes("SEMUA_KELAS") ||
+        (classesList.length > 0 && chosenClasses.filter((c) => c !== "SEMUA_KELAS").length >= classesList.length);
+      const cleanSpecific = Array.from(new Set(chosenClasses.filter((c) => c !== "SEMUA_KELAS")));
+      const finalTargetClasses = isAll || cleanSpecific.length === 0 ? ["SEMUA_KELAS"] : cleanSpecific;
+      const normalizedKelas = finalTargetClasses.includes("SEMUA_KELAS")
+        ? "SEMUA_KELAS"
+        : finalTargetClasses.join(", ");
+      const finalBab = kisiBab.trim() || "Informatika Fase E";
+      const finalLingkup = kisiLingkupMateri.trim() || kisiMateriTitle.trim() || deriveKisiLingkupFromNotes(kisiNotes, finalBab);
+
+      const newItem = {
+        id: editingKisiId || `KISI-${Date.now()}`,
+        title: stripBabAndLingkupFromKisiTitle(kisiTitle.trim()),
+        category: kisiCategory || "PTS",
+        bab: finalBab,
+        materiTitle: kisiMateriTitle.trim(),
+        materiText: kisiMateriText.trim(),
+        lingkupMateri: finalLingkup,
+        kelasRef: normalizedKelas,
+        targetClasses: finalTargetClasses,
+        driveUrl: kisiDriveUrl.trim(),
+        notes: kisiNotes.trim(),
+        updatedAt: nowIso,
+        createdAt: editingKisiId
+          ? (kisiKisiList.find((x) => x.id === editingKisiId)?.createdAt || nowIso)
+          : nowIso,
+      };
+      const nextList = editingKisiId
+        ? kisiKisiList.map((x) => (x.id === editingKisiId ? newItem : x))
+        : [newItem, ...kisiKisiList];
+
+      await setDoc(
+        doc(db, "config", "exam_kisi_kisi"),
+        { items: nextList, updatedAt: nowIso },
+        { merge: true }
+      );
+      trackUsage(0, 1);
+      setKisiKisiList(nextList);
+      setLocalCache("firas_cache_exam_kisi_kisi", nextList);
+      const wasEditing = Boolean(editingKisiId);
+      setEditingKisiId(null);
+      setKisiTitle("");
+      setKisiCategory("PTS");
+      setKisiBab("");
+      setKisiLingkupMateri("");
+      setKisiMateriTitle("");
+      setKisiMateriText("");
+      setKisiMateriFile(null);
+      setKisiKelasRef("SEMUA_KELAS");
+      setSelectedKisiClasses(["SEMUA_KELAS"]);
+      setKisiDriveUrl("");
+      setKisiNotes("");
+      setActiveKisiTab("daftar");
+      setKisiSaveMessage({ text: "", type: "" });
+      showAlert(
+        "Berhasil",
+        wasEditing
+          ? `Kisi-Kisi berhasil diperbarui untuk kelas tujuan (${normalizedKelas === "SEMUA_KELAS" ? "Semua Kelas" : normalizedKelas}) dan langsung tampil di dashboard siswa.`
+          : `Kisi-Kisi berhasil ditambahkan untuk kelas tujuan (${normalizedKelas === "SEMUA_KELAS" ? "Semua Kelas" : normalizedKelas}) dan langsung tampil di dashboard siswa.`,
+        "alert"
+      );
+    } catch (err: any) {
+      console.error("Gagal menyimpan Kisi-Kisi:", err);
+      setKisiSaveMessage({
+        text: `Gagal menyimpan Kisi-Kisi: ${err?.message || err}`,
+        type: "error",
+      });
+      showAlert("Gagal", `Gagal menyimpan Kisi-Kisi: ${err?.message || err}`, "danger");
+    } finally {
+      setIsSavingKisiKisi(false);
+    }
+  };
+
+  const handleEditKisiKisiItem = (item: any) => {
+    const parsedClasses = parseKisiTargetClasses(item);
+    setEditingKisiId(item.id);
+    setKisiTitle(item.title || "");
+    setKisiCategory(item.category || "PTS");
+    setKisiBab(item.bab || "");
+    setKisiMateriTitle(item.materiTitle || "");
+    setKisiMateriText(item.materiText || "");
+    setKisiMateriFile(null);
+    setKisiLingkupMateri(item.lingkupMateri || "");
+    setKisiKelasRef(item.kelasRef || "SEMUA_KELAS");
+    setSelectedKisiClasses(
+      parsedClasses.includes("SEMUA_KELAS")
+        ? ["SEMUA_KELAS", ...classesList.map((c) => c.name)]
+        : parsedClasses
+    );
+    setKisiDriveUrl(item.driveUrl || "");
+    setKisiNotes(item.notes || "");
+    setKisiSaveMessage({ text: "", type: "" });
+    setActiveKisiTab("tambah");
+    setActiveMenu("kisi-kisi");
+  };
+
+  const handleOpenKisiClassModal = (item: any) => {
+    const current = parseKisiTargetClasses(item);
+    const expanded = current.includes("SEMUA_KELAS")
+      ? ["SEMUA_KELAS", ...classesList.map((c) => c.name)]
+      : current;
+    setKisiClassModal({
+      isOpen: true,
+      item,
+      selectedClasses: expanded,
+      isSaving: false,
+    });
+  };
+
+  const handleSaveKisiClasses = async () => {
+    if (!kisiClassModal.item) return;
+    const rawSelected = kisiClassModal.selectedClasses;
+    const specificSelected = Array.from(new Set(rawSelected.filter((c) => c !== "SEMUA_KELAS")));
+    const isAll =
+      rawSelected.includes("SEMUA_KELAS") ||
+      (classesList.length > 0 && specificSelected.length >= classesList.length);
+
+    if (!isAll && specificSelected.length === 0) {
+      showAlert("Pilih Kelas Tujuan", "Pilih minimal satu kelas tujuan atau centang Semua Kelas.", "danger");
+      return;
+    }
+
+    setKisiClassModal((prev) => ({ ...prev, isSaving: true }));
+    try {
+      const nowIso = new Date().toISOString();
+      const finalTargetClasses = isAll ? ["SEMUA_KELAS"] : specificSelected;
+      const normalizedKelas = isAll ? "SEMUA_KELAS" : specificSelected.join(", ");
+
+      const nextList = kisiKisiList.map((entry) =>
+        entry.id === kisiClassModal.item.id
+          ? {
+              ...entry,
+              kelasRef: normalizedKelas,
+              targetClasses: finalTargetClasses,
+              updatedAt: nowIso,
+            }
+          : entry
+      );
+
+      await setDoc(
+        doc(db, "config", "exam_kisi_kisi"),
+        { items: nextList, updatedAt: nowIso },
+        { merge: true }
+      );
+      trackUsage(0, 1);
+      setKisiKisiList(nextList);
+      setLocalCache("firas_cache_exam_kisi_kisi", nextList);
+
+      const itemTitle = kisiClassModal.item.title || "Kisi-Kisi";
+      setKisiClassModal({ isOpen: false, item: null, selectedClasses: [], isSaving: false });
+      showAlert(
+        "Kelas Tujuan Diperbarui",
+        `"${itemTitle}" berhasil ditambahkan ke kelas tujuan: ${isAll ? "Semua Kelas" : normalizedKelas}. Siswa di kelas tersebut kini dapat langsung melihatnya di Menu Kisi-Kisi.`,
+        "alert"
+      );
+    } catch (err: any) {
+      console.error("Gagal memperbarui kelas tujuan kisi-kisi:", err);
+      setKisiClassModal((prev) => ({ ...prev, isSaving: false }));
+      showAlert("Gagal", `Gagal memperbarui kelas tujuan: ${err?.message || err}`, "danger");
+    }
+  };
+
+  const handleDeleteKisiKisiItem = (id: string) => {
+    showConfirm(
+      "Hapus Kisi-Kisi",
+      "Yakin ingin menghapus tautan Kisi-Kisi ini dari daftar siswa?",
+      async () => {
+        try {
+          const nextList = kisiKisiList.filter((item) => item.id !== id);
+          await setDoc(
+            doc(db, "config", "exam_kisi_kisi"),
+            { items: nextList, updatedAt: new Date().toISOString() },
+            { merge: true }
+          );
+          trackUsage(0, 1);
+          setKisiKisiList(nextList);
+          setLocalCache("firas_cache_exam_kisi_kisi", nextList);
+          if (editingKisiId === id) {
+            setEditingKisiId(null);
+            setKisiTitle("");
+            setKisiCategory("PTS");
+            setKisiDriveUrl("");
+            setKisiBab("");
+            setKisiLingkupMateri("");
+            setKisiKelasRef("SEMUA_KELAS");
+            setSelectedKisiClasses(["SEMUA_KELAS"]);
+            setKisiNotes("");
+          }
+          showAlert("Berhasil", "Kisi-Kisi berhasil dihapus dari daftar siswa.", "alert");
+        } catch (err: any) {
+          showAlert("Gagal", `Gagal menghapus Kisi-Kisi: ${err?.message || err}`, "danger");
+        }
+      },
+      "Hapus"
+    );
   };
 
   const handleDeleteStudent = async (id: string, nisn?: string) => {
@@ -4543,6 +4955,7 @@ export default function DashboardTeacher() {
     { id: "sistem-presensi-siswa", label: "Sistem Presensi Siswa", icon: ClipboardList },
     { id: "manajemen-tugas", label: "Manajemen Tugas", icon: FilePlus },
     { id: "materi-ajar", label: "Materi Ajar", icon: BookOpen },
+    { id: "kisi-kisi", label: "Kisi-Kisi", icon: BookMarked },
     { id: "ujian-siswa", label: "Ujian Siswa", icon: GraduationCap },
     { id: "pengumuman", label: "Pengumuman Kelas", icon: Bell },
     {
@@ -6430,7 +6843,8 @@ export default function DashboardTeacher() {
     try {
       const kelasRefVal = targetClasses.includes("SEMUA_KELAS") ? "SEMUA_KELAS" : targetClasses.join(", ");
       const examId = `EXM-${Date.now()}`;
-      await setDoc(doc(db, "exams", examId), {
+      const createdAtIso = new Date().toISOString();
+      const createdExamObj = {
         id: examId,
         title: examTitle.trim(),
         subject: examSubject.trim(),
@@ -6443,11 +6857,14 @@ export default function DashboardTeacher() {
         category: "Pilihan Ganda",
         tema: examTema,
         materi: examMateri.trim(),
+        description: examDescription.trim(),
+        kisiKisiDriveUrl: examKisiKisiDriveUrl.trim(),
         youtubeUrls: examYoutubeUrls.filter((u) => u.trim() !== ""),
         questions: examQuestions,
-        createdAt: new Date().toISOString(),
+        createdAt: createdAtIso,
         teacherId: user?.uid || "mock-admin",
-      });
+      };
+      await setDoc(doc(db, "exams", examId), createdExamObj);
       if (isSupabaseConfigured && supabase) {
         try {
           await supabase.from("exams").upsert({
@@ -6459,17 +6876,27 @@ export default function DashboardTeacher() {
             duration: examDuration * 60,
             kkm: Number(examKkm) || 75,
             questions: examQuestions,
-            created_at: new Date().toISOString(),
+            created_at: createdAtIso,
           });
         } catch (_) {}
       }
 
+      setLastCreatedExamForKisi(createdExamObj);
+      setInlineExamDriveDraft(examKisiKisiDriveUrl.trim());
+      void generateExamKisiKisiPdf({ exam: createdExamObj, userSettings }).catch((pdfErr) =>
+        console.warn("Auto-download PDF kisi-kisi saat terbitkan ujian:", pdfErr)
+      );
+
       setExamSaveMessage({
-        text: "Ujian Kompetensi Mandiri berhasil diterbitkan dan token dirilis!",
+        text: "Ujian Kompetensi Mandiri berhasil diterbitkan, token dirilis, dan file PDF Kisi-Kisi dengan Kop Surat otomatis dibuat!",
         type: "success",
       });
 
-      showAlert("Berhasil", `Ujian online berhasil diterbitkan untuk kelas (${kelasRefVal}). Token ujian Anda adalah: ${examToken.toUpperCase()}`, "alert");
+      showAlert(
+        "Berhasil & Kisi-Kisi PDF Dibuat",
+        `Ujian online berhasil diterbitkan untuk kelas (${kelasRefVal}). Token: ${examToken.toUpperCase()}. File PDF Kisi-Kisi Soal dengan Kop Surat resmi juga telah disiapkan untuk diunduh.`,
+        "alert"
+      );
       localStorage.removeItem("firas_cache_exams_v2");
       fetchTeacherData(false);
 
@@ -6485,6 +6912,7 @@ export default function DashboardTeacher() {
       setExamKkm(75);
       setExamQuestions([]);
       setExamToken("");
+      setExamKisiKisiDriveUrl("");
       setExamYoutubeUrls(["", "", ""]);
       setExamDocuments([]);
       setExamDescription("");
@@ -7347,9 +7775,28 @@ export default function DashboardTeacher() {
                           </span>
                         </div>
 
+                        {/* 5b. Kisi-Kisi Soal */}
+                        <div
+                          onClick={() => handleMenuChange("kisi-kisi", 8)}
+                          className="bg-white hover:bg-teal-50/60 border-2 border-teal-100 hover:border-teal-300 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-1 active:scale-[0.98] group relative min-h-[155px] sm:min-h-[170px]"
+                        >
+                          <span className="absolute top-2.5 right-2.5 px-2 py-0.5 bg-teal-600 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs">
+                            {kisiKisiList.length} Kisi-Kisi
+                          </span>
+                          <div className="w-13 h-13 sm:w-15 sm:h-15 rounded-2xl bg-teal-50 text-teal-600 border border-teal-200/60 flex items-center justify-center shadow-xs group-hover:scale-110 group-hover:bg-teal-600 group-hover:text-white transition-all duration-200">
+                            <BookMarked className="w-6 h-6 sm:w-7 sm:h-7" />
+                          </div>
+                          <span className="text-xs sm:text-sm font-black text-slate-700 leading-tight mt-3 group-hover:text-teal-700 transition-colors">
+                            Kisi-Kisi Soal
+                          </span>
+                          <span className="text-[10px] sm:text-[11px] text-slate-400 font-medium mt-1 line-clamp-1">
+                            Kisi-kisi ujian & Drive
+                          </span>
+                        </div>
+
                         {/* 6. Ujian Siswa (CBT) */}
                         <div
-                          onClick={() => handleMenuChange("ujian-siswa", 8)}
+                          onClick={() => handleMenuChange("ujian-siswa", 9)}
                           className="bg-white hover:bg-purple-50/60 border-2 border-purple-100 hover:border-purple-300 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-1 active:scale-[0.98] group relative min-h-[155px] sm:min-h-[170px]"
                         >
                           <span className="absolute top-2.5 right-2.5 px-2 py-0.5 bg-purple-600 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs">
@@ -7368,7 +7815,7 @@ export default function DashboardTeacher() {
 
                         {/* Statistik & Etika AI */}
                         <div
-                          onClick={() => handleMenuChange("statistik-ai", 12)}
+                          onClick={() => handleMenuChange("statistik-ai", 13)}
                           className="bg-white hover:bg-emerald-50/60 border-2 border-emerald-100 hover:border-emerald-300 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-1 active:scale-[0.98] group relative min-h-[155px] sm:min-h-[170px]"
                         >
                           <span className="absolute top-2.5 right-2.5 px-2 py-0.5 bg-emerald-700 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs">
@@ -7406,7 +7853,7 @@ export default function DashboardTeacher() {
 
                         {/* 8. Pengumuman Kelas */}
                         <div
-                          onClick={() => handleMenuChange("pengumuman", 9)}
+                          onClick={() => handleMenuChange("pengumuman", 10)}
                           className="bg-white hover:bg-rose-50/60 border-2 border-rose-100 hover:border-rose-300 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-1 active:scale-[0.98] group relative min-h-[155px] sm:min-h-[170px]"
                         >
                           <span className="absolute top-2.5 right-2.5 px-2 py-0.5 bg-rose-500 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs">
@@ -7444,7 +7891,7 @@ export default function DashboardTeacher() {
 
                         {/* 10. Manajemen Penyimpanan */}
                         <div
-                          onClick={() => handleMenuChange("manajemen-penyimpanan", 10)}
+                          onClick={() => handleMenuChange("manajemen-penyimpanan", 11)}
                           className="bg-white hover:bg-cyan-50/60 border-2 border-cyan-100 hover:border-cyan-300 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-1 active:scale-[0.98] group relative min-h-[155px] sm:min-h-[170px]"
                         >
                           <span className="absolute top-2.5 right-2.5 px-2 py-0.5 bg-cyan-600 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs">
@@ -7463,7 +7910,7 @@ export default function DashboardTeacher() {
 
                         {/* 11. Ubah Password Guru */}
                         <div
-                          onClick={() => handleMenuChange("ubah-password", 11)}
+                          onClick={() => handleMenuChange("ubah-password", 12)}
                           className="bg-white hover:bg-slate-100/80 border-2 border-slate-200 hover:border-slate-300 rounded-3xl p-4 sm:p-5 flex flex-col items-center justify-center text-center transition-all duration-200 cursor-pointer shadow-sm hover:shadow-lg hover:-translate-y-1 active:scale-[0.98] group relative min-h-[155px] sm:min-h-[170px]"
                         >
                           <span className="absolute top-2.5 right-2.5 px-2 py-0.5 bg-slate-700 text-white text-[9px] font-black uppercase rounded-full tracking-wider shadow-xs">
@@ -11129,16 +11576,801 @@ export default function DashboardTeacher() {
                   </div>
                 )}
 
+                {activeMenu === "kisi-kisi" && (
+                  <div className="space-y-12 animate-in fade-in duration-300">
+                    <div className="flex gap-4 border-b border-slate-200">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveKisiTab("tambah");
+                          setKisiSaveMessage({ text: "", type: "" });
+                        }}
+                        className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                          activeKisiTab === "tambah"
+                            ? "text-[#85cc00] border-b-2 border-[#85cc00]"
+                            : "text-slate-400 hover:text-slate-700"
+                        }`}
+                      >
+                        {editingKisiId ? "Edit Kisi-Kisi" : "Tambah Kisi-Kisi"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveKisiTab("daftar");
+                          setKisiSaveMessage({ text: "", type: "" });
+                          setEditingKisiId(null);
+                          setKisiTitle("");
+                          setKisiCategory("PTS");
+                          setKisiBab("");
+                          setKisiMateriTitle("");
+                          setKisiMateriText("");
+                          setKisiMateriFile(null);
+                          setKisiLingkupMateri("");
+                          setKisiKelasRef("SEMUA_KELAS");
+                          setSelectedKisiClasses(["SEMUA_KELAS"]);
+                          setKisiDriveUrl("");
+                          setKisiNotes("");
+                        }}
+                        className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors cursor-pointer whitespace-nowrap shrink-0 tabular-nums ${
+                          activeKisiTab === "daftar"
+                            ? "text-[#85cc00] border-b-2 border-[#85cc00]"
+                            : "text-slate-400 hover:text-slate-700"
+                        }`}
+                      >
+                        Daftar Kisi-Kisi ({kisiKisiList.length})
+                      </button>
+                    </div>
+
+                    {activeKisiTab === "tambah" && (
+                      <div className="space-y-10">
+                        <div className="flex flex-col text-center md:text-left md:items-end md:flex-row justify-between gap-6 pb-8 border-b border-slate-100">
+                          <div className="max-w-2xl">
+                            <h2 className="text-2xl font-bold text-slate-950">Kisi-Kisi Soal</h2>
+                            <p className="text-slate-500 font-medium text-base leading-relaxed mt-1">
+                              Tambahkan kisi-kisi soal ujian (PTS, PSAS, Preetes, Postes, Ulangan Harian) lengkap dengan link Google Drive, Bab/Lingkup Materi sesuai Tujuan Indikator Kompetensi, serta pilih kelas tujuannya.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="max-w-4xl">
+                          <div className="rounded-3xl bg-white p-6 sm:p-10 border border-slate-200 shadow-sm">
+                            <div className="flex items-center gap-5 mb-8 pb-8 border-b border-slate-100">
+                              <div className="w-12 h-12 rounded-2xl bg-teal-50 flex items-center justify-center text-teal-600 border border-teal-100 shrink-0">
+                                <BookMarked className="w-6 h-6" />
+                              </div>
+                              <div>
+                                <h3 className="text-xl font-bold text-slate-800 tracking-tight leading-none mb-1.5">
+                                  {editingKisiId ? "Edit Konfigurasi Kisi-Kisi" : "Konfigurasi Kisi-Kisi Baru"}
+                                </h3>
+                                <p className="text-xs text-slate-500 font-medium">
+                                  Tambahkan tautan Drive kisi-kisi, Tujuan Indikator Pencapaian Kompetensi, Lingkup Materi, dan pilih kelas tujuan siswa.
+                                </p>
+                              </div>
+                            </div>
+
+                            {kisiSaveMessage.text && (
+                              <div
+                                className={`mb-8 rounded-xl p-4 flex items-start gap-3 border ${
+                                  kisiSaveMessage.type === "error"
+                                    ? "bg-rose-50 text-rose-700 border-rose-200"
+                                    : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                }`}
+                              >
+                                {kisiSaveMessage.type === "error" ? (
+                                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                                ) : (
+                                  <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+                                )}
+                                <p className="text-xs font-bold leading-relaxed">
+                                  {kisiSaveMessage.text}
+                                </p>
+                              </div>
+                            )}
+
+                            <div className="space-y-8">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="space-y-2.5">
+                                  <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                    1. Jenis / Kategori Ujian
+                                  </label>
+                                  <select
+                                    value={kisiCategory}
+                                    onChange={(e) => {
+                                      const nextCat = e.target.value;
+                                      setKisiCategory(nextCat);
+                                      if (!editingKisiId && (!kisiTitle.trim() || kisiTitle.startsWith("Kisi-Kisi "))) {
+                                        setKisiTitle(`Kisi-Kisi ${nextCat} Informatika`);
+                                      }
+                                    }}
+                                    className="block w-full rounded-2xl bg-slate-50 border border-slate-200 px-5 py-3.5 text-sm font-bold text-slate-900 focus:bg-white focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/10 transition-all outline-none appearance-none cursor-pointer"
+                                  >
+                                    <option value="PTS">PTS (Penilaian Tengah Semester)</option>
+                                    <option value="PSAS">PSAS (Penilaian Sumatif Akhir Semester)</option>
+                                    <option value="Preetes">Preetes</option>
+                                    <option value="Postes">Postes</option>
+                                    <option value="Ulangan Harian">Ulangan Harian</option>
+                                    <option value="Lainnya">Lainnya</option>
+                                  </select>
+                                </div>
+
+                                <div className="space-y-2.5">
+                                  <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                    2. Referensi Bab Pelajaran (Opsional)
+                                  </label>
+                                  <select
+                                    value={
+                                      [
+                                        ...INFORMATIKA_X_CHAPTERS,
+                                        "Gabungan Materi Semester Ganjil (Bab 1 - Bab 4)",
+                                        "Gabungan Materi Semester Genap (Bab 5 - Bab 9)",
+                                        ...chaptersList.map((c) => c.name).filter(Boolean),
+                                      ].includes(kisiBab)
+                                        ? kisiBab
+                                        : kisiBab
+                                        ? "__CUSTOM__"
+                                        : ""
+                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === "__CUSTOM__") return;
+                                      setKisiBab(val);
+                                      if (!editingKisiId && (!kisiTitle.trim() || kisiTitle.startsWith("Kisi-Kisi "))) {
+                                        setKisiTitle(`Kisi-Kisi ${kisiCategory} Informatika`);
+                                      }
+                                    }}
+                                    className="block w-full rounded-2xl bg-slate-50 border border-slate-200 px-5 py-3.5 text-sm font-bold text-slate-900 focus:bg-white focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/10 transition-all outline-none appearance-none cursor-pointer"
+                                  >
+                                    <option value="">-- Pilih Bab Pelajaran --</option>
+                                    {INFORMATIKA_X_CHAPTERS.map((chap, idx) => (
+                                      <option key={`kisi-chap-${idx}`} value={chap}>
+                                        {chap}
+                                      </option>
+                                    ))}
+                                    <option value="Gabungan Materi Semester Ganjil (Bab 1 - Bab 4)">
+                                      Gabungan Materi Semester Ganjil (Bab 1 - Bab 4)
+                                    </option>
+                                    <option value="Gabungan Materi Semester Genap (Bab 5 - Bab 9)">
+                                      Gabungan Materi Semester Genap (Bab 5 - Bab 9)
+                                    </option>
+                                    {chaptersList.map((c, idx) =>
+                                      c.name && !INFORMATIKA_X_CHAPTERS.includes(c.name) ? (
+                                        <option key={`kisi-dl-${c.id || idx}`} value={c.name}>
+                                          {c.name}
+                                        </option>
+                                      ) : null
+                                    )}
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className="space-y-2.5">
+                                <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                  3. Judul Kisi-Kisi Soal <span className="text-rose-500">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={kisiTitle}
+                                  onChange={(e) => setKisiTitle(e.target.value)}
+                                  placeholder="Contoh: Kisi-Kisi PTS Informatika"
+                                  className="block w-full rounded-2xl bg-slate-50 border border-slate-200 px-5 py-3.5 text-sm font-bold text-slate-900 focus:bg-white focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/10 transition-all outline-none"
+                                />
+                              </div>
+
+                              {/* Blok Materi yang Akan Di-Up */}
+                              <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-4">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                  <div>
+                                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">
+                                      Materi yang Akan Di-Up / Diujikan
+                                    </h4>
+                                    <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                                      Pilih materi ajar yang sudah di-up atau unggah ringkasan/PDF materi agar Ruang Lingkup Materi &amp; Tujuan IPK tersusun otomatis dan lengkap.
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    disabled={isGeneratingKisiFromMateri}
+                                    onClick={handleGenerateKisiFromMateri}
+                                    className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-[#85cc00] text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap shrink-0"
+                                  >
+                                    <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                      {isGeneratingKisiFromMateri
+                                        ? "Menyusun..."
+                                        : "Susun Ruang Lingkup & IPK (AI)"}
+                                    </span>
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {materialsList.length > 0 && (
+                                    <div className="space-y-1.5">
+                                      <label className="block text-[11px] font-bold text-slate-600">
+                                        Ambil dari Materi Ajar yang Sudah Di-Up (Opsional)
+                                      </label>
+                                      <select
+                                        value=""
+                                        onChange={(e) => {
+                                          const picked = materialsList.find((m) => m.id === e.target.value);
+                                          if (!picked) return;
+                                          setKisiMateriTitle(picked.title || "");
+                                          if (picked.bab && !kisiBab) setKisiBab(picked.bab);
+                                          if (picked.description) setKisiMateriText(picked.description);
+                                          if (picked.driveUrl && !kisiDriveUrl.trim()) setKisiDriveUrl(picked.driveUrl);
+                                          if (!kisiTitle.trim()) {
+                                            setKisiTitle(`Kisi-Kisi ${kisiCategory} ${userSettings?.subjectName || "Informatika"}`);
+                                          }
+                                        }}
+                                        className="block w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-900 focus:border-[#85cc00] outline-none cursor-pointer"
+                                      >
+                                        <option value="">-- Pilih Materi Terdaftar ({materialsList.length}) --</option>
+                                        {materialsList.map((m, i) => (
+                                          <option key={`kisi-pick-mat-${m.id || i}`} value={m.id}>
+                                            {m.title} {m.kelasRef ? `(Kelas ${m.kelasRef})` : ""}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  )}
+
+                                  <div className="space-y-1.5">
+                                    <label className="block text-[11px] font-bold text-slate-600">
+                                      Judul Materi yang Akan Di-Up / Diujikan
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={kisiMateriTitle}
+                                      onChange={(e) => setKisiMateriTitle(e.target.value)}
+                                      placeholder="Contoh: Arsitektur Sistem Komputer & Perangkat Keras CPU"
+                                      className="block w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-900 focus:border-[#85cc00] outline-none"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                  <div className="md:col-span-2 space-y-1.5">
+                                    <label className="block text-[11px] font-bold text-slate-600">
+                                      Rangkuman / Poin Materi yang Akan Di-Up
+                                    </label>
+                                    <textarea
+                                      value={kisiMateriText}
+                                      onChange={(e) => setKisiMateriText(e.target.value)}
+                                      rows={2}
+                                      placeholder="Tempelkan atau tulis poin materi yang akan di-upload/diujikan (sub-bab, konsep inti, praktik)..."
+                                      className="block w-full rounded-xl bg-white border border-slate-200 px-3.5 py-2.5 text-xs font-medium text-slate-900 focus:border-[#85cc00] outline-none resize-none"
+                                    />
+                                  </div>
+
+                                  <div className="space-y-1.5">
+                                    <label className="block text-[11px] font-bold text-slate-600">
+                                      Upload File PDF Materi (Opsional)
+                                    </label>
+                                    <label className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-center cursor-pointer hover:border-teal-500 transition-colors min-h-[66px]">
+                                      <input
+                                        type="file"
+                                        accept=".pdf,application/pdf"
+                                        className="hidden"
+                                        onChange={(e) => {
+                                          const f = e.target.files?.[0] || null;
+                                          if (f && f.size > 5 * 1024 * 1024) {
+                                            showAlert("File Terlalu Besar", "Ukuran PDF maksimal 5MB.", "danger");
+                                            return;
+                                          }
+                                          setKisiMateriFile(f);
+                                          if (f && !kisiMateriTitle.trim()) {
+                                            setKisiMateriTitle(f.name.replace(/\.pdf$/i, ""));
+                                          }
+                                        }}
+                                      />
+                                      <span className="text-[11px] font-bold text-slate-700 truncate max-w-full">
+                                        {kisiMateriFile ? kisiMateriFile.name : "Pilih PDF Materi (maks 5MB)"}
+                                      </span>
+                                      {kisiMateriFile && (
+                                        <span className="text-[10px] text-teal-600 font-semibold mt-0.5">
+                                          Siap dianalisis AI
+                                        </span>
+                                      )}
+                                    </label>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="space-y-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                    4. Tujuan Indikator Pencapaian Kompetensi (Sesuai materi &amp; mudah dipahami siswa)
+                                  </label>
+                                </div>
+                                <textarea
+                                  value={kisiNotes}
+                                  onChange={(e) => {
+                                    const nextNotes = e.target.value;
+                                    setKisiNotes(nextNotes);
+                                    if (!kisiLingkupMateri.trim()) {
+                                      setKisiLingkupMateri(deriveKisiLingkupFromNotes(nextNotes, kisiMateriTitle || kisiBab));
+                                    }
+                                  }}
+                                  placeholder="Klik 'Susun Ruang Lingkup & IPK (AI)' dari materi di atas, atau tulis lengkap Tujuan Indikator Pencapaian Kompetensi..."
+                                  rows={3}
+                                  className="block w-full rounded-2xl bg-slate-50 border border-slate-200 px-5 py-3.5 text-sm font-semibold text-slate-900 focus:bg-white focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/10 transition-all outline-none resize-none"
+                                />
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="space-y-2.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                      5. Ruang Lingkup Materi (Cakupan lengkap materi uji)
+                                    </label>
+                                    <button
+                                      type="button"
+                                      onClick={() => setKisiLingkupMateri(deriveKisiLingkupFromNotes(kisiNotes, kisiMateriTitle || kisiBab))}
+                                      className="text-[11px] font-bold text-teal-700 hover:text-teal-900 cursor-pointer whitespace-nowrap shrink-0"
+                                    >
+                                      Selaraskan Otomatis
+                                    </button>
+                                  </div>
+                                  <textarea
+                                    rows={2}
+                                    value={kisiLingkupMateri}
+                                    onChange={(e) => setKisiLingkupMateri(e.target.value)}
+                                    placeholder="Ruang lingkup sub-bab dan konsep inti dari materi yang akan di-up..."
+                                    className="block w-full rounded-2xl bg-slate-50 border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-900 focus:bg-white focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/10 transition-all outline-none resize-none"
+                                  />
+                                </div>
+
+                                <div className="space-y-2.5">
+                                  <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                    6. Link Kisi-Kisi (Google Drive PDF / Dokumen) <span className="text-rose-500">*</span>
+                                  </label>
+                                  <input
+                                    type="url"
+                                    value={kisiDriveUrl}
+                                    onChange={(e) => setKisiDriveUrl(e.target.value)}
+                                    placeholder="https://drive.google.com/file/d/..."
+                                    className="block w-full rounded-2xl bg-slate-50 border border-slate-200 px-5 py-3.5 text-sm font-bold text-slate-900 focus:bg-white focus:border-[#85cc00] focus:ring-4 focus:ring-[#85cc00]/10 transition-all outline-none"
+                                  />
+                                </div>
+                              </div>
+
+                              {/* 7. Multi-Select Kelas Tujuan */}
+                              <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                  <label className="block text-xs font-bold text-slate-600 ml-0.5">
+                                    7. Kelas Tujuan Kisi-Kisi (Checklist — Bisa Memilih Lebih Dari Satu Kelas)
+                                  </label>
+                                  <span className="text-xs font-bold text-teal-700 tabular-nums">
+                                    {selectedKisiClasses.includes("SEMUA_KELAS")
+                                      ? "Semua Kelas Dipilih"
+                                      : `${selectedKisiClasses.filter((c) => c !== "SEMUA_KELAS").length} Kelas Dipilih`}
+                                  </span>
+                                </div>
+                                <div className="p-4 sm:p-5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                                  <div className="flex items-center gap-3">
+                                    <input
+                                      id="kisi-form-chk-all"
+                                      type="checkbox"
+                                      checked={
+                                        selectedKisiClasses.includes("SEMUA_KELAS") ||
+                                        (classesList.length > 0 &&
+                                          selectedKisiClasses.filter((c) => c !== "SEMUA_KELAS").length === classesList.length)
+                                      }
+                                      onChange={(e) => {
+                                        if (e.target.checked) {
+                                          setSelectedKisiClasses(["SEMUA_KELAS", ...classesList.map((c) => c.name)]);
+                                          setKisiKelasRef("SEMUA_KELAS");
+                                        } else {
+                                          setSelectedKisiClasses([]);
+                                          setKisiKelasRef("");
+                                        }
+                                      }}
+                                      className="w-4 h-4 rounded border-slate-300 text-[#85cc00] focus:ring-[#85cc00] cursor-pointer"
+                                    />
+                                    <label htmlFor="kisi-form-chk-all" className="text-sm font-bold text-slate-900 cursor-pointer select-none">
+                                      Semua Kelas (Umum)
+                                    </label>
+                                  </div>
+                                  <div className="h-[1px] bg-slate-200" />
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+                                    {classesList.map((cls, idx) => {
+                                      const isChecked =
+                                        selectedKisiClasses.includes("SEMUA_KELAS") ||
+                                        selectedKisiClasses.includes(cls.name);
+                                      return (
+                                        <label
+                                          key={`kisi-form-cls-${cls.id || cls.name || idx}`}
+                                          className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-colors cursor-pointer select-none ${
+                                            isChecked
+                                              ? "bg-white border-teal-500 text-slate-900 shadow-2xs"
+                                              : "bg-white/60 border-slate-200 text-slate-600 hover:bg-white"
+                                          }`}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={isChecked}
+                                            onChange={(e) => {
+                                              let next: string[];
+                                              if (e.target.checked) {
+                                                const withoutAll = selectedKisiClasses.filter((c) => c !== "SEMUA_KELAS");
+                                                next = Array.from(new Set([...withoutAll, cls.name]));
+                                                if (classesList.length > 0 && next.length === classesList.length) {
+                                                  next = ["SEMUA_KELAS", ...next];
+                                                }
+                                              } else {
+                                                const expanded = selectedKisiClasses.includes("SEMUA_KELAS")
+                                                  ? classesList.map((c) => c.name)
+                                                  : selectedKisiClasses;
+                                                next = expanded.filter((c) => c !== cls.name && c !== "SEMUA_KELAS");
+                                              }
+                                              setSelectedKisiClasses(next);
+                                              setKisiKelasRef(
+                                                next.includes("SEMUA_KELAS") ? "SEMUA_KELAS" : next.join(", ")
+                                              );
+                                            }}
+                                            className="w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                                          />
+                                          <span className="text-xs font-bold truncate">Kelas {cls.name}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="pt-6 border-t border-slate-100 flex justify-end gap-3">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveKisiTab("daftar");
+                                    setEditingKisiId(null);
+                                    setKisiTitle("");
+                                    setKisiCategory("PTS");
+                                    setKisiBab("");
+                                    setKisiMateriTitle("");
+                                    setKisiMateriText("");
+                                    setKisiMateriFile(null);
+                                    setKisiLingkupMateri("");
+                                    setKisiKelasRef("SEMUA_KELAS");
+                                    setSelectedKisiClasses(["SEMUA_KELAS"]);
+                                    setKisiDriveUrl("");
+                                    setKisiNotes("");
+                                    setKisiSaveMessage({ text: "", type: "" });
+                                  }}
+                                  className="px-6 py-3.5 rounded-2xl border border-slate-200 text-slate-600 font-bold text-xs uppercase tracking-wider hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                                >
+                                  Batal
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isSavingKisiKisi}
+                                  onClick={handleSaveKisiKisiItem}
+                                  className="px-7 py-3.5 rounded-2xl bg-[#85cc00] text-slate-900 font-bold text-xs uppercase tracking-wider hover:brightness-110 shadow-sm disabled:opacity-50 transition-all flex items-center gap-2 cursor-pointer whitespace-nowrap shrink-0"
+                                >
+                                  <Save className="w-4 h-4 shrink-0" />
+                                  <span>
+                                    {isSavingKisiKisi
+                                      ? "Menyimpan..."
+                                      : editingKisiId
+                                      ? "Perbarui Kisi-Kisi"
+                                      : "Simpan & Terbitkan"}
+                                  </span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeKisiTab === "daftar" && (() => {
+                      const filteredKisiList = kisiKisiList.filter((item) => {
+                        const resolvedItem = {
+                          kelasRef:
+                            item.kelasRef ||
+                            (Array.isArray(item.targetClasses) && item.targetClasses.length > 0
+                              ? item.targetClasses.join(", ")
+                              : "SEMUA_KELAS"),
+                          targetClasses: item.targetClasses,
+                        };
+                        const matchClass = !kisiFilterKelas || isExamForClass(resolvedItem, kisiFilterKelas);
+                        const matchCat = !kisiFilterCategory || (item.category || "Ujian") === kisiFilterCategory;
+                        return matchClass && matchCat;
+                      });
+                      const examsWithKisi = examsList.filter((ex) => ex.kisiKisiDriveUrl);
+
+                      return (
+                        <div className="space-y-8">
+                          <div className="flex flex-col text-center md:text-left md:items-end md:flex-row justify-between gap-6 pb-8 border-b border-slate-100">
+                            <div className="max-w-2xl">
+                              <h2 className="text-2xl font-bold text-slate-950">Kisi-Kisi Soal</h2>
+                              <p className="text-slate-500 font-medium text-base leading-relaxed mt-1">
+                                Kelola daftar tautan kisi-kisi ujian (PTS, PSAS, Preetes, Postes) serta tambahkan kelas tujuan agar tampil langsung di Menu Kisi-Kisi siswa pada kelas bersangkutan.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingKisiId(null);
+                                setKisiTitle("");
+                                setKisiCategory("PTS");
+                                setKisiBab("");
+                                setKisiMateriTitle("");
+                                setKisiMateriText("");
+                                setKisiMateriFile(null);
+                                setKisiLingkupMateri("");
+                                setKisiKelasRef("SEMUA_KELAS");
+                                setSelectedKisiClasses(["SEMUA_KELAS"]);
+                                setKisiDriveUrl("");
+                                setKisiNotes("");
+                                setKisiSaveMessage({ text: "", type: "" });
+                                setActiveKisiTab("tambah");
+                              }}
+                              className="px-6 py-3.5 rounded-2xl bg-[#85cc00] text-slate-900 font-black text-xs uppercase tracking-wider hover:brightness-110 shadow-sm flex items-center justify-center gap-2 shrink-0 cursor-pointer whitespace-nowrap"
+                            >
+                              <Plus className="w-4 h-4 shrink-0" />
+                              <span>Tambah Kisi-Kisi</span>
+                            </button>
+                          </div>
+
+                          {/* Filter Card */}
+                          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-2xs flex flex-col md:flex-row items-center justify-between gap-5">
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-900 mb-0.5">
+                                Filter Daftar Kisi-Kisi
+                              </h4>
+                              <p className="text-xs text-slate-500 font-medium">
+                                Saring daftar kisi-kisi berdasarkan kelas tujuan atau jenis ujian
+                              </p>
+                            </div>
+                            <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                              <select
+                                value={kisiFilterCategory}
+                                onChange={(e) => setKisiFilterCategory(e.target.value)}
+                                className="w-full sm:w-48 rounded-xl bg-slate-50 border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-900 focus:bg-white focus:border-[#85cc00] outline-none appearance-none cursor-pointer"
+                              >
+                                <option value="">Semua Jenis Ujian</option>
+                                <option value="PTS">PTS</option>
+                                <option value="PSAS">PSAS</option>
+                                <option value="Preetes">Preetes</option>
+                                <option value="Postes">Postes</option>
+                                <option value="Ulangan Harian">Ulangan Harian</option>
+                                <option value="Lainnya">Lainnya</option>
+                              </select>
+                              <select
+                                value={kisiFilterKelas}
+                                onChange={(e) => setKisiFilterKelas(e.target.value)}
+                                className="w-full sm:w-52 rounded-xl bg-slate-50 border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-900 focus:bg-white focus:border-[#85cc00] outline-none appearance-none cursor-pointer"
+                              >
+                                <option value="">Semua Target Kelas</option>
+                                <option value="SEMUA_KELAS">Semua Kelas (Umum)</option>
+                                {classesList.map((c, idx) => (
+                                  <option key={`kisi-flt-cls-${c.id || c.name || idx}`} value={c.name}>
+                                    Kelas {c.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Daftar Kisi-Kisi Table */}
+                          <div className="border border-slate-200 rounded-2xl shadow-2xs overflow-hidden bg-white">
+                            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+                              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                                Daftar Kisi-Kisi Terdaftar
+                              </h3>
+                              <span className="text-xs font-bold text-teal-800 tabular-nums">
+                                Total: {filteredKisiList.length} Kisi-Kisi
+                              </span>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm min-w-[880px]">
+                                <thead className="sticky top-0 bg-slate-50 z-10 border-b border-slate-200">
+                                  <tr className="text-left text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                    <th className="p-4 bg-slate-50 w-14">No</th>
+                                    <th className="p-4 bg-slate-50">Judul &amp; Jenis Ujian</th>
+                                    <th className="p-4 bg-slate-50">Ruang Lingkup Materi &amp; Tujuan Indikator Pencapaian</th>
+                                    <th className="p-4 bg-slate-50 w-48">Kelas Tujuan</th>
+                                    <th className="p-4 text-right bg-slate-50 w-64">Aksi</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {filteredKisiList.length === 0 ? (
+                                    <tr>
+                                      <td colSpan={5} className="py-20 text-center">
+                                        <div className="flex flex-col items-center justify-center text-slate-300">
+                                          <BookMarked className="w-16 h-16 mb-4 stroke-1 text-slate-200" />
+                                          <p className="text-sm font-black uppercase tracking-wider text-slate-400">
+                                            Belum Ada Kisi-Kisi Soal
+                                          </p>
+                                          <p className="text-xs text-slate-400 font-semibold mt-1 max-w-sm">
+                                            Klik tombol &quot;Tambah Kisi-Kisi&quot; untuk menambahkan link Drive kisi-kisi ujian agar dapat dilihat oleh siswa.
+                                          </p>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    filteredKisiList.map((item, index) => {
+                                      const displayLingkup =
+                                        item.lingkupMateri ||
+                                        item.materiTitle ||
+                                        deriveKisiLingkupFromNotes(item.notes, item.bab);
+                                      const targetClsList = parseKisiTargetClasses(item);
+                                      const isAllTarget = targetClsList.includes("SEMUA_KELAS");
+
+                                      return (
+                                        <tr key={`kisi-row-${item.id || index}`} className="hover:bg-slate-50/60 transition-colors">
+                                          <td className="p-4 font-mono tabular-nums text-xs text-slate-400 font-bold align-top">
+                                            {index + 1}
+                                          </td>
+                                          <td className="p-4 align-top">
+                                            <div className="flex flex-col gap-1">
+                                              <p className="font-bold text-slate-900 text-sm leading-snug">
+                                                {stripBabAndLingkupFromKisiTitle(item.title)}
+                                              </p>
+                                              <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 font-medium">
+                                                <span className="font-bold text-teal-700">{item.category || "Ujian"}</span>
+                                                {item.materiTitle && (
+                                                  <>
+                                                    <span aria-hidden="true">·</span>
+                                                    <span className="text-slate-600">{item.materiTitle}</span>
+                                                  </>
+                                                )}
+                                              </div>
+                                            </div>
+                                          </td>
+                                          <td className="p-4 align-top">
+                                            <div className="flex flex-col gap-1 max-w-md">
+                                              <p className="text-xs font-bold text-slate-800 leading-snug">
+                                                {displayLingkup}
+                                              </p>
+                                              {item.notes ? (
+                                                <p className="text-xs text-slate-500 leading-relaxed">
+                                                  {item.notes}
+                                                </p>
+                                              ) : (
+                                                <p className="text-[11px] text-slate-400 italic">
+                                                  Tujuan indikator pencapaian belum dilengkapi
+                                                </p>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="p-4 align-top">
+                                            <div className="space-y-1">
+                                              <p className="text-xs font-bold text-slate-800 leading-snug">
+                                                {isAllTarget
+                                                  ? "Semua Kelas"
+                                                  : targetClsList.map((c) => `Kelas ${c}`).join(", ")}
+                                              </p>
+                                              <p className="text-[11px] text-slate-400 font-medium">
+                                                {isAllTarget
+                                                  ? "Tampil di seluruh rombel"
+                                                  : `${targetClsList.length} kelas tujuan aktif`}
+                                              </p>
+                                            </div>
+                                          </td>
+                                          <td className="p-4 text-right align-top">
+                                            <div className="flex items-center justify-end gap-1.5">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleOpenKisiClassModal(item)}
+                                                className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                                                title="Tambah atau atur kelas tujuan kisi-kisi ini"
+                                              >
+                                                <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                                                <span>Tambah Kelas</span>
+                                              </button>
+                                              <a
+                                                href={item.driveUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="p-2 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-teal-600 hover:border-teal-200 transition-colors shadow-2xs"
+                                                title="Buka Kisi-Kisi di Drive"
+                                              >
+                                                <ExternalLink className="w-4 h-4" />
+                                              </a>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleEditKisiKisiItem(item)}
+                                                className="p-2 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-[#85cc00] hover:border-[#85cc00]/40 transition-colors shadow-2xs cursor-pointer"
+                                                title="Edit Kisi-Kisi"
+                                              >
+                                                <Edit className="w-4 h-4" />
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteKisiKisiItem(item.id)}
+                                                className="p-2 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-rose-500 hover:border-rose-200 transition-colors shadow-2xs cursor-pointer"
+                                                title="Hapus Kisi-Kisi"
+                                              >
+                                                <Trash2 className="w-4 h-4" />
+                                              </button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+
+                          {/* Cetak PDF Kisi-Kisi Otomatis (Kop Surat) dari Ujian CBT */}
+                          <div className="rounded-3xl border border-slate-200 bg-white p-6 sm:p-8 shadow-2xs space-y-5">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-900">
+                                  Cetak PDF Kisi-Kisi Otomatis (Kop Surat Resmi)
+                                </h4>
+                                <p className="text-xs text-slate-500 font-medium mt-1">
+                                  Unduh kisi-kisi PDF dengan Indikator Pencapaian Kompetensi yang dekat dengan isi soal serta Lingkup Materi pokok bahasan yang selaras
+                                  {examsWithKisi.length > 0 ? ` (${examsWithKisi.length} ujian juga memiliki tautan Drive)` : ""}.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActiveExamTab("daftar");
+                                  handleMenuChange("ujian-siswa", 9);
+                                }}
+                                className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors shrink-0 cursor-pointer whitespace-nowrap"
+                              >
+                                Kelola Ujian CBT →
+                              </button>
+                            </div>
+
+                            {examsList.length === 0 ? (
+                              <p className="text-xs text-slate-400 font-medium py-4 text-center">
+                                Belum ada paket Ujian CBT. Buat ujian di menu Ujian Siswa untuk mengunduh PDF Kisi-Kisi secara otomatis.
+                              </p>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {examsList.map((ex) => (
+                                  <div
+                                    key={`kisi-menu-exam-${ex.id}`}
+                                    className="p-4 rounded-2xl border border-slate-200 bg-slate-50/60 flex items-center justify-between gap-3"
+                                  >
+                                    <div className="min-w-0">
+                                      <p className="font-bold text-xs text-slate-900 truncate">{ex.title}</p>
+                                      <p className="text-[11px] text-slate-500 font-medium truncate mt-0.5 tabular-nums">
+                                        {ex.tema || "Ujian"} · {ex.questions?.length || 0} Soal ·{" "}
+                                        {ex.kelasRef === "SEMUA_KELAS" || !ex.kelasRef ? "Semua Kelas" : `Kelas ${ex.kelasRef}`}
+                                      </p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDownloadExamKisiKisiPdf(ex)}
+                                      disabled={isDownloadingKisiPdfId === ex.id}
+                                      className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                                    >
+                                      <Download className="w-3.5 h-3.5 shrink-0" />
+                                      <span>{isDownloadingKisiPdfId === ex.id ? "Membuat..." : "PDF Kop"}</span>
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
                 {activeMenu === "ujian-siswa" && (
                     <div className="space-y-12 animate-in fade-in duration-300">
-                      <div className="flex gap-4 border-b border-slate-200">
+                      <div className="flex flex-wrap gap-4 border-b border-slate-200">
                         <button
                           onClick={(e) => { e.stopPropagation(); 
                             setActiveExamTab("daftar");
                             setExamSaveMessage({ text: "", type: "" });
                           }}
-                          className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors ${
-                            activeExamTab === "daftar" ? "text-[#85cc00] border-b-2 border-[#85cc00]" : "text-slate-400"
+                          className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors cursor-pointer ${
+                            activeExamTab === "daftar" ? "text-[#85cc00] border-b-2 border-[#85cc00]" : "text-slate-400 hover:text-slate-700"
                           }`}
                         >
                           Daftar Ujian Aktif
@@ -11148,11 +12380,23 @@ export default function DashboardTeacher() {
                             setActiveExamTab("tambah");
                             setExamSaveMessage({ text: "", type: "" });
                           }}
-                          className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors ${
-                            activeExamTab === "tambah" ? "text-[#85cc00] border-b-2 border-[#85cc00]" : "text-slate-400"
+                          className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors cursor-pointer ${
+                            activeExamTab === "tambah" ? "text-[#85cc00] border-b-2 border-[#85cc00]" : "text-slate-400 hover:text-slate-700"
                           }`}
                         >
                           + Rilis Ujian Baru (AI)
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); 
+                            setActiveExamTab("kisi-kisi");
+                            setExamSaveMessage({ text: "", type: "" });
+                          }}
+                          className={`pb-4 px-2 font-bold uppercase tracking-widest text-xs transition-colors cursor-pointer flex items-center gap-1.5 ${
+                            activeExamTab === "kisi-kisi" ? "text-teal-600 border-b-2 border-teal-600" : "text-slate-400 hover:text-slate-700"
+                          }`}
+                        >
+                          <BookMarked className="w-3.5 h-3.5" />
+                          <span>Kisi-Kisi & Link Drive</span>
                         </button>
                       </div>
 
@@ -11187,7 +12431,7 @@ export default function DashboardTeacher() {
                             <div className="max-w-2xl">
                               <h2 className="text-2xl font-bold text-slate-950">Ujian CBT AI</h2>
                               <p className="text-slate-500 font-medium text-lg leading-relaxed">
-                                Buat soal pilihan ganda berkualitas tinggi secara instan dibantu AI Gemini, kelola token masuk siswa, serta rilis ujian ke kelas pilihan Anda.
+                                Buat soal pilihan ganda berkualitas tinggi secara instan dibantu AI Gemini, kelola token masuk siswa, unduh PDF Kisi-Kisi dengan Kop Surat resmi, serta rilis ujian ke kelas pilihan Anda.
                               </p>
                             </div>
                             {deletedBackups.some((b) => b.type === "exam") && (
@@ -11201,6 +12445,71 @@ export default function DashboardTeacher() {
                               </button>
                             )}
                           </div>
+
+                          {lastCreatedExamForKisi && (
+                            <div className="p-6 rounded-3xl bg-gradient-to-br from-teal-50 via-emerald-50/70 to-white border-2 border-teal-300 shadow-sm space-y-4">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="flex items-start gap-3.5">
+                                  <div className="w-11 h-11 rounded-2xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                                    <BookMarked className="w-5 h-5" />
+                                  </div>
+                                  <div>
+                                    <div className="text-[10px] font-black uppercase tracking-widest text-teal-700">
+                                      Kisi-Kisi PDF Dengan Kop Surat Siap
+                                    </div>
+                                    <h3 className="text-base font-black text-slate-900 leading-snug mt-0.5">
+                                      {lastCreatedExamForKisi.title}
+                                    </h3>
+                                    <p className="text-xs text-slate-600 font-medium mt-0.5">
+                                      Token: <span className="font-mono font-black text-slate-900">{lastCreatedExamForKisi.token}</span> • {lastCreatedExamForKisi.questions?.length || 0} Soal • Kelas {lastCreatedExamForKisi.kelasRef}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDownloadExamKisiKisiPdf(lastCreatedExamForKisi)}
+                                    disabled={isDownloadingKisiPdfId === lastCreatedExamForKisi.id}
+                                    className="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black flex items-center gap-2 shadow-sm cursor-pointer disabled:opacity-50"
+                                  >
+                                    <Download className="w-4 h-4" />
+                                    <span>
+                                      {isDownloadingKisiPdfId === lastCreatedExamForKisi.id
+                                        ? "Membuat PDF..."
+                                        : "Unduh PDF Kisi-Kisi (Kop Surat)"}
+                                    </span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setLastCreatedExamForKisi(null)}
+                                    className="p-2 text-slate-400 hover:text-slate-700 hover:bg-white rounded-xl cursor-pointer"
+                                    title="Tutup info kisi-kisi"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="pt-3 border-t border-teal-200/80 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                                <input
+                                  type="url"
+                                  value={inlineExamDriveDraft}
+                                  onChange={(e) => setInlineExamDriveDraft(e.target.value)}
+                                  placeholder="Setelah diunggah ke Google Drive, tempel link Drive PDF Kisi-Kisi di sini agar muncul di Menu Kisi-Kisi siswa..."
+                                  className="flex-1 px-4 py-2.5 bg-white border border-teal-200 rounded-xl text-xs font-mono text-slate-800 placeholder:text-slate-400 focus:border-teal-600 outline-none"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleSaveExamKisiDriveUrl(lastCreatedExamForKisi, inlineExamDriveDraft)}
+                                  disabled={isSavingInlineDrive || !inlineExamDriveDraft.trim()}
+                                  className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 shrink-0"
+                                >
+                                  <Save className="w-3.5 h-3.5 text-[#85cc00]" />
+                                  <span>{isSavingInlineDrive ? "Menyimpan..." : "Pasang Link Drive Siswa"}</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
 
                           <div className="space-y-6">
                             {/* Toolbar Checkbox Filter Kelas Ujian */}
@@ -11337,6 +12646,17 @@ export default function DashboardTeacher() {
                                                 Soal Luar (PDF / Notebook LM)
                                               </a>
                                             )}
+                                            {exam.kisiKisiDriveUrl && (
+                                              <a
+                                                href={exam.kisiKisiDriveUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100"
+                                              >
+                                                <BookMarked className="w-2.5 h-2.5" />
+                                                Drive Kisi-Kisi
+                                              </a>
+                                            )}
                                           </div>
                                         </td>
                                         <td className="p-4 text-center font-bold text-slate-900 text-sm">
@@ -11386,6 +12706,19 @@ export default function DashboardTeacher() {
                                           >
                                             <BarChart3 className="w-3.5 h-3.5" />
                                             <span className="hidden xl:inline">Analisis</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleDownloadExamKisiKisiPdf(exam);
+                                            }}
+                                            disabled={isDownloadingKisiPdfId === exam.id}
+                                            className="px-2.5 py-2 bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider disabled:opacity-50"
+                                            title="Unduh File PDF Kisi-Kisi Soal (Dengan Kop Surat Resmi)"
+                                          >
+                                            <BookMarked className="w-3.5 h-3.5" />
+                                            <span className="hidden xl:inline">Kisi-Kisi PDF</span>
                                           </button>
                                           <button
                                             onClick={(e) => {
@@ -11495,8 +12828,7 @@ export default function DashboardTeacher() {
                                     const selectedBab = e.target.value;
                                     setExamBab(selectedBab);
                                     if (selectedBab) {
-                                      const shortBabName = selectedBab.split(':')[0];
-                                      setExamTitle(`${examTema || 'Evaluasi'} Informatika - ${shortBabName}`);
+                                      setExamTitle(`${examTema || 'Evaluasi'} Informatika - ${selectedBab}`);
                                     }
                                   }}
                                   className="block w-full rounded-2xl border-2 border-slate-200 bg-slate-50 px-5 py-4 text-sm text-black font-semibold outline-none focus:bg-white focus:border-black transition-all cursor-pointer"
@@ -11520,8 +12852,8 @@ export default function DashboardTeacher() {
                                   onChange={(e) => {
                                     const val = e.target.value;
                                     setExamTema(val);
-                                    const shortBabName = examBab ? examBab.split(':')[0] : "Fase E";
-                                    setExamTitle(`${val} Informatika - ${shortBabName}`);
+                                    const babLabel = examBab || "Fase E";
+                                    setExamTitle(`${val} Informatika - ${babLabel}`);
                                   }}
                                   className="block w-full rounded-2xl border-2 border-slate-200 bg-slate-50 px-5 py-4 text-sm text-black font-semibold outline-none focus:bg-white focus:border-black transition-all cursor-pointer font-display font-bold text-slate-900"
                                 >
@@ -11547,17 +12879,61 @@ export default function DashboardTeacher() {
                               </div>
 
                               {/* 3. Materi Ujian */}
-                              <div className="space-y-2">
+                              <div className="space-y-2.5">
                                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400">
-                                  3. Materi Ujian (Sub Bab)
+                                  3. Materi yang Akan Diujikan / Di-Up
                                 </label>
+                                {materialsList.length > 0 && (
+                                  <select
+                                    value=""
+                                    onChange={(e) => {
+                                      const picked = materialsList.find((m) => m.id === e.target.value);
+                                      if (!picked) return;
+                                      setExamMateri(picked.title || "");
+                                      if (picked.bab) {
+                                        setExamBab(picked.bab);
+                                        if (!examTitle.trim() || examTitle.startsWith(examTema || "Preetes")) {
+                                          setExamTitle(`${examTema || "Evaluasi"} ${examSubject} - ${picked.bab}`);
+                                        }
+                                      }
+                                      if (picked.description && !examDescription.trim()) {
+                                        setExamDescription(picked.description);
+                                      }
+                                    }}
+                                    className="block w-full rounded-xl border-2 border-teal-200 bg-teal-50/40 px-4 py-2.5 text-xs text-teal-900 font-bold outline-none focus:bg-white focus:border-teal-600 transition-all cursor-pointer"
+                                  >
+                                    <option value="">-- Ambil dari Materi Ajar yang Sudah Di-Up ({materialsList.length}) --</option>
+                                    {materialsList.map((mat, i) => (
+                                      <option key={`exam-pick-mat-${mat.id || i}`} value={mat.id}>
+                                        {mat.title} {mat.bab ? `(${mat.bab})` : ""}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
                                 <input
                                   type="text"
                                   value={examMateri}
                                   onChange={(e) => setExamMateri(e.target.value)}
-                                  placeholder="Contoh: Bubble Sort, Hardware CPU, Canva"
+                                  placeholder="Tulis materi yang diujikan, contoh: Hardware CPU, Bubble Sort, Pengolahan Data Spreadsheet"
                                   className="block w-full rounded-2xl border-2 border-slate-200 bg-slate-50 px-5 py-4 text-sm text-black font-semibold outline-none focus:bg-white focus:border-black transition-all"
                                 />
+                              </div>
+
+                              {/* 3b. Link Google Drive Kisi-Kisi Ujian (Opsional) */}
+                              <div className="space-y-2">
+                                <label className="block text-[10px] font-black uppercase tracking-widest text-teal-700">
+                                  Link Google Drive Kisi-Kisi Ujian (Opsional)
+                                </label>
+                                <input
+                                  type="url"
+                                  value={examKisiKisiDriveUrl}
+                                  onChange={(e) => setExamKisiKisiDriveUrl(e.target.value)}
+                                  placeholder="https://drive.google.com/file/d/..."
+                                  className="block w-full rounded-2xl border-2 border-teal-200 bg-teal-50/40 px-5 py-3.5 text-xs text-black font-mono font-semibold outline-none focus:bg-white focus:border-teal-600 transition-all"
+                                />
+                                <p className="text-[10px] text-slate-500 font-medium leading-relaxed">
+                                  Saat ujian diterbitkan, sistem otomatis mengunduh file <strong>PDF Kisi-Kisi dengan Kop Surat</strong>. Anda juga bisa memasang link Drive-nya sekarang atau setelah file PDF diunggah ke Google Drive.
+                                </p>
                               </div>
 
                               {/* 4. Target Kelas (Checkbox Multi-Select) */}
@@ -12114,6 +13490,41 @@ export default function DashboardTeacher() {
                                         className="w-full text-sm font-bold text-black border-2 border-slate-100 hover:border-slate-200 focus:border-slate-400 p-3 rounded-xl bg-slate-50/50 outline-none leading-relaxed transition-all"
                                       />
 
+                                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                        <div className="md:col-span-2 space-y-1">
+                                          <label className="block text-[10px] font-black uppercase tracking-wider text-teal-700 ml-0.5">
+                                            Indikator Pencapaian Kompetensi (Sesuai Soal &amp; Mudah Dipahami)
+                                          </label>
+                                          <input
+                                            type="text"
+                                            value={q.indikator || ""}
+                                            onChange={(e) => {
+                                              const updated = [...examQuestions];
+                                              updated[idx] = { ...updated[idx], indikator: e.target.value };
+                                              setExamQuestions(updated);
+                                            }}
+                                            placeholder="Contoh: Peserta didik mampu mengidentifikasi komponen CPU yang menjalankan operasi aritmetika dan logika."
+                                            className="w-full rounded-xl border border-teal-200/80 bg-teal-50/30 focus:bg-white focus:border-teal-500 px-3.5 py-2 text-xs font-semibold text-slate-800 outline-none transition-all"
+                                          />
+                                        </div>
+                                        <div className="space-y-1">
+                                          <label className="block text-[10px] font-black uppercase tracking-wider text-slate-500 ml-0.5">
+                                            Lingkup Materi (Pokok Bahasan)
+                                          </label>
+                                          <input
+                                            type="text"
+                                            value={q.lingkupMateri || ""}
+                                            onChange={(e) => {
+                                              const updated = [...examQuestions];
+                                              updated[idx] = { ...updated[idx], lingkupMateri: e.target.value };
+                                              setExamQuestions(updated);
+                                            }}
+                                            placeholder="Contoh: Komponen Pemroses CPU"
+                                            className="w-full rounded-xl border border-slate-200 bg-slate-50/60 focus:bg-white focus:border-teal-500 px-3.5 py-2 text-xs font-semibold text-slate-800 outline-none transition-all"
+                                          />
+                                        </div>
+                                      </div>
+
                                       {/* Optional Image Attachment Preview & Link Input */}
                                       <div className="space-y-2">
                                         {q.imageUrl && (
@@ -12261,6 +13672,268 @@ export default function DashboardTeacher() {
                         </div>
                       </div>
                     )}
+
+                      {activeExamTab === "kisi-kisi" && (
+                        <div className="space-y-8">
+                          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6 border-b border-slate-100">
+                            <div className="max-w-2xl">
+                              <h2 className="text-2xl font-bold text-slate-950 flex items-center gap-2.5">
+                                <BookMarked className="w-6 h-6 text-teal-600" />
+                                <span>Kisi-Kisi Ujian & Link Google Drive</span>
+                              </h2>
+                              <p className="text-slate-500 font-medium text-sm sm:text-base leading-relaxed mt-1">
+                                Kelola tautan Google Drive kisi-kisi untuk setiap kategori ujian (<strong>PTS</strong>, <strong>PSAS</strong>, <strong>Preetes</strong>, <strong>Postes</strong>, <strong>Ulangan Harian</strong>) agar tampil di Menu Kisi-Kisi siswa, serta unduh file PDF Kisi-Kisi ber-Kop Surat dari ujian CBT yang sudah dibuat.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                            {/* Form Input Kisi-Kisi Drive Link */}
+                            <div className="lg:col-span-5">
+                              <div className="p-6 rounded-3xl border-2 border-slate-200 bg-white shadow-sm space-y-4">
+                                <h3 className="font-display font-black text-base text-slate-900 flex items-center gap-2 pb-3 border-b border-slate-100">
+                                  <Plus className="w-4 h-4 text-teal-600" />
+                                  <span>{editingKisiId ? "Edit Link Kisi-Kisi Ujian" : "Tambah Link Drive Kisi-Kisi"}</span>
+                                </h3>
+
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    Kategori Ujian
+                                  </label>
+                                  <select
+                                    value={kisiCategory}
+                                    onChange={(e) => setKisiCategory(e.target.value)}
+                                    className="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-900 outline-none focus:bg-white focus:border-teal-600 cursor-pointer"
+                                  >
+                                    <option value="PTS">PTS (Penilaian Tengah Semester)</option>
+                                    <option value="PSAS">PSAS (Penilaian Sumatif Akhir Semester)</option>
+                                    <option value="Preetes">Preetes</option>
+                                    <option value="Postes">Postes</option>
+                                    <option value="Ulangan Harian">Ulangan Harian</option>
+                                    <option value="Lainnya">Lainnya</option>
+                                  </select>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    Judul Kisi-Kisi Ujian <span className="text-rose-500">*</span>
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={kisiTitle}
+                                    onChange={(e) => setKisiTitle(e.target.value)}
+                                    placeholder="Contoh: Kisi-Kisi PSAS Informatika Kelas X Semester Ganjil"
+                                    className="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:bg-white focus:border-teal-600"
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div className="space-y-1.5">
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                      Bab / Cakupan Materi
+                                    </label>
+                                    <input
+                                      type="text"
+                                      value={kisiBab}
+                                      onChange={(e) => setKisiBab(e.target.value)}
+                                      placeholder="Misal: Bab 1 - Bab 4"
+                                      className="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-semibold text-slate-900 outline-none focus:bg-white focus:border-teal-600"
+                                    />
+                                  </div>
+                                  <div className="space-y-1.5">
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                      Target Kelas
+                                    </label>
+                                    <select
+                                      value={kisiKelasRef}
+                                      onChange={(e) => setKisiKelasRef(e.target.value)}
+                                      className="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-900 outline-none focus:bg-white focus:border-teal-600 cursor-pointer"
+                                    >
+                                      <option value="SEMUA_KELAS">Semua Kelas</option>
+                                      {classesList.map((cls, idx) => (
+                                        <option key={`kisi-cls-${cls.id || idx}`} value={cls.name}>
+                                          Kelas {cls.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-teal-700">
+                                    Link Google Drive Kisi-Kisi <span className="text-rose-500">*</span>
+                                  </label>
+                                  <input
+                                    type="url"
+                                    value={kisiDriveUrl}
+                                    onChange={(e) => setKisiDriveUrl(e.target.value)}
+                                    placeholder="https://drive.google.com/file/d/..."
+                                    className="block w-full rounded-xl border-2 border-teal-200 bg-teal-50/30 px-4 py-2.5 text-xs font-mono font-semibold text-slate-900 outline-none focus:bg-white focus:border-teal-600"
+                                  />
+                                </div>
+
+                                <div className="space-y-1.5">
+                                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500">
+                                    Catatan Untuk Siswa (Opsional)
+                                  </label>
+                                  <textarea
+                                    rows={2}
+                                    value={kisiNotes}
+                                    onChange={(e) => setKisiNotes(e.target.value)}
+                                    placeholder="Contoh: Pelajari indikator algoritma, flowchart, dan konversi biner."
+                                    className="block w-full rounded-xl border-2 border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-800 outline-none focus:bg-white focus:border-teal-600 resize-none"
+                                  />
+                                </div>
+
+                                <div className="flex items-center gap-2 pt-2">
+                                  <button
+                                    type="button"
+                                    onClick={handleSaveKisiKisiItem}
+                                    disabled={isSavingKisiKisi}
+                                    className="flex-1 py-3 px-4 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 shadow-sm"
+                                  >
+                                    <Save className="w-4 h-4" />
+                                    <span>{isSavingKisiKisi ? "Menyimpan..." : editingKisiId ? "Perbarui Kisi-Kisi" : "Simpan Link Kisi-Kisi"}</span>
+                                  </button>
+                                  {editingKisiId && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingKisiId(null);
+                                        setKisiTitle("");
+                                        setKisiCategory("PTS");
+                                        setKisiBab("");
+                                        setKisiKelasRef("SEMUA_KELAS");
+                                        setKisiDriveUrl("");
+                                        setKisiNotes("");
+                                      }}
+                                      className="py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer"
+                                    >
+                                      Batal
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Daftar Link Kisi-Kisi & Shortcut PDF Ujian CBT */}
+                            <div className="lg:col-span-7 space-y-6">
+                              <div className="space-y-3">
+                                <h3 className="font-display font-black text-sm uppercase tracking-wider text-slate-700">
+                                  Daftar Link Drive Kisi-Kisi ({kisiKisiList.length})
+                                </h3>
+                                {kisiKisiList.length === 0 ? (
+                                  <div className="p-8 text-center rounded-3xl border-2 border-dashed border-slate-200 bg-slate-50/70">
+                                    <BookMarked className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                                    <p className="text-xs font-bold text-slate-500">
+                                      Belum ada link Drive Kisi-Kisi khusus yang ditambahkan. Gunakan formulir di sebelah kiri untuk menambahkan link Drive PTS, PSAS, Preetes, atau Postes.
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <div className="space-y-3">
+                                    {kisiKisiList.map((item) => (
+                                      <div key={item.id} className="p-4 rounded-2xl border border-slate-200 bg-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                                        <div className="space-y-1 min-w-0">
+                                          <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className="px-2 py-0.5 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-[10px] font-black uppercase tracking-wider">
+                                              {item.category || "Ujian"}
+                                            </span>
+                                            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-bold">
+                                              {item.kelasRef === "SEMUA_KELAS" ? "Semua Kelas" : `Kelas ${item.kelasRef}`}
+                                            </span>
+                                            {item.bab && (
+                                              <span className="text-[11px] font-semibold text-slate-500">{item.bab}</span>
+                                            )}
+                                          </div>
+                                          <h4 className="font-bold text-sm text-slate-900 truncate">{item.title}</h4>
+                                          {item.notes && (
+                                            <p className="text-xs text-slate-500 leading-relaxed">{item.notes}</p>
+                                          )}
+                                        </div>
+                                          <div className="flex items-center gap-1.5 shrink-0">
+                                            <button
+                                              type="button"
+                                              onClick={() => handleOpenKisiClassModal(item)}
+                                              className="px-2.5 py-2 bg-slate-900 hover:bg-slate-800 text-[#85cc00] rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                                              title="Tambah kelas tujuan kisi-kisi ini"
+                                            >
+                                              <UserPlus className="w-3.5 h-3.5" />
+                                              <span>+ Kelas</span>
+                                            </button>
+                                            <a
+                                              href={item.driveUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-[11px] font-bold flex items-center gap-1.5"
+                                            >
+                                              <ExternalLink className="w-3.5 h-3.5" />
+                                              <span>Buka Drive</span>
+                                            </a>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleEditKisiKisiItem(item)}
+                                              className="p-2 text-amber-600 hover:bg-amber-50 rounded-xl cursor-pointer"
+                                              title="Edit Kisi-Kisi"
+                                            >
+                                              <Pencil className="w-4 h-4" />
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => handleDeleteKisiKisiItem(item.id)}
+                                              className="p-2 text-rose-500 hover:bg-rose-50 rounded-xl cursor-pointer"
+                                              title="Hapus Kisi-Kisi"
+                                            >
+                                              <Trash2 className="w-4 h-4" />
+                                            </button>
+                                          </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Generator PDF Kisi-Kisi dari Ujian CBT */}
+                              <div className="space-y-3 pt-4 border-t border-slate-100">
+                                <h3 className="font-display font-black text-sm uppercase tracking-wider text-slate-700">
+                                  Cetak PDF Kisi-Kisi Dari Ujian CBT ({examsList.length})
+                                </h3>
+                                {examsList.length > 0 && (
+                                  <div className="space-y-2.5">
+                                    {examsList.map((exam, idx) => (
+                                      <div key={`cbt-kisi-${exam.id || idx}`} className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                        <div className="min-w-0">
+                                          <div className="font-bold text-xs text-slate-900 truncate">{exam.title}</div>
+                                          <div className="text-[11px] text-slate-500 font-medium">
+                                            {exam.tema || "Ujian CBT"} • {exam.questions?.length || 0} Soal • Kelas {exam.kelasRef}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDownloadExamKisiKisiPdf(exam)}
+                                            disabled={isDownloadingKisiPdfId === exam.id}
+                                            className="px-3 py-1.5 bg-white hover:bg-teal-50 text-teal-700 border border-teal-200 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                                          >
+                                            <Download className="w-3.5 h-3.5" />
+                                            <span>PDF Kop Surat</span>
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenEditExamModal(exam)}
+                                            className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-[11px] font-bold cursor-pointer"
+                                          >
+                                            {exam.kisiKisiDriveUrl ? "Ubah Link Drive" : "+ Link Drive"}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -13344,6 +15017,179 @@ export default function DashboardTeacher() {
           });
         }}
       />
+
+      {/* Tambah Kelas Tujuan Kisi-Kisi Modal */}
+      <AnimatePresence>
+        {kisiClassModal.isOpen && kisiClassModal.item && (
+          <div className="fixed inset-0 z-[115] flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.16 }}
+              className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm"
+              onClick={() =>
+                !kisiClassModal.isSaving &&
+                setKisiClassModal({ isOpen: false, item: null, selectedClasses: [], isSaving: false })
+              }
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              className="relative z-10 bg-white w-full max-w-xl rounded-3xl overflow-hidden shadow-2xl border border-slate-200 flex flex-col"
+            >
+              <div className="px-6 py-5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-teal-50 text-teal-600 border border-teal-200 rounded-xl">
+                    <UserPlus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-base text-slate-900">
+                      Tambah Kelas Tujuan Kisi-Kisi
+                    </h3>
+                    <p className="text-xs text-slate-500 font-medium">
+                      Pilih kelas mana saja yang akan menerima kisi-kisi ini di dashboard siswa
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={kisiClassModal.isSaving}
+                  onClick={() =>
+                    setKisiClassModal({ isOpen: false, item: null, selectedClasses: [], isSaving: false })
+                  }
+                  className="p-2 text-slate-400 hover:text-slate-900 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-5 overflow-y-auto max-h-[65vh]">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500 font-semibold">
+                    <span className="text-teal-700 font-bold">{kisiClassModal.item.category || "Ujian"}</span>
+                  </div>
+                  <p className="font-bold text-sm text-slate-900">{stripBabAndLingkupFromKisiTitle(kisiClassModal.item.title)}</p>
+                  <p className="text-xs text-slate-500">
+                    Kelas tujuan saat ini:{" "}
+                    <strong className="text-slate-800">
+                      {!kisiClassModal.item.kelasRef || kisiClassModal.item.kelasRef === "SEMUA_KELAS"
+                        ? "Semua Kelas"
+                        : kisiClassModal.item.kelasRef}
+                    </strong>
+                  </p>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700">
+                      Checklist Kelas Tujuan yang Akan Ditambahkan
+                    </span>
+                    <span className="text-xs font-bold text-teal-700 tabular-nums">
+                      {kisiClassModal.selectedClasses.includes("SEMUA_KELAS")
+                        ? "Semua Kelas"
+                        : `${kisiClassModal.selectedClasses.filter((c) => c !== "SEMUA_KELAS").length} Kelas`}
+                    </span>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                    <label className="flex items-center gap-3 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={
+                          kisiClassModal.selectedClasses.includes("SEMUA_KELAS") ||
+                          (classesList.length > 0 &&
+                            kisiClassModal.selectedClasses.filter((c) => c !== "SEMUA_KELAS").length === classesList.length)
+                        }
+                        onChange={(e) => {
+                          setKisiClassModal((prev) => ({
+                            ...prev,
+                            selectedClasses: e.target.checked
+                              ? ["SEMUA_KELAS", ...classesList.map((c) => c.name)]
+                              : [],
+                          }));
+                        }}
+                        className="w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                      />
+                      <span className="text-sm font-bold text-slate-900">Semua Kelas (Seluruh Rombel)</span>
+                    </label>
+
+                    <div className="h-[1px] bg-slate-200" />
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {classesList.map((cls, idx) => {
+                        const isChecked =
+                          kisiClassModal.selectedClasses.includes("SEMUA_KELAS") ||
+                          kisiClassModal.selectedClasses.includes(cls.name);
+                        return (
+                          <label
+                            key={`modal-kisi-cls-${cls.id || cls.name || idx}`}
+                            className={`flex items-center gap-2.5 p-3 rounded-xl border transition-colors cursor-pointer select-none ${
+                              isChecked
+                                ? "bg-white border-teal-500 text-slate-900 shadow-2xs"
+                                : "bg-transparent border-slate-200 text-slate-600 hover:bg-white"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                setKisiClassModal((prev) => {
+                                  const curr = prev.selectedClasses;
+                                  let next: string[];
+                                  if (e.target.checked) {
+                                    const withoutAll = curr.filter((c) => c !== "SEMUA_KELAS");
+                                    next = Array.from(new Set([...withoutAll, cls.name]));
+                                    if (classesList.length > 0 && next.length === classesList.length) {
+                                      next = ["SEMUA_KELAS", ...next];
+                                    }
+                                  } else {
+                                    const expanded = curr.includes("SEMUA_KELAS")
+                                      ? classesList.map((c) => c.name)
+                                      : curr;
+                                    next = expanded.filter((c) => c !== cls.name && c !== "SEMUA_KELAS");
+                                  }
+                                  return { ...prev, selectedClasses: next };
+                                });
+                              }}
+                              className="w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                            />
+                            <span className="text-xs font-bold truncate">Kelas {cls.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  disabled={kisiClassModal.isSaving}
+                  onClick={() =>
+                    setKisiClassModal({ isOpen: false, item: null, selectedClasses: [], isSaving: false })
+                  }
+                  className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-200/60 transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  disabled={kisiClassModal.isSaving || kisiClassModal.selectedClasses.length === 0}
+                  onClick={handleSaveKisiClasses}
+                  className="px-6 py-2.5 rounded-xl bg-[#85cc00] hover:brightness-110 disabled:opacity-50 text-slate-950 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-sm whitespace-nowrap"
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{kisiClassModal.isSaving ? "Menyimpan..." : "Simpan Kelas Tujuan"}</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Download Exam Report Modal */}
       <DownloadExamReportModal

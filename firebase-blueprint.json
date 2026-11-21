@@ -118,6 +118,9 @@
         "token": { "type": "string" },
         "duration": { "type": "number" },
         "kkm": { "type": "number" },
+        "tema": { "type": "string" },
+        "materi": { "type": "string" },
+        "kisiKisiDriveUrl": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "questions": {
           "type": "array",
