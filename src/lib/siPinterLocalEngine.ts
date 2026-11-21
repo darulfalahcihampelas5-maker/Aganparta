@@ -72,6 +72,7 @@ export interface SipinterStudentContext {
       rank: number;
       name: string;
       score: number;
+      isSelf?: boolean;
     }>;
   };
   integritySummary?: {
@@ -82,6 +83,10 @@ export interface SipinterStudentContext {
     title: string;
     category: string;
     bab: string;
+    materiTitle?: string;
+    lingkupMateri?: string;
+    notes?: string;
+    createdAt?: string;
     hasDriveLink: boolean;
   }>;
   isSimulasiEnabled?: boolean;
@@ -388,35 +393,81 @@ function answerLiveSipinterData(
     );
   }
 
-  // 2. Siswa dengan Nilai Rapor Tertinggi di Kelas (Top Student)
+  // 2. Siswa dengan Nilai Rapor Tertinggi di Kelas (Top Student & Motivasi 5 Besar)
   if (
     (normalized.includes("tertinggi") ||
       normalized.includes("paling tinggi") ||
       normalized.includes("juara") ||
       normalized.includes("peringkat 1") ||
       normalized.includes("rank 1") ||
-      normalized.includes("ranking 1")) &&
-    (normalized.includes("rapor") || normalized.includes("nilai") || normalized.includes("kelas") || normalized.includes("siswa"))
+      normalized.includes("ranking 1") ||
+      normalized.includes("5 besar") ||
+      normalized.includes("lima besar") ||
+      normalized.includes("top 5")) &&
+    (normalized.includes("rapor") || normalized.includes("nilai") || normalized.includes("kelas") || normalized.includes("siswa") || normalized.includes("besar"))
   ) {
     const cr = ctx.classRanking;
-    const top = cr?.topStudents || [];
+    const top = (cr?.topStudents || []).slice(0, 5);
     if (top.length === 0) {
       return `Halo **${firstName}**${kelasLabel}, data peringkat kelas saat ini belum tersedia. Pastikan sinkronisasi data sudah selesai ya.`;
     }
 
+    const getTop5Motivation = (rankNum: number): string | null => {
+      switch (rankNum) {
+        case 1:
+          return `**Motivasi Peringkat 1:** Luar biasa, **${firstName}**! Kamu sedang berdiri di puncak klasemen kelas — pertahankan konsistensi belajar, disiplin mengerjakan tugas, dan kerendahan hati agar posisi juara ini terus bertahan hingga akhir semester!`;
+        case 2:
+          return `**Motivasi Peringkat 2:** Hebat sekali, **${firstName}**! Kamu hanya selangkah lagi menuju puncak klasemen — tingkatkan ketelitian pada tugas dan evaluasi berikutnya karena kamu sangat berpeluang merebut Peringkat 1!`;
+        case 3:
+          return `**Motivasi Peringkat 3:** Keren, **${firstName}**! Posisi podium 3 besar sudah berhasil kamu raih — jangan cepat berpuas diri, terus jaga ritme belajarmu dan kejar poin tambahan untuk naik ke posisi 1 atau 2!`;
+        case 4:
+          return `**Motivasi Peringkat 4:** Mantap, **${firstName}**! Kamu berhasil menembus jajaran 5 besar kelas — tinggal sedikit dorongan lagi untuk masuk podium 3 besar. Fokus tuntaskan setiap tugas tepat waktu ya!`;
+        case 5:
+          return `**Motivasi Peringkat 5:** Selamat, **${firstName}**! Masuk 5 besar terbaik di kelas adalah bukti nyata kerja kerasmu — jadikan peringkat ke-5 ini batu loncatan untuk melesat ke posisi yang lebih tinggi lagi!`;
+        default:
+          return null;
+      }
+    };
+
     const leader = top[0];
+    const rawRank = Number(cr?.rank);
+    const selfInTop = top.find((item) => item.isSelf);
+    const myRank =
+      Number.isFinite(rawRank) && rawRank > 0
+        ? rawRank
+        : selfInTop
+        ? selfInTop.rank
+        : null;
+
     const topListLines = top
-      .map((item) => `${item.rank}. **${item.name}** — Skor Rapor Sementara: **${item.score}**`)
+      .map((item) => {
+        const isCurrentStudent = Boolean(item.isSelf || (myRank !== null && item.rank === myRank));
+        const selfBadge = isCurrentStudent ? " *(Kamu)*" : "";
+        return `${item.rank}. **${item.name}**${selfBadge} — Skor Rapor Sementara: **${item.score}**`;
+      })
       .join("\n");
+
+    const isLeaderSelf = Boolean(leader.isSelf || myRank === 1);
+    const openingLine = isLeaderSelf
+      ? `Selamat **${firstName}**${kelasLabel}! Siswa dengan estimasi nilai rapor paling tinggi di kelasmu saat ini **adalah kamu sendiri** (**${leader.name}**, Skor: **${leader.score}**)!`
+      : myRank !== null && myRank >= 2 && myRank <= 5
+      ? `Halo **${firstName}**${kelasLabel}, siswa dengan estimasi nilai rapor paling tinggi di kelasmu saat ini adalah **${leader.name}** (Skor: **${leader.score}**), dan kabar baiknya **kamu sendiri masuk jajaran 5 besar (Peringkat ${myRank})**!`
+      : `Halo **${firstName}**${kelasLabel}, siswa dengan estimasi nilai rapor paling tinggi di kelasmu saat ini adalah **${leader.name}** (Skor: **${leader.score}**).`;
+
+    const top5Motivation = myRank !== null && myRank >= 1 && myRank <= 5 ? getTop5Motivation(myRank) : null;
 
     const selfRankNote =
       cr && cr.rank !== "-"
-        ? `\n\nPosisi kamu saat ini berada di **Peringkat ${cr.rank} dari ${cr.total} siswa** sekelas. Terus semangat belajar dan lengkapi semua tugas untuk mengejar posisi puncak!`
+        ? top5Motivation
+          ? `\n\nPosisi kamu saat ini berada di **Peringkat ${cr.rank} dari ${cr.total} siswa** sekelas.\n\n${top5Motivation}`
+          : `\n\nPosisi kamu saat ini berada di **Peringkat ${cr.rank} dari ${cr.total} siswa** sekelas. Terus semangat belajar dan lengkapi semua tugas untuk menembus 5 besar hingga posisi puncak!`
+        : top5Motivation
+        ? `\n\n${top5Motivation}`
         : "";
 
     return (
-      `Halo **${firstName}**${kelasLabel}, siswa dengan estimasi nilai rapor paling tinggi di kelasmu saat ini adalah **${leader.name}** (Skor: **${leader.score}**).\n\n` +
-      `**3 Besar Nilai Rapor Sementara Kelas ${ctx.kelas || ""}:**\n` +
+      `${openingLine}\n\n` +
+      `**${top.length} Besar Nilai Rapor Sementara Kelas ${ctx.kelas || ""}:**\n` +
       `${topListLines}` +
       `${selfRankNote}`
     );
@@ -523,10 +574,24 @@ function answerLiveSipinterData(
       ? `**Status Integritas Ujian:** **${integ.statusText}** (Total pelanggaran keluar *fullscreen* / pindah tab: **${integ.violationCount}x**)`
       : `**Status Integritas Ujian:** Terpantau baik.`;
 
+    const rawRank = Number(cr?.rank);
+    const rankMotivationMap: Record<number, string> = {
+      1: `**Motivasi Peringkat 1:** Luar biasa, **${firstName}**! Pertahankan posisi puncak ini dengan terus konsisten menjaga kehadiran dan kualitas tugasmu!`,
+      2: `**Motivasi Peringkat 2:** Hebat sekali, **${firstName}**! Selangkah lagi menuju Peringkat 1 — terus pertajam ketelitianmu di setiap evaluasi!`,
+      3: `**Motivasi Peringkat 3:** Keren, **${firstName}**! Posisi 3 besar sudah di tangan, ayo kejar poin tambahan untuk naik ke peringkat 1 atau 2!`,
+      4: `**Motivasi Peringkat 4:** Mantap, **${firstName}**! Kamu masuk 5 besar kelas — sedikit lagi menembus podium 3 besar!`,
+      5: `**Motivasi Peringkat 5:** Selamat, **${firstName}**! Posisi ke-5 terbaik di kelas adalah modal berharga untuk melesat lebih tinggi lagi!`,
+    };
+    const rankMotivationText =
+      Number.isFinite(rawRank) && rankMotivationMap[rawRank]
+        ? `\n\n${rankMotivationMap[rawRank]}`
+        : "";
+
     return (
       `Halo **${firstName}**${kelasLabel}, berikut status peringkat dan integritas belajarmu:\n\n` +
       `* ${rankSection}\n` +
-      `* ${integSection}\n\n` +
+      `* ${integSection}` +
+      `${rankMotivationText}\n\n` +
       `*Tips: Jaga integritas dengan tidak berpindah tab atau keluar dari mode layar penuh saat ujian CBT berlangsung.*`
     );
   }
@@ -683,25 +748,43 @@ function answerLiveSipinterData(
     );
   }
 
-  // 11. Kisi-Kisi Ujian
+  // 11. Kisi-Kisi Ujian Terbaru
   if (normalized.includes("kisi")) {
     const kList = ctx.kisiKisiList || [];
     if (kList.length === 0) {
       return `Halo **${firstName}**${kelasLabel}, saat ini belum ada data **Kisi-Kisi Ujian** (PTS/PSAS/Preetes/Postes) yang diterbitkan untuk kelasmu. Cek berkala di menu **Kisi-Kisi** pada Beranda ya.`;
     }
-    const listText = kList
-      .slice(0, 8)
-      .map(
-        (k, idx) =>
-          `${idx + 1}. **[${k.category}] ${k.title}** (${k.bab}) — ${
-            k.hasDriveLink ? "Link Drive tersedia" : "Menunggu link Drive guru"
-          }`
-      )
-      .join("\n");
+
+    const latest = kList[0];
+    const latestDetails: string[] = [];
+    if (latest.materiTitle) latestDetails.push(`Materi: ${latest.materiTitle}`);
+    if (latest.lingkupMateri) latestDetails.push(`Ruang Lingkup: ${latest.lingkupMateri}`);
+    if (latest.notes) latestDetails.push(`Indikator: ${latest.notes}`);
+    const latestDetailBlock =
+      latestDetails.length > 0 ? `\n   ${latestDetails.join(" · ")}` : "";
+
+    const otherItems = kList.slice(1, 6);
+    const otherSection =
+      otherItems.length > 0
+        ? `\n\n**Daftar Kisi-Kisi Lainnya (${kList.length} total):**\n` +
+          otherItems
+            .map((k, idx) => {
+              const scope = k.materiTitle || k.lingkupMateri || k.bab;
+              return `${idx + 2}. **[${k.category}] ${k.title}**${scope ? ` (${scope})` : ""} — ${
+                k.hasDriveLink ? "Link Drive tersedia" : "Menunggu link Drive"
+              }`;
+            })
+            .join("\n")
+        : "";
+
     return (
-      `Halo **${firstName}**${kelasLabel}, berikut daftar **Kisi-Kisi Ujian** yang tersedia untuk kelasmu:\n\n` +
-      `${listText}\n\n` +
-      `Buka menu **Kisi-Kisi** di Beranda untuk langsung mengklik tautan Google Drive masing-masing kisi-kisi.`
+      `Halo **${firstName}**${kelasLabel}, berikut informasi **Kisi-Kisi Ujian Terbaru** untuk kelasmu:\n\n` +
+      `1. **[${latest.category}] ${latest.title}** *(Terbaru)* — ${
+        latest.hasDriveLink ? "Link Google Drive siap dibuka" : "Menunggu link Drive guru"
+      }` +
+      `${latestDetailBlock}` +
+      `${otherSection}\n\n` +
+      `Buka menu **Kisi-Kisi** di Beranda untuk langsung mengklik tautan Google Drive dan mempelajari fokus ujiannya.`
     );
   }
 

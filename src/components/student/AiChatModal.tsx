@@ -285,6 +285,7 @@ function renderFormattedMessage(text: string, isUser: boolean, isStreaming: bool
 
 const QUICK_PROMPTS = [
   "Apakah ada pesan hari ini?",
+  "Apa saja kisi-kisi ujian terbaru?",
   "Berapa nilai rapor sementara saya dan rinciannya?",
   "Siapa siswa dengan nilai rapor tertinggi di kelas?",
   "Komponen nilai mana yang perlu saya tingkatkan?",
@@ -376,7 +377,7 @@ export const AiChatModal: React.FC<AiChatModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const kelasInfo = sipinterContext?.kelas ? ` (Kelas **${sipinterContext.kelas}**)` : "";
-    const greetingText = `Halo **${firstName}**${kelasInfo}, selamat datang di **Si Pinter · Gemini AI**!\n\nPertanyaan cepat seputar **pesan hari ini**, **nilai rapor sementara**, **peringkat & juara kelas**, **komponen nilai**, **tugas & tenggat terdekat**, **jadwal ujian aktif**, **materi & simulasi**, serta **rangkuman Bab 1–9** langsung dijawab seketika di sini.\n\nUntuk pertanyaan bebas atau diskusi mendalam, kamu akan diarahkan ke **Gemini AI menggunakan akun Google-mu sendiri** (konteks Si-Pinter non-rahasia otomatis tersalin agar tinggal *Paste*, dan tutup tab Gemini kapan saja untuk kembali ke Si-Pinter).`;
+    const greetingText = `Halo **${firstName}**${kelasInfo}, selamat datang di **Si Pinter · Gemini AI**!\n\nPertanyaan cepat seputar **pesan hari ini**, **kisi-kisi ujian terbaru**, **nilai rapor sementara**, **peringkat & 5 besar kelas**, **komponen nilai**, **tugas & tenggat terdekat**, **jadwal ujian aktif**, **materi & simulasi**, serta **rangkuman Bab 1–9** langsung dijawab seketika di sini.\n\nUntuk pertanyaan bebas atau diskusi mendalam, kamu akan diarahkan ke **Gemini AI menggunakan akun Google-mu sendiri** (konteks Si-Pinter non-rahasia otomatis tersalin agar tinggal *Paste*, dan tutup tab Gemini kapan saja untuk kembali ke Si-Pinter).`;
 
     setMessages((prev) => {
       if (prev.length === 0) {

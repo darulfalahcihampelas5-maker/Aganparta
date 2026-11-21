@@ -3414,6 +3414,11 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         combined.push(entry);
       }
     });
+    combined.sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return (Number.isFinite(tb) ? tb : 0) - (Number.isFinite(ta) ? ta : 0);
+    });
     return combined;
   }, [rawKisiKisiList, examsList, student]);
 
@@ -3732,7 +3737,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   const rankings = useMemo(() => {
     if (!student || !rubric || allStudentsList.length === 0) {
-      return { rank: "-", total: "-", topStudents: [] as Array<{ rank: number; name: string; score: number }> };
+      return { rank: "-", total: "-", topStudents: [] as Array<{ rank: number; name: string; score: number; isSelf?: boolean }> };
     }
     
     // Normalize class names for more robust matching
@@ -3750,6 +3755,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
             rank: 1,
             name: String(student.name || student.displayName || student.studentName || "Siswa").trim(),
             score: rataRataSemester,
+            isSelf: true,
           },
         ],
       };
@@ -3814,13 +3820,15 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     studentPerformance.sort((a, b) => b.finalScore - a.finalScore);
 
-    const myIndex = studentPerformance.findIndex((item) => item.nisn === student.nisn);
+    const myNisn = String(student.nisn || "").trim();
+    const myIndex = studentPerformance.findIndex((item) => String(item.nisn || "").trim() === myNisn);
     const rank = myIndex !== -1 ? myIndex + 1 : 1;
     const total = studentsInClass.length;
-    const topStudents = studentPerformance.slice(0, 3).map((item, idx) => ({
+    const topStudents = studentPerformance.slice(0, 5).map((item, idx) => ({
       rank: idx + 1,
       name: item.name,
       score: Math.round(item.finalScore),
+      isSelf: String(item.nisn || "").trim() === myNisn,
     }));
 
     return { rank, total, topStudents };
@@ -5111,6 +5119,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         title: k.title || "Kisi-Kisi Ujian",
         category: k.category || "Ujian",
         bab: k.bab || "Informatika",
+        materiTitle: k.materiTitle || "",
+        lingkupMateri: k.lingkupMateri || "",
+        notes: k.notes || "",
+        createdAt: k.createdAt || "",
         hasDriveLink: Boolean(k.driveUrl),
       })),
       isSimulasiEnabled,
