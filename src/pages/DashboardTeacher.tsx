@@ -1727,19 +1727,72 @@ export default function DashboardTeacher() {
   const handleConfirmResetStudentExam = async (examId: string, targetNisn: string) => {
     setIsSavingDuplicateExam(true);
     try {
+      const nowIso = new Date().toISOString();
+      const targetExam = examsList.find((e) => e.id === examId);
+      const resetSessionPayload = (nisnVal: string, stuName = "", kelasVal = "") => ({
+        examId,
+        examTitle: targetExam?.title || "",
+        nisn: nisnVal,
+        studentName: stuName,
+        kelas: kelasVal,
+        status: "reset",
+        resetAt: nowIso,
+        score: null,
+        nilai: null,
+        finishedAt: null,
+        startedAt: null,
+        answeredCount: 0,
+        currentQuestion: 1,
+        violationCount: 0,
+        lastActiveAt: nowIso,
+      });
+
       if (targetNisn === "ALL") {
         const gradesToDelete = finalGradesList.filter(
-          (g) => g.assignmentId === examId || g.examId === examId
+          (g) => g.assignmentId === examId || g.examId === examId || (g.id && g.id.startsWith(`${examId}_`))
         );
+        const resetNisns = new Set<string>();
         for (const g of gradesToDelete) {
           if (g.id) {
             await deleteDoc(doc(db, "final_grades", g.id));
           } else if (g.nisn) {
             await deleteDoc(doc(db, "final_grades", `${examId}_${g.nisn}`));
           }
+          if (g.nisn) {
+            resetNisns.add(String(g.nisn).trim());
+            await setDoc(
+              doc(db, "exam_sessions", `${examId}_${g.nisn}`),
+              resetSessionPayload(String(g.nisn), g.studentName || "", g.kelas || ""),
+              { merge: true }
+            ).catch(() => {});
+          }
+        }
+        // Also reset any remaining students in this exam's class who might have an active/finished exam_session without final_grades
+        const classStus = studentsList.filter(
+          (s) =>
+            s.nisn &&
+            !resetNisns.has(String(s.nisn).trim()) &&
+            (!targetExam || isExamForClass(targetExam, s.kelas))
+        );
+        for (const s of classStus) {
+          await setDoc(
+            doc(db, "exam_sessions", `${examId}_${s.nisn}`),
+            resetSessionPayload(String(s.nisn), s.displayName || s.studentName || "", s.kelas || ""),
+            { merge: true }
+          ).catch(() => {});
         }
       } else {
         await deleteDoc(doc(db, "final_grades", `${examId}_${targetNisn}`));
+        const stuObj = studentsList.find((s) => String(s.nisn) === String(targetNisn));
+        await setDoc(
+          doc(db, "exam_sessions", `${examId}_${targetNisn}`),
+          resetSessionPayload(
+            String(targetNisn),
+            stuObj?.displayName || stuObj?.studentName || "",
+            stuObj?.kelas || ""
+          ),
+          { merge: true }
+        ).catch(() => {});
       }
 
       localStorage.removeItem("firas_cache_final_grades");
@@ -1765,6 +1818,23 @@ export default function DashboardTeacher() {
       async () => {
         try {
           await deleteDoc(doc(db, "final_grades", gradeId));
+          const nowIso = new Date().toISOString();
+          await setDoc(
+            doc(db, "exam_sessions", gradeId),
+            {
+              status: "reset",
+              resetAt: nowIso,
+              score: null,
+              nilai: null,
+              finishedAt: null,
+              startedAt: null,
+              answeredCount: 0,
+              currentQuestion: 1,
+              violationCount: 0,
+              lastActiveAt: nowIso,
+            },
+            { merge: true }
+          ).catch(() => {});
           localStorage.removeItem("firas_cache_final_grades");
           fetchTeacherData(false);
           showAlert("Berhasil", "Status ujian siswa telah reset.", "alert");
@@ -2583,7 +2653,7 @@ export default function DashboardTeacher() {
         let updatedList: any[];
         if (index >= 0) {
           updatedList = [...prevGrades];
-          updatedList[index] = { ...updatedList[index], ...incomingGrade };
+          updatedList[index] = pickPreferredGrade(updatedList[index], incomingGrade);
         } else {
           updatedList = [incomingGrade, ...prevGrades];
         }
@@ -4041,28 +4111,79 @@ export default function DashboardTeacher() {
     // Always pull latest exam & assignment grades (including exam_sessions recovery) when opening Buku Nilai
     if (activeMenu === "manajemen-nilai" && activeNilaiTab === "rekapitulasi") {
       let cancelled = false;
-      Promise.all([getFinalGrades(), getExams()])
-        .then(([grades, exams]) => {
-          if (cancelled) return;
-          if (Array.isArray(grades) && grades.length > 0) {
-            setFinalGradesList(grades);
-            setLocalCache("firas_cache_final_grades", grades);
-          }
-          if (Array.isArray(exams) && exams.length > 0) {
-            const sorted = [...exams].sort((a: any, b: any) => {
-              const dateA = new Date(a.createdAt || 0).getTime();
-              const dateB = new Date(b.createdAt || 0).getTime();
-              return dateB - dateA;
-            });
-            setExamsList(sorted);
-            setLocalCache("firas_cache_exams_v2", sorted);
-          }
-        })
-        .catch((err) => {
-          console.warn("Gagal menyegarkan data Buku Nilai:", err);
-        });
+      const pullRekapLatest = () => {
+        Promise.all([getFinalGrades(), getExams()])
+          .then(([grades, exams]) => {
+            if (cancelled) return;
+            if (Array.isArray(grades) && grades.length > 0) {
+              setFinalGradesList(grades);
+              setLocalCache("firas_cache_final_grades", grades);
+            }
+            if (Array.isArray(exams) && exams.length > 0) {
+              const sorted = [...exams].sort((a: any, b: any) => {
+                const dateA = new Date(a.createdAt || 0).getTime();
+                const dateB = new Date(b.createdAt || 0).getTime();
+                return dateB - dateA;
+              });
+              setExamsList(sorted);
+              setLocalCache("firas_cache_exams_v2", sorted);
+            }
+          })
+          .catch((err) => {
+            console.warn("Gagal menyegarkan data Buku Nilai:", err);
+          });
+      };
+
+      pullRekapLatest();
+      const pollTimer = setInterval(pullRekapLatest, 15000);
+      const handleVisibility = () => {
+        if (document.visibilityState === "visible") pullRekapLatest();
+      };
+      document.addEventListener("visibilitychange", handleVisibility);
+
+      let unsubscribeFsGrades: (() => void) | undefined;
+      if (!isFirebaseQuotaExhausted()) {
+        try {
+          unsubscribeFsGrades = onSnapshot(
+            collection(db, "final_grades"),
+            (snap) => {
+              if (cancelled || snap.empty) return;
+              setFinalGradesList((prev) => {
+                const mergedMap = new Map<string, any>();
+                prev.forEach((g) => {
+                  const key = String(g.id || `${g.assignmentId || g.examId}_${g.nisn}`);
+                  mergedMap.set(key, g);
+                });
+                snap.docs.forEach((d) => {
+                  const raw = d.data() as any;
+                  const nisnVal = String(raw.nisn || raw.nis || "").trim();
+                  const asgId = raw.assignmentId || raw.examId || "";
+                  const item = {
+                    ...raw,
+                    id: d.id,
+                    assignmentId: asgId,
+                    examId: raw.examId || asgId,
+                    nisn: nisnVal,
+                    nilai: raw.nilai ?? raw.score,
+                    score: raw.score ?? raw.nilai,
+                  };
+                  mergedMap.set(d.id, pickPreferredGrade(mergedMap.get(d.id), item));
+                });
+                const next = Array.from(mergedMap.values());
+                setLocalCache("firas_cache_final_grades", next);
+                return next;
+              });
+            },
+            () => {}
+          );
+        } catch (_) {}
+      }
+
       return () => {
         cancelled = true;
+        clearInterval(pollTimer);
+        document.removeEventListener("visibilitychange", handleVisibility);
+        if (unsubscribeFsGrades) unsubscribeFsGrades();
       };
     }
   }, [activeMenu, activeNilaiTab]);
@@ -14716,6 +14837,16 @@ export default function DashboardTeacher() {
                       studentsList={studentsList}
                       finalGradesList={finalGradesList}
                       classesList={classesList}
+                      onRefreshGrades={() => {
+                        getFinalGrades()
+                          .then((grades) => {
+                            if (Array.isArray(grades) && grades.length > 0) {
+                              setFinalGradesList(grades);
+                              setLocalCache("firas_cache_final_grades", grades);
+                            }
+                          })
+                          .catch(() => {});
+                      }}
                     />
                   )}
 

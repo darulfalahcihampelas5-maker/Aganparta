@@ -417,5 +417,30 @@
   animation: cuteDotJump 1.2s ease-in-out 0.4s infinite;
 }
 
+/* Anti-Screenshot / Anti-Print / Anti-Long-Press protections during active CBT exam */
+.cbt-protected-exam,
+.cbt-protected-exam * {
+  -webkit-touch-callout: none !important;
+}
+
+.cbt-protected-exam input,
+.cbt-protected-exam textarea {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+}
+
+.cbt-protected-exam img {
+  -webkit-user-drag: none;
+  user-drag: none;
+  -webkit-touch-callout: none !important;
+}
+
+@media print {
+  body.cbt-exam-active * {
+    display: none !important;
+    visibility: hidden !important;
+  }
+}
+
 
 

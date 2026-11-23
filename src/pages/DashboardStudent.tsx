@@ -893,6 +893,52 @@ export default function DashboardStudent() {
   
   const savedExamSession = useMemo(() => getSavedExamSession(), [student?.nisn]);
 
+  const toExamTimeMs = (val?: any): number => {
+    if (!val) return 0;
+    if (typeof val?.toDate === "function") return val.toDate().getTime() || 0;
+    const ms = new Date(val).getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  };
+
+  const hasValidExamScoreVal = (val: any): boolean =>
+    val !== undefined && val !== null && val !== "" && !Number.isNaN(Number(val));
+
+  const isIncompleteViolationStub = (f: any): boolean => {
+    if (!f) return true;
+    const hasSubmittedAnswers = Boolean(
+      f.answers?.items && typeof f.answers.items === "object" && Object.keys(f.answers.items).length > 0
+    );
+    const hasCompletionStamp = Boolean(f.submittedAt || f.gradedAt);
+    if (f.status === "melanggar" && !hasSubmittedAnswers && !hasCompletionStamp) {
+      return true;
+    }
+    const rawNum = f.nilai !== undefined && f.nilai !== null && f.nilai !== "" ? Number(f.nilai) : Number(f.score);
+    const isZeroViolationWithoutSubmit =
+      !Number.isNaN(rawNum) &&
+      rawNum === 0 &&
+      Number(f.violationCount || 0) > 0 &&
+      !hasSubmittedAnswers &&
+      !f.isRemedial &&
+      !f.gradedAt &&
+      !f.isManualColumn &&
+      f.status !== "selesai";
+    return isZeroViolationWithoutSubmit;
+  };
+
+  const isCompletedExamGradeForStudent = (f: any, examId: any, targetNisn?: string): boolean => {
+    if (!f || !examId) return false;
+    const targetId = String(examId);
+    const idMatches =
+      String(f.assignmentId || "") === targetId ||
+      String(f.examId || "") === targetId ||
+      String(f.alignmentId || "") === targetId ||
+      Boolean(f.id && String(f.id).startsWith(`${targetId}_`));
+    if (!idMatches) return false;
+    if (targetNisn && !(isSameNisn(f.nisn, targetNisn) || isSameNisn(f.nis, targetNisn))) return false;
+    if (isIncompleteViolationStub(f)) return false;
+    return hasValidExamScoreVal(f.nilai) || hasValidExamScoreVal(f.score) || f.status === "selesai";
+  };
+
   const [activeMenu, setActiveMenu] = useState("dashboard");
   const [isSimulasiEnabled, setIsSimulasiEnabled] = useState(false);
   useEffect(() => {
@@ -1653,6 +1699,8 @@ export default function DashboardStudent() {
   const [isQuestionNavOpen, setIsQuestionNavOpen] = useState<boolean>(window.innerWidth >= 1024);
   const [examFontSize, setExamFontSize] = useState<"normal" | "large" | "xlarge">("normal");
   const [isViolationSirening, setIsViolationSirening] = useState<boolean>(false);
+  const [isScreenCaptureShielded, setIsScreenCaptureShielded] = useState<boolean>(false);
+  const [violationWarningReason, setViolationWarningReason] = useState<string>("");
   const [isFullscreenActive, setIsFullscreenActive] = useState<boolean>(true);
   const [examViolationCount, setExamViolationCount] = useState<number>(0);
   const [showExitWarningModal, setShowExitWarningModal] = useState<boolean>(false);
@@ -1661,6 +1709,13 @@ export default function DashboardStudent() {
   const [showEmbeddedPdf, setShowEmbeddedPdf] = useState<boolean>(false);
   const [zoomedQuestionImg, setZoomedQuestionImg] = useState<string | null>(null);
   const [isDownloadingRaporPdf, setIsDownloadingRaporPdf] = useState<boolean>(false);
+  const [isSavingExamResult, setIsSavingExamResult] = useState<boolean>(false);
+  const examFinishedRef = useRef<boolean>(false);
+  const reconciledHistoryIdsRef = useRef<Set<string>>(new Set());
+  const examStartedAtRef = useRef<string | null>(null);
+  const examExpiresAtRef = useRef<number | null>(null);
+  const screenshotShieldTimeoutRef = useRef<any>(null);
+  const lastViolationTsRef = useRef<number>(0);
 
   const isQuestionAnswered = (q: any, ans: any): boolean => {
     const qType = q?.type || "multiple_choice";
@@ -2074,9 +2129,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         updatedAt: new Date().toISOString(),
       };
 
+      let sessionOk = false;
       try {
         const savedOk = await saveFinalGrade(gradePayload);
-        // Also ensure exam_sessions reflects completed state with score
         try {
           await setDoc(
             doc(db, "exam_sessions", docId),
@@ -2094,9 +2149,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
             },
             { merge: true }
           );
+          sessionOk = true;
         } catch (_) {}
 
-        if (savedOk) {
+        if (savedOk && sessionOk) {
           trackUsage(0, 1);
           setRealtimeFinalGrades((prev) => {
             const base = Array.isArray(prev) ? prev : [];
@@ -2160,17 +2216,40 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     if (!student?.nisn) return;
     const historyKey = `ujian_history_${student.nisn}`;
     try {
-      const stored = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      const storedRaw = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      const stored = Array.isArray(storedRaw) ? storedRaw : [];
       setExamHistoryList(stored);
 
-      // Restore active exam if any
+      // Restore active exam if any — unless it is already finished in local history for this attempt
       const saved = getSafeExamState(student.nisn);
       if (saved && saved.activeExam && !saved.examResult) {
+        const histMatch = stored.find((h: any) => String(h.examId) === String(saved.activeExam.id));
+        const savedStartMs = toExamTimeMs(saved.startedAt);
+        const histSubmitMs = toExamTimeMs(histMatch?.submittedAt || histMatch?.gradedAt);
+        const isAlreadyFinished = Boolean(
+          histMatch && (savedStartMs === 0 || histSubmitMs >= savedStartMs)
+        );
+        if (isAlreadyFinished) {
+          removeSafeExamState(student.nisn);
+          return;
+        }
+
+        const rawSavedTimer = Number(saved.examTimer);
+        const fallbackDur = Number(saved.activeExam?.duration) > 0 ? Number(saved.activeExam.duration) : 3600;
+        const safeTimer =
+          typeof saved.examTimer === "number" && Number.isFinite(rawSavedTimer) && rawSavedTimer > 0
+            ? rawSavedTimer
+            : fallbackDur;
+        const resolvedStartedAt = saved.startedAt || new Date().toISOString();
+        examStartedAtRef.current = resolvedStartedAt;
+        examExpiresAtRef.current = Date.now() + safeTimer * 1000;
+        examFinishedRef.current = false;
+
         setActiveExam(saved.activeExam);
         setCurrentQuestionIdx(saved.currentQuestionIdx || 0);
         setExamAnswers(saved.examAnswers || {});
         setExamFlags(saved.examFlags || {});
-        setExamTimer(saved.examTimer);
+        setExamTimer(safeTimer);
         setExamViolationCount(saved.examViolationCount || 0);
       }
     } catch (e) {
@@ -2187,7 +2266,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   }, []);
 
   useEffect(() => {
-    if (!student?.nisn || !activeExam || examResult) return;
+    if (!student?.nisn || !activeExam || examResult || examFinishedRef.current) return;
     const stateToSave = {
       activeExam,
       currentQuestionIdx,
@@ -2195,16 +2274,18 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       examFlags,
       examTimer,
       examViolationCount,
+      startedAt: examStartedAtRef.current,
     };
     saveSafeExamState(student.nisn, stateToSave);
   }, [activeExam, currentQuestionIdx, examAnswers, examFlags, examTimer, examResult, examViolationCount, student?.nisn]);
 
-  const startSiren = () => {
+  const startSiren = (reason = "Terdeteksi keluar tab / layar penuh") => {
+    if (examFinishedRef.current) return;
     setExamViolationCount((prev) => {
       const updated = prev + 1;
-      
+
       // Persist to storage safely
-      if (student?.nisn && activeExam) {
+      if (student?.nisn && activeExam && !examFinishedRef.current) {
         try {
           const parsed = getSafeExamState(student.nisn);
           if (parsed) {
@@ -2215,25 +2296,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           console.warn("Gagal mengupdate storage exam_state:", e);
         }
 
-        // Write directly to Firestore "final_grades" matching the teacher view as a Penalty / Pelanggaran
-        const finalGradeRef = doc(db, "final_grades", `${activeExam.id}_${student.nisn}`);
-        setDoc(finalGradeRef, {
-          examId: activeExam.id,
-          assignmentId: activeExam.id,
-          examTitle: activeExam.title,
-          subject: activeExam.subject,
-          bab: activeExam.bab || "",
-          violationCount: updated,
-          violationsCount: updated,
-          nisn: student.nisn || "",
-          type: "exam",
-          status: "melanggar", // mark status as violation / melanggar
-          updatedAt: new Date().toISOString(),
-        }, { merge: true }).catch((err) => {
-          console.warn("Gagal mencatat penalti pelanggaran ke Firestore:", err);
-        });
-
-        // Update Live Proctoring session
+        // Update Live Proctoring session only while exam is active (never write partial score=0 stubs into final_grades)
         const sessionRef = doc(db, "exam_sessions", `${activeExam.id}_${student.nisn}`);
         setDoc(sessionRef, {
           examId: activeExam.id,
@@ -2243,7 +2306,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           kelas: student.kelas || "",
           status: "melanggar",
           violationCount: updated,
-          lastViolationReason: "Terdeteksi keluar tab / layar penuh",
+          lastViolationReason: reason,
           lastActiveAt: new Date().toISOString(),
         }, { merge: true }).catch((err) => {
           console.warn("Gagal mencatat status proctoring:", err);
@@ -2357,18 +2420,62 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e) { console.warn("Error parsing stored data:", e); }
   };
 
-  const handleStartExam = (exam: any) => {
+  const isExamAlreadyCompleted = (examId: any): boolean => {
+    if (!examId) return false;
+    const hasCloudGrade = finalGradesList.some((f: any) =>
+      isCompletedExamGradeForStudent(f, examId, student?.nisn)
+    );
+    const hasLocalHist = examHistoryList.some((h: any) => String(h.examId) === String(examId));
+    return hasCloudGrade || hasLocalHist;
+  };
+
+  const handleStartExam = (exam: any, allowRestart = false) => {
+    if (!exam?.id) return;
+    if (!allowRestart && isExamAlreadyCompleted(exam.id)) {
+      showAlert("Ujian Sudah Selesai", "Anda sudah menyelesaikan ujian ini sebelumnya dan nilai sudah tercatat.", "alert");
+      return;
+    }
+
+    const rawDuration = Number(exam.duration);
+    const safeDuration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 3600;
+    const nowIso = new Date().toISOString();
+
+    examFinishedRef.current = false;
+    examStartedAtRef.current = nowIso;
+    examExpiresAtRef.current = Date.now() + safeDuration * 1000;
+    reconciledHistoryIdsRef.current.add(String(exam.id));
+
+    if (student?.nisn) {
+      removeSafeExamState(student.nisn);
+      try {
+        const historyKey = `ujian_history_${student.nisn}`;
+        const prevHist = JSON.parse(localStorage.getItem(historyKey) || "[]");
+        if (Array.isArray(prevHist)) {
+          const filteredHist = prevHist.filter((h: any) => String(h.examId) !== String(exam.id));
+          localStorage.setItem(historyKey, JSON.stringify(filteredHist));
+          setExamHistoryList(filteredHist);
+        }
+      } catch (_) {}
+      try {
+        const syncKey = `pending_exam_sync_${student.nisn}`;
+        const prevSync = JSON.parse(localStorage.getItem(syncKey) || "[]");
+        if (Array.isArray(prevSync)) {
+          const filteredSync = prevSync.filter((p: any) => String(p.examId) !== String(exam.id));
+          localStorage.setItem(syncKey, JSON.stringify(filteredSync));
+        }
+      } catch (_) {}
+    }
+
     setActiveExam(exam);
     setCurrentQuestionIdx(0);
     setExamAnswers({});
     setExamFlags({});
-    setExamTimer(exam.duration);
+    setExamTimer(safeDuration);
     setExamResult(null);
     setExamViolationCount(0);
     setIsFullscreenActive(true);
 
     if (student?.nisn && exam?.id) {
-      const nowIso = new Date().toISOString();
       setDoc(
         doc(db, "exam_sessions", `${exam.id}_${student.nisn}`),
         {
@@ -2378,6 +2485,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           studentName: student.displayName || student.studentName || student.name || "",
           kelas: student.kelas || "",
           status: "mengerjakan",
+          score: null,
+          nilai: null,
+          finishedAt: null,
           answeredCount: 0,
           totalQuestions: exam.questions?.length || 0,
           currentQuestion: 1,
@@ -2402,18 +2512,27 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     }
   };
 
-  const handleAttemptStartExam = (exam: any) => {
+  const handleAttemptStartExam = (exam: any, allowRestart = false) => {
+    if (!allowRestart && isExamAlreadyCompleted(exam?.id)) {
+      showAlert("Ujian Sudah Selesai", "Anda sudah menyelesaikan ujian ini dan tidak dapat memulainya ulang kecuali di-reset oleh Guru.", "alert");
+      return;
+    }
     if (exam.token) {
       setSelectedExamForToken(exam);
       setTokenInput("");
       setExamTokenError("");
     } else {
-      handleStartExam(exam);
+      handleStartExam(exam, allowRestart);
     }
   };
 
   const handleVerifyExamToken = () => {
     if (!selectedExamForToken) return;
+    if (isExamAlreadyCompleted(selectedExamForToken?.id)) {
+      setSelectedExamForToken(null);
+      showAlert("Ujian Sudah Selesai", "Ujian ini sudah berstatus selesai.", "alert");
+      return;
+    }
     if (tokenInput.trim().toUpperCase() === (selectedExamForToken?.token || "").toString().trim().toUpperCase()) {
       const examToStart = selectedExamForToken;
       setSelectedExamForToken(null);
@@ -2441,7 +2560,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     setExamFlags({});
     setExamResult(null);
 
-    handleAttemptStartExam(exam);
+    handleAttemptStartExam(exam, true);
   };
 
   const examAnswersRef = useRef<Record<number, number | string>>({});
@@ -2458,9 +2577,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   // Live Proctoring progress sync + periodic heartbeat
   useEffect(() => {
-    if (!student?.nisn || !activeExam?.id || examResult) return;
+    if (!student?.nisn || !activeExam?.id || examResult || examFinishedRef.current) return;
 
     const pushSessionUpdate = () => {
+      if (examFinishedRef.current) return;
       const questionsArr = activeExam.questions || [];
       const currentAns = examAnswersRef.current;
       const answeredCount = questionsArr.filter((q: any, i: number) =>
@@ -2479,6 +2599,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           totalQuestions: questionsArr.length,
           currentQuestion: currentQuestionIdx + 1,
           violationCount: examViolationCount,
+          ...(examStartedAtRef.current ? { startedAt: examStartedAtRef.current } : {}),
           lastActiveAt: new Date().toISOString(),
         },
         { merge: true }
@@ -2496,7 +2617,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const handleFinishExam = async (isTimeOut = false, forcedViolationCount?: number) => {
     setIsSubmitConfirmOpen(false);
     const answersToUse = examAnswersRef.current;
-    if (!student?.nisn || !activeExam) return;
+    if (!student?.nisn || !activeExam || examFinishedRef.current) return;
+    examFinishedRef.current = true;
+    setIsSavingExamResult(true);
 
     let correctCount = 0;
     let earnedSum = 0;
@@ -2547,6 +2670,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     const nowIso = new Date().toISOString();
     const finalViolations =
       forcedViolationCount !== undefined ? forcedViolationCount : examViolationCount;
+    const rawDurSec = Number(activeExam.duration);
+    const startMs = toExamTimeMs(examStartedAtRef.current);
+    const computedElapsedSec =
+      startMs > 0
+        ? Math.max(1, Math.round((Date.now() - startMs) / 1000))
+        : Number.isFinite(rawDurSec) && rawDurSec > 0 && typeof examTimer === "number" && Number.isFinite(examTimer)
+        ? Math.max(1, Math.round(rawDurSec - Math.max(0, examTimer)))
+        : null;
 
     const answersPayload = {
       items: answerItems,
@@ -2564,7 +2695,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       kkm: activeExam.kkm,
       passed,
       needsManualGrading: hasEssayQuestion,
+      startedAt: examStartedAtRef.current || nowIso,
       submittedAt: nowIso,
+      durationUsedSeconds: computedElapsedSec,
       wasTimeOut: isTimeOut,
       violationCount: finalViolations,
       gradedAt: nowIso,
@@ -2618,26 +2751,6 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       removeSafeExamState(student.nisn);
     } catch (e) { console.warn("Error parsing stored data:", e); }
 
-    // Update live proctoring session as selesai AND persist final grade reliably to cloud
-    const sessionPromise = setDoc(
-      doc(db, "exam_sessions", gradeDocId),
-      {
-        examId: activeExam.id,
-        examTitle: activeExam.title || "",
-        nisn: student.nisn || "",
-        studentName: student.displayName || student.studentName || student.name || "",
-        kelas: student.kelas || "",
-        status: "selesai",
-        answeredCount,
-        totalQuestions: (activeExam.questions || []).length,
-        violationCount: finalViolations,
-        score: baseScore,
-        finishedAt: nowIso,
-        lastActiveAt: nowIso,
-      },
-      { merge: true }
-    ).catch((err) => console.warn("Gagal memperbarui sesi proctoring selesai:", err));
-
     const queuePendingSync = () => {
       try {
         const syncKey = `pending_exam_sync_${student.nisn}`;
@@ -2658,36 +2771,82 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       }
     };
 
-    const saveToCloud = async () => {
-      let saved = false;
+    const clearPendingSyncForExam = () => {
       try {
-        saved = await saveFinalGrade(gradePayload);
+        const syncKey = `pending_exam_sync_${student.nisn}`;
+        const existing = JSON.parse(localStorage.getItem(syncKey) || "[]");
+        if (Array.isArray(existing)) {
+          const remaining = existing.filter((p: any) => p.examId !== activeExam.id);
+          localStorage.setItem(syncKey, JSON.stringify(remaining));
+        }
+      } catch (_) {}
+    };
+
+    // Pre-queue pending sync BEFORE starting async cloud writes so closing browser mid-flight never loses the score
+    queuePendingSync();
+
+    // Update live proctoring session as selesai AND persist final grade reliably to cloud
+    let sessionSaved = false;
+    const sessionPromise = setDoc(
+      doc(db, "exam_sessions", gradeDocId),
+      {
+        examId: activeExam.id,
+        examTitle: activeExam.title || "",
+        nisn: student.nisn || "",
+        studentName: student.displayName || student.studentName || student.name || "",
+        kelas: student.kelas || "",
+        status: "selesai",
+        answeredCount,
+        totalQuestions: (activeExam.questions || []).length,
+        violationCount: finalViolations,
+        score: baseScore,
+        startedAt: result.startedAt,
+        durationUsedSeconds: computedElapsedSec,
+        finishedAt: nowIso,
+        lastActiveAt: nowIso,
+      },
+      { merge: true }
+    )
+      .then(() => {
+        sessionSaved = true;
+      })
+      .catch((err) => console.warn("Gagal memperbarui sesi proctoring selesai:", err));
+
+    let gradeSaved = false;
+    const saveToCloud = async () => {
+      try {
+        gradeSaved = await saveFinalGrade(gradePayload);
       } catch (err) {
         console.warn("saveFinalGrade error:", err);
-        saved = false;
+        gradeSaved = false;
       }
 
-      // Direct Firestore backup attempt if saveFinalGrade returned false
-      if (!saved) {
+      if (!gradeSaved) {
         try {
           await setDoc(doc(db, "final_grades", gradeDocId), gradePayload, { merge: true });
-          saved = true;
+          gradeSaved = true;
         } catch (fsErr) {
           console.warn("Direct Firestore fallback save grade failed:", fsErr);
         }
       }
 
-      if (saved) {
+      if (gradeSaved) {
         trackUsage(0, 1);
         if (typeof mutateFinalGrades === "function") mutateFinalGrades();
         if (typeof mutateAllFinalGrades === "function") mutateAllFinalGrades();
       } else {
-        console.warn("Gagal mengupload nilai ujian ke cloud, masuk ke antrean sinkronisasi");
-        queuePendingSync();
+        console.warn("Gagal mengupload nilai ujian ke cloud, tetap tersimpan di antrean sinkronisasi");
       }
     };
 
-    await Promise.allSettled([sessionPromise, saveToCloud()]);
+    try {
+      await Promise.allSettled([sessionPromise, saveToCloud()]);
+      if (gradeSaved && sessionSaved) {
+        clearPendingSyncForExam();
+      }
+    } finally {
+      setIsSavingExamResult(false);
+    }
   };
 
   const confirmCheatExit = async () => {
@@ -2703,13 +2862,19 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     // Auto finish active exam, passing the latest violation count with the recorded penalty
     await handleFinishExam(false, latestViolationCount);
 
-    // Execute transition/logout
+    // Execute transition/logout cleanly after result is saved
     setTimeout(async () => {
       if (action.type === "menu" && action.id !== undefined && action.index !== undefined) {
+        setActiveExam(null);
+        setExamResult(null);
         handleMenuChange(action.id, action.index);
       } else if (action.type === "logout" || action.type === "logout_attempt") {
+        setActiveExam(null);
+        setExamResult(null);
         await handleLogout();
       } else if (action.type === "popstate_attempt" || action.type === "sidebar_attempt") {
+        setActiveExam(null);
+        setExamResult(null);
         handleMenuChange("dashboard", 0);
       }
     }, 300);
@@ -2729,13 +2894,21 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   }, []);
 
   useEffect(() => {
-    if (!activeExam || examResult) return;
+    if (!activeExam || examResult || examFinishedRef.current) return;
+    if (typeof examTimer !== "number" || !Number.isFinite(examTimer)) return;
+    if (!examExpiresAtRef.current) {
+      const safeFallback = examTimer > 0 ? examTimer : (Number(activeExam?.duration) > 0 ? Number(activeExam.duration) : 3600);
+      examExpiresAtRef.current = Date.now() + safeFallback * 1000;
+    }
     if (examTimer <= 0) {
       handleFinishExam(true);
       return;
     }
     const timerId = setTimeout(() => {
-      setExamTimer((prev) => prev - 1);
+      const remaining = examExpiresAtRef.current
+        ? Math.max(0, Math.ceil((examExpiresAtRef.current - Date.now()) / 1000))
+        : Math.max(0, examTimer - 1);
+      setExamTimer(remaining);
     }, 1000);
     return () => clearTimeout(timerId);
   }, [activeExam, examTimer, examResult]);
@@ -2749,11 +2922,56 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   useEffect(() => {
     if (activeExam && !examResult) {
+      document.body.classList.add("cbt-exam-active");
       window.history.pushState(null, "", window.location.href);
-      
-      const triggerViolation = () => {
+
+      let blurViolationTimeout: any = null;
+
+      const engagePrivacyShield = (durationMs = 3000) => {
+        setIsScreenCaptureShielded(true);
+        if (screenshotShieldTimeoutRef.current) {
+          clearTimeout(screenshotShieldTimeoutRef.current);
+          screenshotShieldTimeoutRef.current = null;
+        }
+        if (durationMs > 0) {
+          screenshotShieldTimeoutRef.current = setTimeout(() => {
+            if (document.hasFocus()) {
+              setIsScreenCaptureShielded(false);
+            }
+          }, durationMs);
+        }
+      };
+
+      const clearClipboardOnCapture = () => {
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            navigator.clipboard
+              .writeText("Akses tangkap layar dan salin soal diblokir selama Ujian CBT.")
+              .catch(() => {});
+          }
+        } catch (_) {}
+      };
+
+      const triggerViolation = (
+        reason = "Terdeteksi keluar tab / layar penuh",
+        shieldScreen = false
+      ) => {
+        if (examFinishedRef.current) return;
+        const now = Date.now();
+        if (shieldScreen) {
+          engagePrivacyShield(3200);
+          clearClipboardOnCapture();
+        }
+        // Prevent double-counting within 700ms (e.g. keydown + keyup or PrintScreen + blur)
+        if (now - lastViolationTsRef.current < 700) {
+          setViolationWarningReason(reason);
+          setIsViolationSirening(true);
+          return;
+        }
+        lastViolationTsRef.current = now;
+        setViolationWarningReason(reason);
         setIsViolationSirening(true);
-        startSiren();
+        startSiren(reason);
       };
 
       const handlePopState = () => {
@@ -2763,11 +2981,11 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         setPendingNavAction({ type: "popstate_attempt" });
         setShowExitWarningModal(true);
       };
-      
+
       const handleVisibilityChange = () => {
         // Terjadi jika menekan menu tengah/home, ganti tab browser, mengunci telpon, dll
         if (document.hidden || document.visibilityState === "hidden") {
-          triggerViolation();
+          triggerViolation("Terdeteksi keluar tab / layar ujian", true);
         }
       };
 
@@ -2780,67 +2998,130 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         );
         setIsFullscreenActive(isFS);
         if (!isFS) {
-          triggerViolation();
+          triggerViolation("Terdeteksi keluar dari mode layar penuh", false);
         }
       };
 
       const handleBlur = () => {
-        // According to user request, we make the system more relaxed for minor interruptions
-        // though we still track significant visibility changes via visibilitychange
-        return;
+        // Segera tutup tampilan soal dengan layar hitam saat fokus keluar (mis. Snipping Tool Win+Shift+S / Screenshot Toolbar / App Switcher)
+        engagePrivacyShield(0);
+        if (blurViolationTimeout) clearTimeout(blurViolationTimeout);
+        blurViolationTimeout = setTimeout(() => {
+          if (!document.hasFocus() && !examFinishedRef.current) {
+            triggerViolation("Terdeteksi percobaan tangkap layar / meninggalkan jendela ujian", true);
+          }
+        }, 900);
+      };
+
+      const handleFocus = () => {
+        if (blurViolationTimeout) {
+          clearTimeout(blurViolationTimeout);
+          blurViolationTimeout = null;
+        }
+        if (!screenshotShieldTimeoutRef.current) {
+          setIsScreenCaptureShielded(false);
+        }
       };
 
       const handlePageHide = () => {
-        // No violation on page hide/refresh as per user request
         return;
       };
 
       const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-        // According to user request, refresh should not affect the exam (no violation penalty)
-        // Persistence is handled by localStorage syncing in useEffect
         const msg = "Ujian sedang aktif! Anda dapat memuat ulang halaman jika diperlukan, progres Anda akan tersimpan.";
         e.returnValue = msg;
         return msg;
       };
 
-      const handleKeyDown = (e: KeyboardEvent) => {
+      const checkScreenshotOrDevToolsEvent = (e: KeyboardEvent): string | null => {
+        const keyLower = (e.key || "").toLowerCase();
+        const isPrintScreen = e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44;
+        const isWinSnip = e.metaKey && e.shiftKey && (keyLower === "s" || e.code === "KeyS" || !keyLower || keyLower === "meta" || keyLower === "shift");
+        const isMacScreenshot =
+          e.metaKey &&
+          e.shiftKey &&
+          (keyLower === "3" || keyLower === "4" || keyLower === "5" || keyLower === "6" || e.code?.includes("Digit"));
+
+        if (isPrintScreen || isWinSnip || isMacScreenshot) {
+          return "Terdeteksi percobaan screenshot / tangkap layar";
+        }
         if (
-          e.key === "PrintScreen" || 
-          e.code === "PrintScreen" ||
-          (e.ctrlKey && (e.key === "p" || e.key === "s" || e.key === "c")) ||
-          (e.metaKey && e.shiftKey && (e.key === "3" || e.key === "4" || e.key === "5" || e.key === "s" || e.key === "S" || e.code?.includes("Digit")))
+          e.key === "F12" ||
+          ((e.ctrlKey || e.metaKey) && ["p", "s", "u"].includes(keyLower)) ||
+          ((e.ctrlKey || e.metaKey) && e.shiftKey && ["i", "j", "c"].includes(keyLower))
         ) {
+          return "Terdeteksi percobaan cetak / simpan / inspeksi soal";
+        }
+        const tagName = ((e.target as HTMLElement)?.tagName || "").toLowerCase();
+        const isTypingField = tagName === "input" || tagName === "textarea";
+        if (!isTypingField && (e.ctrlKey || e.metaKey) && ["c", "x", "a"].includes(keyLower)) {
+          return "Terdeteksi percobaan menyalin teks soal";
+        }
+        return null;
+      };
+
+      const handleKeyDown = (e: KeyboardEvent) => {
+        const violationReason = checkScreenshotOrDevToolsEvent(e);
+        if (violationReason) {
           e.preventDefault();
-          triggerViolation();
+          e.stopPropagation();
+          triggerViolation(violationReason, true);
         }
       };
 
-      // Blokir tombol navigasi kembali / hardware back gesture
+      // PrintScreen di Windows sering hanya memicu keyup (keydown dicegat OS)
+      const handleKeyUp = (e: KeyboardEvent) => {
+        if (e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44) {
+          e.preventDefault();
+          triggerViolation("Terdeteksi percobaan screenshot / PrintScreen", true);
+        }
+      };
+
+      const handleBeforePrint = () => {
+        triggerViolation("Terdeteksi percobaan mencetak / menyimpan PDF soal", true);
+      };
+
+      const handleContextMenu = (e: MouseEvent) => {
+        e.preventDefault();
+      };
+
+      const handleCopyOrCut = (e: ClipboardEvent) => {
+        const tagName = ((e.target as HTMLElement)?.tagName || "").toLowerCase();
+        if (tagName === "input" || tagName === "textarea") return;
+        e.preventDefault();
+        triggerViolation("Terdeteksi percobaan menyalin teks soal", false);
+      };
+
+      const handleDragStart = (e: DragEvent) => {
+        e.preventDefault();
+      };
+
       window.addEventListener("popstate", handlePopState);
-      
-      // Blokir minimizing / perpindahan tab browser / tombol Home
       document.addEventListener("visibilitychange", handleVisibilityChange);
-      
-      // Deteksi keluar layar penuh
       document.addEventListener("fullscreenchange", handleFullscreenChange);
       document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
       document.addEventListener("mozfullscreenchange", handleFullscreenChange);
       document.addEventListener("MSFullscreenChange", handleFullscreenChange);
-      
-      // Blokir aktivitas overview screen (Recent Apps), split screen, panel notifikasi ditarik ke bawah
       window.addEventListener("blur", handleBlur);
-      
-      // Deteksi keluar instan
+      window.addEventListener("focus", handleFocus);
       window.addEventListener("pagehide", handlePageHide);
-      
-      // Cegah reload refresh manual atau menutup halaman browser
       window.addEventListener("beforeunload", handleBeforeUnload);
+      window.addEventListener("beforeprint", handleBeforePrint);
+      window.addEventListener("keydown", handleKeyDown, true);
+      window.addEventListener("keyup", handleKeyUp, true);
+      window.addEventListener("contextmenu", handleContextMenu);
+      window.addEventListener("copy", handleCopyOrCut);
+      window.addEventListener("cut", handleCopyOrCut);
+      window.addEventListener("dragstart", handleDragStart);
 
-      window.addEventListener("keydown", handleKeyDown);
-      window.addEventListener("contextmenu", (e) => e.preventDefault());
-      window.addEventListener("copy", (e) => { e.preventDefault(); triggerViolation(); });
-      
       return () => {
+        document.body.classList.remove("cbt-exam-active");
+        if (blurViolationTimeout) clearTimeout(blurViolationTimeout);
+        if (screenshotShieldTimeoutRef.current) {
+          clearTimeout(screenshotShieldTimeoutRef.current);
+          screenshotShieldTimeoutRef.current = null;
+        }
+        setIsScreenCaptureShielded(false);
         window.removeEventListener("popstate", handlePopState);
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         document.removeEventListener("fullscreenchange", handleFullscreenChange);
@@ -2848,11 +3129,22 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         document.removeEventListener("mozfullscreenchange", handleFullscreenChange);
         document.removeEventListener("MSFullscreenChange", handleFullscreenChange);
         window.removeEventListener("blur", handleBlur);
+        window.removeEventListener("focus", handleFocus);
         window.removeEventListener("pagehide", handlePageHide);
         window.removeEventListener("beforeunload", handleBeforeUnload);
-        window.removeEventListener("keydown", handleKeyDown);
+        window.removeEventListener("beforeprint", handleBeforePrint);
+        window.removeEventListener("keydown", handleKeyDown, true);
+        window.removeEventListener("keyup", handleKeyUp, true);
+        window.removeEventListener("contextmenu", handleContextMenu);
+        window.removeEventListener("copy", handleCopyOrCut);
+        window.removeEventListener("cut", handleCopyOrCut);
+        window.removeEventListener("dragstart", handleDragStart);
         stopSiren();
       };
+    } else {
+      document.body.classList.remove("cbt-exam-active");
+      setIsScreenCaptureShielded(false);
+      setIsViolationSirening(false);
     }
   }, [activeExam, examResult]);
 
@@ -3161,6 +3453,278 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     return EMPTY_ARRAY;
   }, [realtimeFinalGrades, rawFinalGradesList, currentNisn]);
 
+  const reconcileResetSessionsFromCloud = async (targetNisn: string) => {
+    if (!targetNisn || !isOnline) return;
+    try {
+      const snap = await getDocs(query(collection(db, "exam_sessions"), where("nisn", "==", targetNisn)));
+      if (snap.empty) return;
+
+      const resetExamTsMap = new Map<string, number>();
+      snap.forEach((d: any) => {
+        const s = typeof d.data === "function" ? d.data() : d.data;
+        if (s?.examId && s?.status === "reset") {
+          const ts = toExamTimeMs(s.resetAt || s.lastActiveAt);
+          const prev = resetExamTsMap.get(String(s.examId)) || 0;
+          if (ts >= prev) resetExamTsMap.set(String(s.examId), ts);
+        }
+      });
+
+      if (resetExamTsMap.size === 0) return;
+
+      // Remove stale local history entries older than teacher reset
+      const historyKey = `ujian_history_${targetNisn}`;
+      let changedHistory = false;
+      try {
+        const currHist = JSON.parse(localStorage.getItem(historyKey) || "[]");
+        if (Array.isArray(currHist) && currHist.length > 0) {
+          const filteredHist = currHist.filter((h: any) => {
+            const exId = String(h?.examId || "");
+            const resetTs = resetExamTsMap.get(exId);
+            if (!resetTs) return true;
+            const subTs = toExamTimeMs(h.submittedAt || h.gradedAt);
+            if (subTs <= resetTs) {
+              changedHistory = true;
+              return false;
+            }
+            return true;
+          });
+          if (changedHistory) {
+            localStorage.setItem(historyKey, JSON.stringify(filteredHist));
+            setExamHistoryList(filteredHist);
+          }
+        }
+      } catch (_) {}
+
+      // Remove stale pending sync entries older than teacher reset
+      const syncKey = `pending_exam_sync_${targetNisn}`;
+      try {
+        const currSync = JSON.parse(localStorage.getItem(syncKey) || "[]");
+        if (Array.isArray(currSync) && currSync.length > 0) {
+          const filteredSync = currSync.filter((p: any) => {
+            const exId = String(p?.examId || p?.assignmentId || "");
+            const resetTs = resetExamTsMap.get(exId);
+            if (!resetTs) return true;
+            return toExamTimeMs(p.submittedAt || p.gradedAt || p.updatedAt) > resetTs;
+          });
+          if (filteredSync.length !== currSync.length) {
+            localStorage.setItem(syncKey, JSON.stringify(filteredSync));
+          }
+        }
+      } catch (_) {}
+
+      // Remove stale saved in-progress state if exam was reset after it started
+      const saved = getSafeExamState(targetNisn);
+      if (saved?.activeExam?.id) {
+        const resetTs = resetExamTsMap.get(String(saved.activeExam.id));
+        const savedStartTs = toExamTimeMs(saved.startedAt);
+        if (resetTs && (savedStartTs === 0 || savedStartTs <= resetTs)) {
+          removeSafeExamState(targetNisn);
+        }
+      }
+    } catch (err) {
+      console.warn("Gagal memeriksa status reset ujian dari cloud:", err);
+    }
+  };
+
+  useEffect(() => {
+    if (student?.nisn && isOnline) {
+      void reconcileResetSessionsFromCloud(student.nisn);
+    }
+  }, [student?.nisn, isOnline]);
+
+  // Cross-tab & multi-device protection: if exam is finished in another tab/device while open here, lock/sync immediately
+  useEffect(() => {
+    if (!student?.nisn || !activeExam?.id || examResult) return;
+
+    const currentExamId = String(activeExam.id);
+    const attemptStartMs = toExamTimeMs(examStartedAtRef.current);
+
+    const finalizeFromExternalCompletion = (entry: any) => {
+      if (examFinishedRef.current) return;
+      examFinishedRef.current = true;
+      removeSafeExamState(student.nisn);
+
+      const finalScore = Number(entry?.score ?? entry?.nilai ?? 0);
+      const totalQ = Math.max(1, (activeExam.questions || []).length);
+      const kkmVal = Number(activeExam.kkm ?? entry?.kkm ?? 75);
+      const externalResult = {
+        examId: currentExamId,
+        examTitle: entry?.examTitle || entry?.title || activeExam.title || "Ujian CBT",
+        subject: entry?.subject || activeExam.subject || "Informatika",
+        bab: entry?.bab || activeExam.bab || "",
+        correctCount: entry?.correctCount ?? 0,
+        totalQuestions: entry?.totalQuestions ?? totalQ,
+        score: finalScore,
+        kkm: kkmVal,
+        passed: finalScore >= kkmVal,
+        needsManualGrading: Boolean(entry?.needsManualGrading),
+        submittedAt: entry?.submittedAt || entry?.gradedAt || new Date().toISOString(),
+        wasTimeOut: Boolean(entry?.wasTimeOut),
+        violationCount: Number(entry?.violationCount ?? examViolationCount ?? 0),
+        gradedAt: entry?.gradedAt || entry?.submittedAt || new Date().toISOString(),
+        nilai: finalScore,
+      };
+      setExamResult(externalResult);
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === `ujian_history_${student.nisn}` && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setExamHistoryList(parsed);
+            const matched = parsed.find((h: any) => String(h.examId) === currentExamId);
+            const subMs = toExamTimeMs(matched?.submittedAt || matched?.gradedAt);
+            if (matched && (attemptStartMs === 0 || subMs >= attemptStartMs - 2000)) {
+              finalizeFromExternalCompletion(matched);
+            }
+          }
+        } catch (_) {}
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+
+    // Also watch cloud finalGradesList arriving via SWR/realtime listener while active
+    const cloudFinishedMatch = finalGradesList.find((f: any) => {
+      if (!isCompletedExamGradeForStudent(f, currentExamId, student.nisn)) return false;
+      const gradeMs = toExamTimeMs(f.submittedAt || f.gradedAt || f.updatedAt);
+      return attemptStartMs > 0 && gradeMs >= attemptStartMs - 2000;
+    });
+    if (cloudFinishedMatch) {
+      finalizeFromExternalCompletion(cloudFinishedMatch);
+    }
+
+    return () => {
+      window.removeEventListener("storage", handleStorageChange);
+    };
+  }, [student?.nisn, activeExam?.id, examResult, finalGradesList]);
+
+  // Self-heal: if student already has finished exam scores in local ujian_history_<nisn> (visible on their Ujian Online dashboard)
+  // that are missing from cloud rawFinalGradesList, automatically push them to final_grades AND exam_sessions (status: "selesai")
+  useEffect(() => {
+    if (!isOnline || !student?.nisn || !Array.isArray(examHistoryList) || examHistoryList.length === 0) return;
+    if (!Array.isArray(rawFinalGradesList)) return;
+
+    const savedInProgressId = getSafeExamState(student.nisn)?.activeExam?.id;
+    const missingFromCloud = examHistoryList.filter((h: any) => {
+      if (!h?.examId) return false;
+      const targetExId = String(h.examId);
+      // Never auto-reconcile an exam currently active or saved in-progress on screen
+      if (activeExam?.id === targetExId || savedInProgressId === targetExId) return false;
+      if (!hasValidExamScoreVal(h.score ?? h.nilai)) return false;
+      if (reconciledHistoryIdsRef.current.has(targetExId)) return false;
+
+      const cloudMatch = rawFinalGradesList.find((g: any) =>
+        isCompletedExamGradeForStudent(g, targetExId, student.nisn)
+      );
+      return !cloudMatch;
+    });
+
+    if (missingFromCloud.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      let removedAnyStale = false;
+      for (const h of missingFromCloud) {
+        if (cancelled) break;
+        const targetExamId = String(h.examId);
+        reconciledHistoryIdsRef.current.add(targetExamId);
+        const docId = `${targetExamId}_${student.nisn}`;
+
+        // Verify cloud exam_sessions first: if teacher reset this exam or student is currently taking it, purge local history instead of resurrecting!
+        try {
+          const sessSnap = await getDoc(doc(db, "exam_sessions", docId));
+          if (sessSnap.exists()) {
+            const sessData = sessSnap.data();
+            const resetTs = toExamTimeMs(sessData?.resetAt || sessData?.lastActiveAt);
+            const histTs = toExamTimeMs(h.submittedAt || h.gradedAt);
+            if (
+              sessData?.status === "reset" && (histTs === 0 || resetTs >= histTs) ||
+              sessData?.status === "mengerjakan"
+            ) {
+              try {
+                const historyKey = `ujian_history_${student.nisn}`;
+                const currHist = JSON.parse(localStorage.getItem(historyKey) || "[]");
+                if (Array.isArray(currHist)) {
+                  const nextHist = currHist.filter((item: any) => String(item.examId) !== targetExamId);
+                  localStorage.setItem(historyKey, JSON.stringify(nextHist));
+                  removedAnyStale = true;
+                }
+                const syncKey = `pending_exam_sync_${student.nisn}`;
+                const currSync = JSON.parse(localStorage.getItem(syncKey) || "[]");
+                if (Array.isArray(currSync)) {
+                  localStorage.setItem(
+                    syncKey,
+                    JSON.stringify(currSync.filter((item: any) => String(item.examId || item.assignmentId) !== targetExamId))
+                  );
+                }
+              } catch (_) {}
+              continue;
+            }
+          }
+        } catch (_) {}
+
+        const numericScore = Number(h.score ?? h.nilai);
+        const nowIso = new Date().toISOString();
+        const gradePayload = {
+          ...h,
+          id: docId,
+          examId: targetExamId,
+          assignmentId: targetExamId,
+          title: h.examTitle || h.title || "",
+          examTitle: h.examTitle || h.title || "",
+          nisn: student.nisn,
+          studentName: student.displayName || student.studentName || student.name || "",
+          kelas: student.kelas || "",
+          nilai: numericScore,
+          score: numericScore,
+          violationCount: Number(h.violationCount || 0) || 0,
+          submittedAt: h.submittedAt || nowIso,
+          gradedAt: h.gradedAt || h.submittedAt || nowIso,
+          status: "selesai",
+          type: "exam",
+          updatedAt: nowIso,
+        };
+
+        try {
+          await saveFinalGrade(gradePayload);
+          await setDoc(
+            doc(db, "exam_sessions", docId),
+            {
+              examId: targetExamId,
+              examTitle: gradePayload.examTitle,
+              nisn: student.nisn,
+              studentName: gradePayload.studentName,
+              kelas: gradePayload.kelas,
+              status: "selesai",
+              violationCount: gradePayload.violationCount,
+              score: numericScore,
+              finishedAt: h.submittedAt || nowIso,
+              lastActiveAt: nowIso,
+            },
+            { merge: true }
+          );
+        } catch (err) {
+          console.warn("Gagal merekonsiliasi riwayat ujian ke cloud:", err);
+        }
+      }
+      if (!cancelled && removedAnyStale) {
+        try {
+          const refreshed = JSON.parse(localStorage.getItem(`ujian_history_${student.nisn}`) || "[]");
+          setExamHistoryList(Array.isArray(refreshed) ? refreshed : []);
+        } catch (_) {}
+      }
+      if (!cancelled && typeof mutateFinalGrades === "function") {
+        mutateFinalGrades();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOnline, student?.nisn, student?.kelas, examHistoryList, rawFinalGradesList, activeExam?.id]);
+
   const fetchAllStudents = async () => {
     if (!student?.kelas) return [];
     const cacheKey = `firas_cache_all_students_${student.kelas}`;
@@ -3277,6 +3841,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         clearStudentCaches(student.nisn, student?.kelas);
       }
       const syncTasks: Promise<any>[] = [fetchLatestTeacherProfileSettings()];
+      if (student?.nisn) syncTasks.push(reconcileResetSessionsFromCloud(student.nisn));
       if (typeof mutateAnnouncements === "function") syncTasks.push(Promise.resolve(mutateAnnouncements()));
       if (typeof mutateAssignments === "function") syncTasks.push(Promise.resolve(mutateAssignments()));
       if (typeof mutateSubmissions === "function") syncTasks.push(Promise.resolve(mutateSubmissions()));
@@ -3477,8 +4042,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     });
 
     examsList.forEach((exam: any) => {
-      const fGrade = studentFinalGrades.find((f: any) => (f.assignmentId === exam.id || f.examId === exam.id || (f.id && f.id.startsWith(exam.id))));
-      if (fGrade && fGrade.nilai !== undefined && fGrade.nilai !== null && fGrade.nilai !== "") {
+      const fGrade = studentFinalGrades.find((f: any) => (f.assignmentId === exam.id || f.examId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))));
+      if (fGrade && !isIncompleteViolationStub(fGrade) && hasValidExamScoreVal(fGrade.nilai ?? fGrade.score)) {
         const isManual = Boolean(exam.isManualColumn || fGrade?.isManualColumn || exam.isManual);
         const startDateRaw = exam.startDate || exam.publishedAt || exam.createdAt || fGrade?.startDate || fGrade?.publishedAt;
         const formattedStartDate = startDateRaw ? new Date(startDateRaw).toLocaleDateString("id-ID", {
@@ -3493,7 +4058,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           bab: exam.bab || fGrade.bab || "Informatika",
           subtitle: "Ujian / Evaluasi",
           type: "Ujian",
-          nilai: Number(fGrade.nilai),
+          nilai: Number(fGrade.nilai ?? fGrade.score),
           isManual,
           tanggalMulai: formattedStartDate,
           tanggal: formattedStartDate,
@@ -3505,7 +4070,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     studentFinalGrades.forEach((fGrade: any) => {
       const targetId = fGrade.assignmentId || fGrade.examId || fGrade.id;
       const alreadyInList = list.some(item => item.id === targetId || item.id === fGrade.assignmentId || item.id === fGrade.id);
-      if (!alreadyInList && fGrade.nilai !== undefined && fGrade.nilai !== null && fGrade.nilai !== "") {
+      if (!alreadyInList && !isIncompleteViolationStub(fGrade) && hasValidExamScoreVal(fGrade.nilai ?? fGrade.score)) {
         const isExam = (targetId && (targetId.startsWith("EXM-") || targetId.startsWith("ujian-") || fGrade.type === "CBT" || fGrade.type === "exam"));
         const asgMatch = assignmentsList.find(a => a.id === targetId || a.id === fGrade.assignmentId);
         const exmMatch = examsList.find(e => e.id === targetId || e.id === fGrade.assignmentId || e.id === fGrade.examId);
@@ -5026,13 +5591,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     // Strictly non-confidential exam info only (NEVER include token, questions, or answer keys)
     const activeExams = (examsList || []).slice(0, 6).map((exam: any) => {
-      const finalGrade = finalGradesList.find(
-        (f: any) =>
-          (f.assignmentId === exam.id || f.examId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))) &&
-          (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
-          ((f.nilai !== undefined && f.nilai !== null && f.nilai !== "") ||
-            (f.score !== undefined && f.score !== null && f.score !== "") ||
-            f.status === "selesai")
+      const finalGrade = finalGradesList.find((f: any) =>
+        isCompletedExamGradeForStudent(f, exam.id, student?.nisn)
       );
       const histEntry = examHistoryList.find((h: any) => h.examId === exam.id);
       return {
@@ -5867,16 +6427,24 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                 )}
               </div>
 
-              <div className="mt-12">
+              <div className="mt-12 space-y-3">
+                {isSavingExamResult && (
+                  <p className="text-xs font-bold text-amber-600 animate-pulse">
+                    Menyinkronkan nilai &amp; status selesai ke server guru...
+                  </p>
+                )}
                 <button
+                  disabled={isSavingExamResult}
                   onClick={() => {
                     setExamResult(null);
                     setActiveExam(null);
                     setActiveMenu("ujian-online");
                   }}
-                  className="px-8 py-4 bg-[#85cc00] shadow-md shadow-[#85cc00]/20 hover:bg-[#72b000] active:scale-95 text-black font-black uppercase text-xs tracking-widest rounded-xl transition-all border border-slate-900/10"
+                  className={`px-8 py-4 bg-[#85cc00] shadow-md shadow-[#85cc00]/20 hover:bg-[#72b000] active:scale-95 text-black font-black uppercase text-xs tracking-widest rounded-xl transition-all border border-slate-900/10 ${
+                    isSavingExamResult ? "opacity-60 cursor-wait" : ""
+                  }`}
                 >
-                  Kembali ke Dashboard
+                  {isSavingExamResult ? "Menyimpan Nilai..." : "Kembali ke Dashboard"}
                 </button>
               </div>
             </div>
@@ -8103,16 +8671,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                               {/* Mobile View */}
                               <div className="md:hidden space-y-4">
                                 {examsList.map((exam: any, idx: number) => {
-                                  const finalGrade = finalGradesList.find(f =>
-                                    (f.assignmentId === exam.id || f.examId === exam.id || f.alignmentId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))) &&
-                                    (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
-                                    ((f.nilai !== undefined && f.nilai !== null && f.nilai !== "") || (f.score !== undefined && f.score !== null && f.score !== "") || f.status === "selesai")
+                                  const finalGrade = finalGradesList.find((f) =>
+                                    isCompletedExamGradeForStudent(f, exam.id, student?.nisn)
                                   );
                                   const histEntry = examHistoryList.find((h: any) => h.examId === exam.id);
                                   const isFinished = !!finalGrade || !!histEntry;
                                   const violations = finalGrade?.violationCount ?? finalGrade?.violationsCount ?? histEntry?.violationCount ?? 0;
                                   const rawNilai = finalGrade?.nilai ?? finalGrade?.score ?? histEntry?.score ?? histEntry?.nilai;
-                                  const nilai = rawNilai !== undefined && rawNilai !== null && rawNilai !== "" ? rawNilai : "-";
+                                  const nilai = hasValidExamScoreVal(rawNilai) ? rawNilai : "-";
                                   
                                   const getIntegrityStatus = (v: number) => {
                                     if (v === 0) return { text: "Sangat Berintegritas", color: "text-emerald-700 font-extrabold" };
@@ -8169,11 +8735,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                           </button>
                                         ) : (
                                           <button 
-                                            onClick={() => {
-                                              setSelectedExamForToken(exam);
-                                              setTokenInput("");
-                                              setExamTokenError("");
-                                            }}
+                                            onClick={() => handleAttemptStartExam(exam)}
                                             className="w-full py-3 bg-slate-900 text-white font-black uppercase tracking-widest text-[11px] rounded-xl shadow-lg active:scale-95 transition-all"
                                           >
                                             Mulai Ujian Sekarang
@@ -8213,16 +8775,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                   </thead>
                                   <tbody>
                                     {examsList.map((exam: any, idx: number) => {
-                                      const finalGrade = finalGradesList.find(f =>
-                                        (f.assignmentId === exam.id || f.examId === exam.id || f.alignmentId === exam.id || (f.id && f.id.startsWith(`${exam.id}_`))) &&
-                                        (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
-                                        ((f.nilai !== undefined && f.nilai !== null && f.nilai !== "") || (f.score !== undefined && f.score !== null && f.score !== "") || f.status === "selesai")
+                                      const finalGrade = finalGradesList.find((f) =>
+                                        isCompletedExamGradeForStudent(f, exam.id, student?.nisn)
                                       );
                                       const histEntry = examHistoryList.find((h: any) => h.examId === exam.id);
                                       const isFinished = !!finalGrade || !!histEntry;
                                       const violations = finalGrade?.violationCount ?? finalGrade?.violationsCount ?? histEntry?.violationCount ?? 0;
                                       const rawNilai = finalGrade?.nilai ?? finalGrade?.score ?? histEntry?.score ?? histEntry?.nilai;
-                                      const nilai = rawNilai !== undefined && rawNilai !== null && rawNilai !== "" ? rawNilai : "-";
+                                      const nilai = hasValidExamScoreVal(rawNilai) ? rawNilai : "-";
                                       
                                       const getIntegrityStatus = (v: number) => {
                                         if (v === 0) return { text: "Sangat Berintegritas", color: "text-emerald-700 font-extrabold" };
@@ -8279,11 +8839,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                                               </button>
                                             ) : (
                                               <button 
-                                                onClick={() => {
-                                                  setSelectedExamForToken(exam);
-                                                  setTokenInput("");
-                                                  setExamTokenError("");
-                                                }}
+                                                onClick={() => handleAttemptStartExam(exam)}
                                                 className="px-4 py-2 bg-slate-900 text-white hover:bg-[#85cc00] hover:text-slate-900 font-black uppercase tracking-widest text-[10px] rounded-lg transition-all shadow-md active:scale-95 cursor-pointer"
                                               >
                                                 Mulai Ujian
@@ -8509,7 +9065,27 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
             </AnimatePresence>
         ) : (
             /* ACTIVE EXAM UI (CBT) */
-            <div className="fixed inset-0 z-[100] bg-slate-100 flex flex-col overflow-hidden select-none" onContextMenu={(e) => e.preventDefault()}>
+            <div
+              className="fixed inset-0 z-[100] bg-slate-100 flex flex-col overflow-hidden select-none cbt-protected-exam"
+              onContextMenu={(e) => e.preventDefault()}
+              onDragStart={(e) => e.preventDefault()}
+            >
+              {/* Dynamic Student Watermark Overlay (deters physical camera photos & third-party screen captures) */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none select-none fixed inset-0 z-[105] overflow-hidden opacity-[0.045]"
+              >
+                <div className="w-[180%] h-[180%] -translate-x-[20%] -translate-y-[20%] -rotate-24 grid grid-cols-3 gap-12 items-center justify-items-center">
+                  {Array.from({ length: 18 }).map((_, wmIdx) => (
+                    <span
+                      key={`wm-${wmIdx}`}
+                      className="text-slate-900 font-display font-black text-xs sm:text-sm uppercase tracking-[0.2em] whitespace-nowrap"
+                    >
+                      {(student?.displayName || student?.studentName || student?.name || "SISWA").toUpperCase()} • {student?.nisn || "-"} • {student?.kelas || "-"}
+                    </span>
+                  ))}
+                </div>
+              </div>
               {/* CBT Header */}
               <header className="h-16 bg-gradient-to-r from-white via-white to-emerald-50 text-slate-800 border-b border-emerald-100 px-4 md:px-6 flex items-center justify-between shrink-0 shadow-sm relative z-20">
                 {/* Left: No Urut Soal Toggle Button */}
@@ -8785,7 +9361,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
                         {/* Question Text Box with justify alignment (rata kiri rata kanan) */}
                         <div className="py-2 md:py-4 space-y-4">
-                          <p className={`font-sans leading-[1.8] text-slate-800 tracking-normal text-justify whitespace-pre-line select-text hyphens-auto ${
+                          <p className={`font-sans leading-[1.8] text-slate-800 tracking-normal text-justify whitespace-pre-line select-none hyphens-auto ${
                             examFontSize === "normal" ? "text-base md:text-lg" :
                             examFontSize === "large" ? "text-lg md:text-xl" : "text-xl md:text-2xl"
                           }`}>
@@ -8797,12 +9373,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                               <img
                                 src={getDriveImageUrl(activeExam.questions[currentQuestionIdx].imageUrl)}
                                 alt={`Gambar Soal ${currentQuestionIdx + 1}`}
+                                draggable={false}
+                                onContextMenu={(e) => e.preventDefault()}
                                 onClick={() =>
                                   setZoomedQuestionImg(
                                     getDriveImageUrl(activeExam.questions[currentQuestionIdx].imageUrl)
                                   )
                                 }
-                                className="max-h-72 w-auto rounded-xl object-contain cursor-zoom-in border border-slate-200 bg-white"
+                                className="max-h-72 w-auto rounded-xl object-contain cursor-zoom-in border border-slate-200 bg-white select-none"
                               />
                               <button
                                 type="button"
@@ -10719,6 +11297,26 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         )}
       </AnimatePresence>
 
+      {/* Privacy Blackout Shield (instantly hides exam content on blur / snipping overlay / capture attempt) */}
+      <AnimatePresence>
+        {activeExam && !examResult && isScreenCaptureShielded && !isViolationSirening && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[190] flex flex-col items-center justify-center p-8 bg-black text-center select-none pointer-events-auto"
+          >
+            <AlertOctagon className="w-16 h-16 text-amber-400 mb-4" />
+            <h2 className="text-2xl md:text-4xl font-display font-black text-white uppercase tracking-wider mb-2">
+              Layar Ujian Dilindungi
+            </h2>
+            <p className="text-sm md:text-base font-bold text-slate-300 max-w-lg">
+              Konten soal disembunyikan sementara karena fokus layar keluar atau terdeteksi upaya tangkap layar. Kembalikan fokus ke jendela ujian untuk melanjutkan.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Violation Overlay */}
       <AnimatePresence>
         {isViolationSirening && (
@@ -10726,7 +11324,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-8 bg-black pointer-events-auto"
+            className="fixed inset-0 z-[200] flex flex-col items-center justify-center p-8 bg-black pointer-events-auto select-none"
           >
              <motion.div 
                animate={{ scale: [1, 1.1, 1], opacity: [0.8, 1, 0.8] }}
@@ -10740,7 +11338,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   Peringatan!
                 </h1>
                 <p className="text-xl md:text-3xl font-black text-white uppercase tracking-widest max-w-3xl leading-snug">
-                  Aktivitas mencurigakan terdeteksi.<br/>Tindakan ini direkam oleh sistem pengawas aplikasi ujian.
+                  {violationWarningReason || "Aktivitas mencurigakan terdeteksi."}<br/>Tindakan ini direkam sebagai pelanggaran oleh sistem pengawas.
                 </p>
              </motion.div>
           </motion.div>
@@ -10876,10 +11474,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   </div>
                   <div className="space-y-1">
                     <h5 className="font-display font-black text-lg sm:text-xl text-slate-900 px-2 leading-tight">
-                      Apakah Anda benar-benar mau berbuat curang?
+                      Keluar dari Lembar Ujian Sekarang?
                     </h5>
                     <p className="text-[10px] sm:text-xs font-bold text-rose-600 uppercase tracking-widest">
-                      PERINGATAN KERAS: UPAYA MENINGGALKAN UJIAN
+                      PERINGATAN: NAVIGASI / TOMBOL KEMBALI TERDETEKSI
                     </p>
                   </div>
                 </div>
@@ -10892,14 +11490,13 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   </div>
                   
                   <p className="text-[11px] sm:text-[12px] font-semibold text-slate-700 leading-relaxed">
-                    Sistem mendeteksi upaya penekanan menu atau keluar dari navigasi lembar ujian yang sedang aktif. Tindakan meninggalkan halaman secara sengaja dikategorikan sebagai <strong className="text-rose-600 font-black">Tindakan Pelanggaran (Kecurangan)</strong>.
+                    Sistem mendeteksi tombol kembali / keluar dari lembar ujian yang sedang aktif. Jika Anda belum selesai mengerjakan, pilih <strong className="text-emerald-700 font-black">Kembali Mengerjakan Ujian</strong> agar jawaban Anda tetap aman.
                   </p>
 
                   <div className="text-[10px] sm:text-[11px] text-rose-900 bg-white border border-rose-100 p-3 sm:p-4 rounded-xl leading-relaxed font-mono">
-                    <strong className="text-slate-800 font-black">KONSEKUENSI NILAI & CATATAN:</strong><br/>
-                    ✓ Setiap pelanggaran terekam di dashboard Guru.<br/>
-                    ✓ Jika klik <strong className="text-rose-600">YA</strong>, lembar ujian akan langsung dikirim & ditutup paksa!<br/>
-                    ✓ Nilai pengerjaan Anda saat ini akan dibatalkan/didiskualifikasi.
+                    <strong className="text-slate-800 font-black">PERHATIAN SEBELUM MEMILIH:</strong><br/>
+                    ✓ Memilih akhiri ujian akan langsung menghitung & mengirim nilai dari soal yang baru terjawab saat ini.<br/>
+                    ✓ Ujian langsung terkunci menjadi berstatus <strong className="text-rose-600">SELESAI</strong> dan tercatat pelanggaran navigasi.
                   </div>
                 </div>
 
@@ -10907,17 +11504,20 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                 <div className="flex flex-col gap-2.5 pt-1">
                   <button
                     type="button"
-                    onClick={() => setShowExitWarningModal(false)}
+                    onClick={() => {
+                      setPendingNavAction(null);
+                      setShowExitWarningModal(false);
+                    }}
                     className="w-full h-12 sm:h-14 bg-[#85cc00] hover:brightness-110 active:scale-95 text-slate-950 font-extrabold text-[11px] sm:text-xs uppercase tracking-widest rounded-xl sm:rounded-2xl shadow-lg shadow-[#85cc00]/20 transition-all text-center flex items-center justify-center cursor-pointer"
                   >
-                    Tidak, Saya Tidak Akan Curang
+                    Kembali Mengerjakan Ujian
                   </button>
                   <button
                     type="button"
                     onClick={confirmCheatExit}
                     className="w-full h-12 sm:h-14 bg-white hover:bg-rose-50 text-rose-600 hover:text-rose-700 font-extrabold text-[11px] sm:text-xs uppercase tracking-widest rounded-xl sm:rounded-2xl border-2 border-slate-200 hover:border-rose-200 transition-all text-center flex items-center justify-center cursor-pointer"
                   >
-                    Ya, Saya Akan Curang
+                    Akhiri & Kumpulkan Ujian Sekarang
                   </button>
                 </div>
               </div>
@@ -12181,8 +12781,10 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           <img
             src={zoomedQuestionImg}
             alt="Pratinjau Gambar Soal Diperbesar"
+            draggable={false}
+            onContextMenu={(e) => e.preventDefault()}
             onClick={(e) => e.stopPropagation()}
-            className="max-w-full max-h-[88vh] rounded-2xl object-contain shadow-2xl border border-white/20 bg-white"
+            className="max-w-full max-h-[88vh] rounded-2xl object-contain shadow-2xl border border-white/20 bg-white select-none"
           />
         </div>
       )}

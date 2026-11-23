@@ -777,43 +777,60 @@ export default function LoginPage() {
                         </div>
                       </div>
                     ) : (
-                      <div className="space-y-6 animate-in fade-in duration-300">
-                        <div className="bg-gradient-to-b from-[#85cc00]/10 via-[#85cc00]/5 to-transparent rounded-3xl p-6 border border-[#85cc00]/30 text-center relative">
-                          <div className="w-12 h-12 bg-[#85cc00] text-slate-950 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-md shadow-[#85cc00]/25">
-                            <CheckCircle2 className="w-6 h-6 stroke-[2.5]" />
+                      <div className="space-y-5 animate-in fade-in duration-300 text-center">
+                        <div className="bg-slate-50/80 rounded-3xl px-6 py-7 border border-slate-200/80 text-center">
+                          {/* Verified Identity Icon */}
+                          <div className="w-12 h-12 rounded-2xl bg-[#85cc00]/15 border border-[#85cc00]/30 text-[#5c8f00] flex items-center justify-center mx-auto mb-3.5">
+                            <CheckCircle2 className="w-6 h-6 stroke-[2.2]" />
                           </div>
-                          <span className="text-[10px] font-bold text-[#649c00] uppercase tracking-widest block mb-1">
-                            Identitas Terverifikasi
-                          </span>
-                          <h3 className="text-xl font-display font-black text-slate-900 mb-4">
-                            {student.displayName}
+
+                          <p className="text-xs font-semibold text-[#5c8f00] tracking-wide mb-1 text-center">
+                            Identitas Siswa Terverifikasi
+                          </p>
+                          <h3 className="text-xl sm:text-2xl font-display font-bold text-slate-900 tracking-tight leading-snug text-balance text-center">
+                            {student.displayName || student.studentName || student.name || "Siswa"}
                           </h3>
-                          
-                          <div className="grid grid-cols-2 gap-2.5 text-left">
-                            <div className="bg-white/90 p-3 rounded-2xl border border-slate-200/80 shadow-2xs">
-                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">NIS</span>
-                              <span className="text-xs font-extrabold text-slate-800">{student.nisn}</span>
+
+                          {/* Hairline-divided centered NIS & Kelas confirmation */}
+                          <div className="mt-5 pt-5 border-t border-slate-200/80 grid grid-cols-2 divide-x divide-slate-200/80 items-center">
+                            <div className="px-3 flex flex-col items-center justify-center text-center">
+                              <span className="text-[11px] font-medium text-slate-500 mb-1">
+                                NIS / NISN
+                              </span>
+                              <span className="text-sm sm:text-base font-mono font-bold text-slate-900 tabular-nums tracking-wide break-all">
+                                {student.nisn || student.nis || "-"}
+                              </span>
                             </div>
-                            <div className="bg-white/90 p-3 rounded-2xl border border-slate-200/80 shadow-2xs">
-                              <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider block">Kelas</span>
-                              <span className="text-xs font-extrabold text-slate-800">{student.kelas}</span>
+                            <div className="px-3 flex flex-col items-center justify-center text-center">
+                              <span className="text-[11px] font-medium text-slate-500 mb-1">
+                                Kelas
+                              </span>
+                              <span className="text-sm sm:text-base font-display font-bold text-slate-900">
+                                {student.kelas || student.classId || "-"}
+                              </span>
                             </div>
                           </div>
                         </div>
 
-                        <div className="space-y-2.5">
+                        <p className="text-xs text-slate-500 font-medium text-center px-2 leading-relaxed">
+                          Pastikan nama, NIS, dan kelas di atas sudah sesuai dengan data Anda sebelum melanjutkan.
+                        </p>
+
+                        <div className="space-y-2.5 pt-0.5">
                           <button
+                            type="button"
                             onClick={() => handleStudentLogin()}
-                            className="w-full py-4 bg-gradient-to-r from-[#85cc00] via-[#85cc00] to-[#76b900] text-slate-950 font-black text-xs sm:text-sm uppercase tracking-wider rounded-2xl shadow-lg shadow-[#85cc00]/25 hover:shadow-xl hover:shadow-[#85cc00]/35 hover:brightness-105 active:scale-[0.98] transition-all flex items-center justify-center gap-2 cursor-pointer"
+                            className="w-full py-3.5 px-6 bg-gradient-to-r from-[#85cc00] to-[#76b900] text-slate-950 font-bold text-sm tracking-tight rounded-2xl shadow-lg shadow-[#85cc00]/20 hover:shadow-xl hover:shadow-[#85cc00]/30 hover:brightness-105 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 whitespace-nowrap cursor-pointer"
                           >
                             <span>Konfirmasi & Masuk</span>
-                            <ArrowRight className="w-4 h-4" />
+                            <ArrowRight className="w-4 h-4 shrink-0" />
                           </button>
                           <button
+                            type="button"
                             onClick={() => setStudent(null)}
-                            className="w-full py-2.5 text-xs font-bold text-slate-400 hover:text-slate-600 uppercase tracking-wider transition-colors cursor-pointer"
+                            className="w-full py-2.5 px-4 text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors cursor-pointer text-center"
                           >
-                            Bukan Akun Saya? Ganti Kode
+                            Bukan akun Anda? Ganti kode akses
                           </button>
                         </div>
                       </div>

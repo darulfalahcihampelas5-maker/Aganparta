@@ -10,9 +10,9 @@ import {
   RefreshCw,
   ArrowLeft,
 } from "lucide-react";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, getDocs as fsGetDocs, onSnapshot, query, where } from "firebase/firestore";
 import { db } from "../../lib/firebase";
-import { dbGetDocs, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../../lib/supabaseSync";
+import { dbGetDocs, isFirebaseQuotaExhausted, saveFinalGrade, setFirebaseQuotaExhausted } from "../../lib/supabaseSync";
 import { isClassMatch, isExamForClass, isSameNisn } from "../../lib/gradeUtils";
 
 interface LiveProctoringModalProps {
@@ -25,7 +25,109 @@ interface LiveProctoringModalProps {
   asPage?: boolean;
   examsList?: any[];
   onSelectExam?: (exam: any) => void;
+  onRefreshGrades?: () => void;
 }
+
+const hasNumericScoreVal = (val: any): boolean =>
+  val !== undefined && val !== null && val !== "" && !Number.isNaN(Number(val));
+
+const normalizeNisnKey = (val: any): string => {
+  const s = String(val || "").trim();
+  if (!s) return "";
+  return s.replace(/^0+/, "") || s;
+};
+
+const toTimeMs = (iso?: any): number => {
+  if (!iso) return 0;
+  if (typeof iso?.toDate === "function") return iso.toDate().getTime() || 0;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
+
+const isSessionCompleted = (s: any): boolean =>
+  Boolean(s && s.status !== "reset" && (s.status === "selesai" || Boolean(s.finishedAt)));
+
+const mergeSessionRecord = (existing: any, incoming: any): any => {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+
+  const exResetTs = existing.status === "reset" ? toTimeMs(existing.resetAt || existing.lastActiveAt) : 0;
+  const inResetTs = incoming.status === "reset" ? toTimeMs(incoming.resetAt || incoming.lastActiveAt) : 0;
+  if (incoming.status === "reset" && existing.status !== "reset") {
+    const exAttemptTs = toTimeMs(existing.finishedAt || existing.startedAt || existing.lastActiveAt);
+    if (inResetTs >= exAttemptTs) {
+      return { ...incoming };
+    }
+    return { ...existing };
+  }
+  if (existing.status === "reset" && incoming.status !== "reset") {
+    const inAttemptTs = toTimeMs(incoming.finishedAt || incoming.startedAt || incoming.lastActiveAt);
+    if (inAttemptTs > exResetTs) {
+      return { ...incoming };
+    }
+    return { ...existing };
+  }
+
+  const exDone = isSessionCompleted(existing);
+  const inDone = isSessionCompleted(incoming);
+
+  // Allow an explicit newer remedial attempt (`startedAt` strictly newer than previous `finishedAt`)
+  const exFinTs = toTimeMs(existing.finishedAt || existing.lastActiveAt);
+  const inStartTs = toTimeMs(incoming.startedAt);
+  const isNewRemedialRestart = exDone && !inDone && inStartTs > exFinTs + 2000;
+
+  if (exDone && !inDone && !isNewRemedialRestart) {
+    return {
+      ...incoming,
+      ...existing,
+      status: "selesai",
+      violationCount: Math.max(Number(existing.violationCount || 0), Number(incoming.violationCount || 0)),
+      answeredCount: Math.max(Number(existing.answeredCount || 0), Number(incoming.answeredCount || 0)),
+      score: hasNumericScoreVal(existing.score ?? existing.nilai)
+        ? (existing.score ?? existing.nilai)
+        : (incoming.score ?? incoming.nilai),
+      finishedAt: existing.finishedAt || incoming.finishedAt || existing.lastActiveAt,
+      lastActiveAt:
+        toTimeMs(incoming.lastActiveAt) > toTimeMs(existing.lastActiveAt)
+          ? incoming.lastActiveAt
+          : existing.lastActiveAt,
+    };
+  }
+
+  if (inDone && !exDone) {
+    return {
+      ...existing,
+      ...incoming,
+      status: "selesai",
+      violationCount: Math.max(Number(existing.violationCount || 0), Number(incoming.violationCount || 0)),
+      answeredCount: Math.max(Number(existing.answeredCount || 0), Number(incoming.answeredCount || 0)),
+      score: hasNumericScoreVal(incoming.score ?? incoming.nilai)
+        ? (incoming.score ?? incoming.nilai)
+        : (existing.score ?? existing.nilai),
+      finishedAt: incoming.finishedAt || existing.finishedAt || incoming.lastActiveAt,
+    };
+  }
+
+  const exTs = toTimeMs(existing.finishedAt || existing.lastActiveAt);
+  const inTs = toTimeMs(incoming.finishedAt || incoming.lastActiveAt);
+  const primary = inTs >= exTs ? incoming : existing;
+  const secondary = primary === incoming ? existing : incoming;
+
+  return {
+    ...secondary,
+    ...primary,
+    violationCount: Math.max(Number(existing.violationCount || 0), Number(incoming.violationCount || 0)),
+    answeredCount:
+      primary.status === "selesai" || secondary.status === "selesai"
+        ? Math.max(Number(existing.answeredCount || 0), Number(incoming.answeredCount || 0))
+        : Number(primary.answeredCount ?? secondary.answeredCount ?? 0),
+    score: hasNumericScoreVal(primary.score ?? primary.nilai)
+      ? (primary.score ?? primary.nilai)
+      : (secondary.score ?? secondary.nilai),
+    startedAt: primary.startedAt || secondary.startedAt,
+    durationUsedSeconds: primary.durationUsedSeconds ?? secondary.durationUsedSeconds,
+  };
+};
 
 function formatRelativeTime(isoString?: string): string {
   if (!isoString) return "-";
@@ -35,6 +137,22 @@ function formatRelativeTime(isoString?: string): string {
   const mins = Math.floor(diffSec / 60);
   if (mins < 60) return `${mins} mnt lalu`;
   return new Date(isoString).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatSolveDuration(totalSeconds?: number | null): string {
+  if (totalSeconds === undefined || totalSeconds === null || !Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    return "-";
+  }
+  const secs = Math.max(1, Math.round(totalSeconds));
+  if (secs < 60) return `${secs} detik`;
+  const mins = Math.floor(secs / 60);
+  const remSecs = secs % 60;
+  if (mins < 60) {
+    return remSecs > 0 ? `${mins} mnt ${remSecs} dtk` : `${mins} menit`;
+  }
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs} jam ${remMins} mnt` : `${hrs} jam`;
 }
 
 export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
@@ -47,6 +165,7 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
   asPage = false,
   examsList = [],
   onSelectExam,
+  onRefreshGrades,
 }) => {
   const [sessionsMap, setSessionsMap] = useState<Record<string, any>>({});
   const [selectedClass, setSelectedClass] = useState<string>("SEMUA_KELAS");
@@ -54,19 +173,63 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const loadFallbackSessions = async () => {
+  const mergeIntoSessionsMap = (incomingList: any[]) => {
+    if (!incomingList || incomingList.length === 0) return;
+    setSessionsMap((prev) => {
+      const next = { ...prev };
+      incomingList.forEach((data) => {
+        if (!data || data?.examId !== exam?.id || !data?.nisn) return;
+        const nKey = normalizeNisnKey(data.nisn);
+        if (!nKey) return;
+        next[nKey] = mergeSessionRecord(next[nKey], data);
+      });
+      return next;
+    });
+  };
+
+  const loadFallbackSessions = async (alsoRefreshGrades = false) => {
     if (!exam?.id) return;
     setIsRefreshing(true);
     try {
-      const snap = await dbGetDocs(collection(db, "exam_sessions"));
-      const map: Record<string, any> = {};
-      snap.forEach((d: any) => {
-        const data = typeof d.data === "function" ? d.data() : d;
-        if (data?.examId === exam.id && data?.nisn) {
-          map[String(data.nisn)] = data;
+      const collected: any[] = [];
+
+      // 1. Read from Supabase app_collections (via dbGetDocs)
+      try {
+        const snap = await dbGetDocs(collection(db, "exam_sessions"));
+        snap.forEach((d: any) => {
+          const data = typeof d.data === "function" ? d.data() : d;
+          if (data?.examId === exam.id && data?.nisn) {
+            collected.push(data);
+          }
+        });
+      } catch (sbErr) {
+        console.warn("Supabase exam_sessions poll warning:", sbErr);
+      }
+
+      // 2. Also read directly from Firestore exam_sessions and merge (so completed Firestore sessions never get masked by stale Supabase or vice versa)
+      if (!isFirebaseQuotaExhausted()) {
+        try {
+          const fsSnap = await fsGetDocs(
+            query(collection(db, "exam_sessions"), where("examId", "==", exam.id))
+          );
+          fsSnap.forEach((d) => {
+            const data = d.data();
+            if (data?.nisn) {
+              collected.push(data);
+            }
+          });
+        } catch (fsErr: any) {
+          const msg = String(fsErr?.message || fsErr || "").toLowerCase();
+          if (msg.includes("quota") || msg.includes("resource-exhausted")) {
+            setFirebaseQuotaExhausted(true);
+          }
         }
-      });
-      setSessionsMap((prev) => ({ ...prev, ...map }));
+      }
+
+      mergeIntoSessionsMap(collected);
+      if (alsoRefreshGrades && onRefreshGrades) {
+        onRefreshGrades();
+      }
     } catch (err) {
       console.warn("Gagal memuat sesi proctoring fallback:", err);
     } finally {
@@ -77,7 +240,8 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
   useEffect(() => {
     if (!isOpen || !exam?.id) return;
 
-    loadFallbackSessions();
+    setSessionsMap({});
+    loadFallbackSessions(true);
     if (isFirebaseQuotaExhausted()) return;
 
     let unsubscribe: (() => void) | undefined;
@@ -86,14 +250,14 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
       unsubscribe = onSnapshot(
         q,
         (snapshot) => {
-          const updated: Record<string, any> = {};
+          const updated: any[] = [];
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
             if (data?.nisn) {
-              updated[String(data.nisn)] = data;
+              updated.push(data);
             }
           });
-          setSessionsMap((prev) => ({ ...prev, ...updated }));
+          mergeIntoSessionsMap(updated);
         },
         (err) => {
           const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
@@ -107,12 +271,58 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
       console.warn("onSnapshot exam_sessions fallback:", err);
     }
 
-    const pollInterval = setInterval(loadFallbackSessions, 8000);
+    const pollInterval = setInterval(() => loadFallbackSessions(false), 8000);
     return () => {
       if (unsubscribe) unsubscribe();
       clearInterval(pollInterval);
     };
   }, [isOpen, exam?.id]);
+
+  // Self-heal: if Live Proctoring detects a completed exam_session with score that isn't yet in finalGradesList, backfill it
+  useEffect(() => {
+    if (!isOpen || !exam?.id) return;
+    const sessions = Object.values(sessionsMap);
+    if (sessions.length === 0) return;
+
+    let didBackfill = false;
+    sessions.forEach((sess: any) => {
+      if (!isSessionCompleted(sess)) return;
+      const sessScore = sess.score ?? sess.nilai;
+      if (!hasNumericScoreVal(sessScore)) return;
+
+      const existingFg = finalGradesList.find(
+        (g) =>
+          (isSameNisn(g.nisn, sess.nisn) || isSameNisn(g.nis, sess.nisn)) &&
+          (g.examId === exam.id || g.assignmentId === exam.id || g.id === `${exam.id}_${sess.nisn}`)
+      );
+      const fgHasScore = Boolean(existingFg && hasNumericScoreVal(existingFg.nilai ?? existingFg.score));
+      if (!fgHasScore) {
+        didBackfill = true;
+        saveFinalGrade({
+          id: `${exam.id}_${sess.nisn}`,
+          examId: exam.id,
+          assignmentId: exam.id,
+          examTitle: sess.examTitle || exam.title || "",
+          title: sess.examTitle || exam.title || "",
+          nisn: String(sess.nisn),
+          studentName: sess.studentName || "",
+          kelas: sess.kelas || "",
+          nilai: Number(sessScore),
+          score: Number(sessScore),
+          violationCount: Number(sess.violationCount || 0) || 0,
+          submittedAt: sess.finishedAt || sess.lastActiveAt || new Date().toISOString(),
+          gradedAt: sess.finishedAt || sess.lastActiveAt || new Date().toISOString(),
+          status: "selesai",
+          type: "exam",
+        }).catch(() => {});
+      }
+    });
+
+    if (didBackfill && onRefreshGrades) {
+      const timer = setTimeout(() => onRefreshGrades(), 700);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, exam?.id, sessionsMap, finalGradesList]);
 
   const totalQuestions = exam?.questions?.length || 0;
 
@@ -131,29 +341,73 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
     });
 
     return targetStudents.map((stu) => {
-      const session = sessionsMap[String(stu.nisn)];
+      const session =
+        sessionsMap[normalizeNisnKey(stu.nisn)] ||
+        sessionsMap[String(stu.nisn || "").trim()];
       const fg = finalGradesList.find(
         (g) =>
           (isSameNisn(g.nisn, stu.nisn) || isSameNisn(g.nis, stu.nisn)) &&
           (g.examId === exam.id || g.assignmentId === exam.id || g.id === `${exam.id}_${stu.nisn}`)
       );
 
+      const isResetSession =
+        session?.status === "reset" &&
+        (!session?.startedAt || toTimeMs(session.startedAt) <= toTimeMs(session.resetAt));
+      const fgHasAnswers = Boolean(
+        fg?.answers && typeof fg.answers === "object" && fg.answers.items && Object.keys(fg.answers.items).length > 0
+      );
+      const fgIsStubOnly = Boolean(
+        fg &&
+          ((fg.status === "melanggar" && fg.status !== "selesai" && !fg.submittedAt && !fg.gradedAt && !fgHasAnswers) ||
+            (Number(fg.violationCount || 0) > 0 && !fgHasAnswers && !fg.isRemedial && !fg.gradedAt && fg.status !== "selesai" && Number(fg.nilai ?? fg.score ?? 0) === 0))
+      );
+
+      const fgScore = fg?.nilai ?? fg?.score;
+      const fgHasScore = Boolean(fg && !fgIsStubOnly && hasNumericScoreVal(fgScore));
+      const fgLooksFinished = Boolean(
+        fgHasScore &&
+          (fg.status === "selesai" ||
+            Boolean(fg.submittedAt || fg.gradedAt) ||
+            fg.status !== "melanggar") &&
+          (!isResetSession || toTimeMs(fg.submittedAt || fg.gradedAt || fg.updatedAt) > toTimeMs(session?.resetAt))
+      );
       const isFinished =
-        session?.status === "selesai" ||
-        (fg && fg.nilai !== undefined && fg.nilai !== null && fg.status !== "melanggar");
-      const violationCount = Math.max(
-        Number(session?.violationCount || 0),
-        Number(fg?.violationCount || fg?.violationsCount || 0)
-      );
-      const answeredCount = Number(
-        session?.answeredCount ?? (isFinished ? totalQuestions : 0)
-      );
-      const currentQuestion = Number(session?.currentQuestion || 1);
+        (!isResetSession && (session?.status === "selesai" || Boolean(session?.finishedAt))) ||
+        fgLooksFinished;
+
+      const violationCount = isResetSession
+        ? 0
+        : Math.max(
+            Number(session?.violationCount || 0),
+            Number(fg?.violationCount || fg?.violationsCount || 0)
+          );
+      const answeredCount = isResetSession
+        ? 0
+        : Number(session?.answeredCount ?? (isFinished ? totalQuestions : 0));
+      const currentQuestion = isResetSession ? 1 : Number(session?.currentQuestion || 1);
 
       let statusCategory: "mengerjakan" | "melanggar" | "selesai" | "belum" = "belum";
       if (isFinished) statusCategory = "selesai";
+      else if (isResetSession) statusCategory = "belum";
       else if (violationCount > 0 || session?.status === "melanggar") statusCategory = "melanggar";
       else if (session) statusCategory = "mengerjakan";
+
+      const resolvedScore = fgHasScore
+        ? fgScore
+        : !isResetSession && hasNumericScoreVal(session?.score ?? session?.nilai)
+        ? (session?.score ?? session?.nilai)
+        : undefined;
+
+      const explicitDur = Number(session?.durationUsedSeconds ?? fg?.durationUsedSeconds);
+      let durationSeconds: number | null =
+        !isResetSession && Number.isFinite(explicitDur) && explicitDur > 0 ? Math.round(explicitDur) : null;
+      if (durationSeconds === null && isFinished) {
+        const startMs = toTimeMs(session?.startedAt || fg?.startedAt);
+        const endMs = toTimeMs(session?.finishedAt || fg?.submittedAt || fg?.gradedAt || session?.lastActiveAt);
+        if (startMs > 0 && endMs > startMs) {
+          durationSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
+        }
+      }
 
       return {
         student: stu,
@@ -163,7 +417,8 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
         violationCount,
         answeredCount: Math.min(totalQuestions, answeredCount),
         currentQuestion,
-        score: fg?.nilai ?? fg?.score ?? session?.score,
+        score: resolvedScore,
+        durationSeconds,
         lastActiveAt: session?.finishedAt || session?.lastActiveAt || fg?.updatedAt || fg?.submittedAt,
         lastViolationReason: session?.lastViolationReason || (violationCount > 0 ? "Terdeteksi keluar tab / layar penuh" : ""),
       };
@@ -248,7 +503,7 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
           )}
           <button
             type="button"
-            onClick={loadFallbackSessions}
+            onClick={() => loadFallbackSessions(true)}
             className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer border border-slate-700"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin text-[#85cc00]" : ""}`} />
@@ -447,10 +702,13 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
                           </td>
                           <td className="py-3.5 px-6 text-right">
                             {row.statusCategory === "selesai" && row.score !== undefined ? (
-                              <div>
-                                <span className="text-sm font-display font-black text-emerald-700">
+                              <div className="space-y-0.5">
+                                <span className="text-sm font-display font-black text-emerald-700 block">
                                   Nilai: {row.score}
                                 </span>
+                                <p className="text-[11px] font-bold text-slate-600">
+                                  Durasi: {formatSolveDuration(row.durationSeconds)}
+                                </p>
                                 <p className="text-[10px] text-slate-400">
                                   {formatRelativeTime(row.lastActiveAt)}
                                 </p>

@@ -153,6 +153,16 @@ const mergeGradeRecords = (existing: GradeItem | undefined, incoming: GradeItem)
     Number(incoming.violationCount || incoming.violationsCount || 0) || 0
   );
 
+  const isFinishedGrade =
+    primary.status === "selesai" ||
+    secondary.status === "selesai" ||
+    Boolean(primary.submittedAt || primary.gradedAt || secondary.submittedAt || secondary.gradedAt);
+
+  const resolvedStatus =
+    hasValidNumericScore(mergedScore) && isFinishedGrade
+      ? "selesai"
+      : primary.status || secondary.status;
+
   return {
     ...secondary,
     ...primary,
@@ -166,6 +176,7 @@ const mergeGradeRecords = (existing: GradeItem | undefined, incoming: GradeItem)
     examTitle: primary.examTitle || secondary.examTitle || primary.title || secondary.title,
     bab: primary.bab || secondary.bab,
     type: primary.type || secondary.type,
+    ...(resolvedStatus ? { status: resolvedStatus } : {}),
     ...(hasValidNumericScore(mergedScore) ? { nilai: Number(mergedScore), score: Number(mergedScore) } : {}),
     violationCount,
     submittedAt: primary.submittedAt || secondary.submittedAt,
@@ -182,7 +193,40 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
   const gradesMap = new Map<string, GradeItem>();
   const scoredKeysInFinalGrades = new Set<string>();
 
+  const isViolationOnlyStub = (item: GradeItem): boolean => {
+    const hasAnswerItems = Boolean(
+      item.answers &&
+        typeof item.answers === "object" &&
+        item.answers.items &&
+        Object.keys(item.answers.items).length > 0
+    );
+    if (
+      item.status === "melanggar" &&
+      !item.submittedAt &&
+      !item.gradedAt &&
+      !hasAnswerItems
+    ) {
+      return true;
+    }
+    const rawScore = item.nilai ?? item.score;
+    const isZeroScore =
+      rawScore === undefined || rawScore === null || String(rawScore).trim() === "" || Number(rawScore) === 0;
+    if (
+      Number(item.violationCount || item.violationsCount || 0) > 0 &&
+      !hasAnswerItems &&
+      !item.isRemedial &&
+      !item.gradedAt &&
+      item.status !== "selesai" &&
+      !item.isManualColumn &&
+      isZeroScore
+    ) {
+      return true;
+    }
+    return false;
+  };
+
   const putGrade = (item: GradeItem, fromFinalGradesCollection = false) => {
+    if (isViolationOnlyStub(item)) return;
     const nisnStr = String(item.nisn || item.nis || "").trim();
     const colId = String(
       item.assignmentId || item.examId || item.alignmentId || extractColIdFromDocId(item.id, nisnStr) || ""
@@ -287,9 +331,36 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
     });
   }
 
-  // 3. Recovery from Firestore exam_sessions:
-  // If a student finished an exam (status === "selesai" and numeric score) in exam_sessions,
-  // ensure it appears in Buku Nilai even if an earlier final_grades write failed or was overwritten by a violation record.
+  // 3. Recovery from BOTH Supabase app_collections ("exam_sessions") AND Firestore ("exam_sessions"):
+  // If a student finished an exam (status === "selesai" or finishedAt with numeric score) in exam_sessions,
+  // ensure it appears in Buku Nilai even if final_grades write failed, lagged, or hit quota on one backend.
+  const allSessionDocs: Array<{ id: string; data: any }> = [];
+
+  if (isSupabaseConfigured && supabase) {
+    try {
+      let page = 0;
+      const pageSize = 1000;
+      while (true) {
+        const { data, error } = await supabase
+          .from("app_collections")
+          .select("doc_id, data")
+          .eq("collection_name", "exam_sessions")
+          .range(page * pageSize, (page + 1) * pageSize - 1);
+        if (error || !data || data.length === 0) break;
+        data.forEach((row: any) => {
+          if (row?.data) {
+            allSessionDocs.push({ id: row.doc_id || row.data?.id || "", data: row.data });
+          }
+        });
+        if (data.length < pageSize) break;
+        page++;
+        if (page >= 10) break;
+      }
+    } catch (err) {
+      console.warn("Supabase fetch exam_sessions recovery warning:", err);
+    }
+  }
+
   let sessionsSnap: any = null;
   if (!isFirebaseDisabled) {
     try {
@@ -308,49 +379,56 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
     } catch (_) {}
   }
 
-  const missingGradesToBackfill: GradeItem[] = [];
   if (sessionsSnap && sessionsSnap.docs) {
     sessionsSnap.docs.forEach((docSnap: any) => {
-      const d = docSnap.data();
-      const sessionScore = d.score ?? d.nilai;
-      const isCompleted = d.status === "selesai" || Boolean(d.finishedAt);
-      if (!isCompleted || !hasValidNumericScore(sessionScore)) return;
-
-      const nisnVal = String(d.nisn || "").trim();
-      const examId = String(d.examId || extractColIdFromDocId(docSnap.id, nisnVal) || "").trim();
-      if (!examId || !nisnVal) return;
-
-      const canonicalKey = `${examId}__${normalizeNisnForKey(nisnVal)}`;
-      const recoveredItem: GradeItem = {
-        id: `${examId}_${nisnVal}`,
-        examId,
-        assignmentId: examId,
-        examTitle: d.examTitle || d.title || "",
-        title: d.examTitle || d.title || "",
-        nisn: nisnVal,
-        studentName: d.studentName || "",
-        kelas: d.kelas || "",
-        nilai: Number(sessionScore),
-        score: Number(sessionScore),
-        violationCount: Number(d.violationCount || 0) || 0,
-        submittedAt: d.finishedAt || d.lastActiveAt || new Date().toISOString(),
-        gradedAt: d.finishedAt || d.lastActiveAt || new Date().toISOString(),
-        status: "selesai",
-        type: "exam",
-      };
-
-      const existedWithScore = scoredKeysInFinalGrades.has(canonicalKey);
-      putGrade(recoveredItem, false);
-      if (!existedWithScore) {
-        missingGradesToBackfill.push(recoveredItem);
-      }
+      allSessionDocs.push({ id: docSnap.id, data: docSnap.data() });
     });
   }
 
+  const missingGradesToBackfill: GradeItem[] = [];
+  allSessionDocs.forEach(({ id: sessDocId, data: d }) => {
+    if (!d || d.status === "reset") return;
+    const sessionScore = d.score ?? d.nilai;
+    const isCompleted = d.status === "selesai" || Boolean(d.finishedAt);
+    if (!isCompleted || !hasValidNumericScore(sessionScore)) return;
+
+    const nisnVal = String(d.nisn || "").trim();
+    const examId = String(d.examId || extractColIdFromDocId(sessDocId, nisnVal) || "").trim();
+    if (!examId || !nisnVal) return;
+
+    const canonicalKey = `${examId}__${normalizeNisnForKey(nisnVal)}`;
+    const recoveredItem: GradeItem = {
+      id: `${examId}_${nisnVal}`,
+      examId,
+      assignmentId: examId,
+      examTitle: d.examTitle || d.title || "",
+      title: d.examTitle || d.title || "",
+      nisn: nisnVal,
+      studentName: d.studentName || "",
+      kelas: d.kelas || "",
+      nilai: Number(sessionScore),
+      score: Number(sessionScore),
+      violationCount: Number(d.violationCount || 0) || 0,
+      submittedAt: d.finishedAt || d.lastActiveAt || new Date().toISOString(),
+      gradedAt: d.finishedAt || d.lastActiveAt || new Date().toISOString(),
+      status: "selesai",
+      type: "exam",
+    };
+
+    const existedWithScore = scoredKeysInFinalGrades.has(canonicalKey);
+    putGrade(recoveredItem, false);
+    if (!existedWithScore) {
+      missingGradesToBackfill.push(recoveredItem);
+    }
+  });
+
   // Self-heal missing final_grades in background so future loads/exports find them natively
   if (missingGradesToBackfill.length > 0 && typeof window !== "undefined") {
+    const dedupedBackfill = Array.from(
+      new Map(missingGradesToBackfill.map((item) => [item.id, item])).values()
+    );
     setTimeout(() => {
-      missingGradesToBackfill.slice(0, 25).forEach((item) => {
+      dedupedBackfill.slice(0, 25).forEach((item) => {
         saveFinalGrade(item).catch(() => {});
       });
     }, 100);
@@ -1019,6 +1097,8 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
   if (isSupabaseConfigured && supabase) {
     try {
       if (collectionName === "final_grades") {
+        const rawNumeric = data.nilai ?? data.score;
+        const hasNumeric = hasValidNumericScore(rawNumeric);
         await supabase.from("final_grades").upsert({
           id: docId,
           exam_id: data.examId || data.assignmentId,
@@ -1026,13 +1106,13 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
           nisn: data.nisn,
           student_name: data.studentName || "",
           kelas: data.kelas || "",
-          nilai: data.nilai ?? data.score ?? 0,
-          score: data.score ?? data.nilai ?? 0,
+          nilai: hasNumeric ? Number(rawNumeric) : null,
+          score: hasNumeric ? Number(rawNumeric) : null,
           submitted_at: data.submittedAt || data.gradedAt || new Date().toISOString(),
           violation_count: data.violationCount || 0,
           answers: data.answers || {},
           is_remedial: data.isRemedial || false,
-          remedial_score: data.remedialScore || null,
+          remedial_score: data.remedialScore ?? null,
         });
       } else if (collectionName === "exams") {
         await supabase.from("exams").upsert({
@@ -1061,6 +1141,17 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
 
             if (existingRow && existingRow.data && typeof existingRow.data === "object") {
               dataToSave = { ...existingRow.data, ...data };
+              if (
+                collectionName === "exam_sessions" &&
+                (existingRow.data.status === "selesai" || existingRow.data.finishedAt) &&
+                !data.startedAt &&
+                data.status !== "selesai" &&
+                data.status !== "reset"
+              ) {
+                dataToSave.status = "selesai";
+                if (existingRow.data.finishedAt) dataToSave.finishedAt = existingRow.data.finishedAt;
+                if (hasValidNumericScore(existingRow.data.score)) dataToSave.score = existingRow.data.score;
+              }
             }
           } catch (mErr) {
             console.warn("Supabase merge fetch warning:", mErr);
@@ -1107,6 +1198,7 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
     await setDoc(docRef, data, options);
   } catch (err: any) {
     if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+      setFirebaseQuotaExhausted(true);
       console.warn(`Firestore write quota reached for ${collectionName}. Successfully synced to Supabase!`);
     } else {
       throw err;
@@ -1279,27 +1371,35 @@ export async function syncAllFirebaseToSupabase(): Promise<{
       }
 
       if (gradesSnap && !gradesSnap.empty) {
-        const formattedGrades = gradesSnap.docs.map((docSnap: any) => {
-          const d = docSnap.data();
-          const nisnKey = String(d.nisn || "").trim();
-          const studentInfo = studentMap.get(nisnKey);
+        const formattedGrades = gradesSnap.docs
+          .filter((docSnap: any) => {
+            const d = docSnap.data();
+            const hasAnswerItems = Boolean(d.answers && d.answers.items && Object.keys(d.answers.items).length > 0);
+            return !(d.status === "melanggar" && !d.submittedAt && !d.gradedAt && !hasAnswerItems);
+          })
+          .map((docSnap: any) => {
+            const d = docSnap.data();
+            const nisnKey = String(d.nisn || "").trim();
+            const studentInfo = studentMap.get(nisnKey);
+            const rawNum = d.nilai ?? d.score;
+            const hasNum = hasValidNumericScore(rawNum);
 
-          return {
-            id: docSnap.id,
-            exam_id: d.assignmentId || d.examId || "",
-            assignment_id: d.assignmentId || d.examId || "",
-            nisn: d.nisn || "",
-            student_name: d.studentName || studentInfo?.displayName || "",
-            kelas: d.kelas || studentInfo?.kelas || "",
-            nilai: d.nilai ?? d.score ?? 0,
-            score: d.score ?? d.nilai ?? 0,
-            submitted_at: d.submittedAt || new Date().toISOString(),
-            violation_count: d.violationCount || 0,
-            answers: d.answers || {},
-            is_remedial: d.isRemedial || false,
-            remedial_score: d.remedialScore || null,
-          };
-        });
+            return {
+              id: docSnap.id,
+              exam_id: d.assignmentId || d.examId || "",
+              assignment_id: d.assignmentId || d.examId || "",
+              nisn: d.nisn || "",
+              student_name: d.studentName || studentInfo?.displayName || "",
+              kelas: d.kelas || studentInfo?.kelas || "",
+              nilai: hasNum ? Number(rawNum) : null,
+              score: hasNum ? Number(rawNum) : null,
+              submitted_at: d.submittedAt || new Date().toISOString(),
+              violation_count: d.violationCount || 0,
+              answers: d.answers || {},
+              is_remedial: d.isRemedial || false,
+              remedial_score: d.remedialScore || null,
+            };
+          });
 
         const { error: gradeErr } = await supabase
           .from("final_grades")
