@@ -434,6 +434,37 @@ export default function DashboardTeacher() {
     }
   }, [activeMenu]);
 
+  useEffect(() => {
+    if (isSupabaseConfigured && supabase) {
+      (async () => {
+        try {
+          const { error } = await supabase.from("exams").select("id").limit(1);
+          if (!error) {
+            const wasExhausted = sessionStorage.getItem("supabase_was_exhausted") === "true";
+            if (wasExhausted) {
+              sessionStorage.removeItem("supabase_was_exhausted");
+              showAlert(
+                "Kabar Baik!",
+                "Database Supabase telah aktif kembali! Seluruh sinkronisasi cloud kini pulih sepenuhnya.",
+                "alert"
+              );
+            }
+          } else {
+            const msg = String(error.message || error.details || "").toLowerCase();
+            if (msg.includes("quota") || msg.includes("egress") || msg.includes("spend cap")) {
+              sessionStorage.setItem("supabase_was_exhausted", "true");
+            }
+          }
+        } catch (err: any) {
+          const msg = String(err?.message || err || "").toLowerCase();
+          if (msg.includes("quota") || msg.includes("egress") || msg.includes("spend cap")) {
+            sessionStorage.setItem("supabase_was_exhausted", "true");
+          }
+        }
+      })();
+    }
+  }, []);
+
   const handleSaveMotivationalQuote = async () => {
     if (!motivationalQuoteInput.trim()) return;
     setIsSavingQuote(true);
