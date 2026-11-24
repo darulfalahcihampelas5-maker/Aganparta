@@ -3,39 +3,42 @@ import { db } from "./firebase";
 import { doc, getDocs, collection, setDoc, getDoc, getDocsFromCache, getDocFromCache, deleteDoc } from "firebase/firestore";
 import { clearTeacherCaches } from "./firestoreUtils";
 
-let isFirebaseDisabled = typeof window !== 'undefined' && sessionStorage.getItem('firebase_quota_exhausted') === 'true';
+let isFirebaseDisabled = typeof window !== 'undefined'
+  ? (localStorage.getItem('firebase_quota_exhausted') !== 'false')
+  : true;
 
 export function isFirebaseQuotaExhausted(): boolean {
-  if (isFirebaseDisabled) return true;
   if (typeof window !== 'undefined') {
-    return sessionStorage.getItem('firebase_quota_exhausted') === 'true';
+    const localVal = localStorage.getItem('firebase_quota_exhausted');
+    const sessionVal = sessionStorage.getItem('firebase_quota_exhausted');
+    if (localVal === 'false' && sessionVal === 'false') return false;
+    if (localVal === 'true' || sessionVal === 'true') return true;
+    return true;
   }
-  return false;
+  return isFirebaseDisabled;
 }
 
 export function setFirebaseQuotaExhausted(val: boolean = true): void {
   isFirebaseDisabled = val;
   if (typeof window !== 'undefined') {
-    if (val) {
-      sessionStorage.setItem('firebase_quota_exhausted', 'true');
-    } else {
-      sessionStorage.removeItem('firebase_quota_exhausted');
-    }
+    localStorage.setItem('firebase_quota_exhausted', val ? 'true' : 'false');
+    sessionStorage.setItem('firebase_quota_exhausted', val ? 'true' : 'false');
   }
 }
 
 let supabaseQuotaUntil = 0;
 
 export function isSupabaseQuotaExhausted(): boolean {
-  if (supabaseQuotaUntil > Date.now()) return true;
   if (typeof window !== 'undefined') {
-    const raw = Number(sessionStorage.getItem('supabase_quota_exhausted_until') || '0');
-    if (raw > Date.now()) {
-      supabaseQuotaUntil = raw;
-      return true;
-    }
+    const localVal = localStorage.getItem('supabase_quota_exhausted');
+    const sessionVal = sessionStorage.getItem('supabase_quota_exhausted');
+    if (localVal === 'false' && sessionVal === 'false') return false;
+    if (localVal === 'true' || sessionVal === 'true') return true;
+    const raw = Number(sessionStorage.getItem('supabase_quota_exhausted_until') || localStorage.getItem('supabase_quota_exhausted_until') || '0');
+    if (raw > Date.now()) return true;
+    return true;
   }
-  return false;
+  return true;
 }
 
 export function isSupabaseQuotaError(err: any): boolean {
@@ -50,13 +53,10 @@ export function isSupabaseQuotaError(err: any): boolean {
   );
 }
 
-export function setSupabaseQuotaExhausted(cooldownMs = 5 * 60 * 1000): void {
-  const until = Date.now() + cooldownMs;
-  supabaseQuotaUntil = until;
+export function setSupabaseQuotaExhausted(val: boolean = true): void {
   if (typeof window !== 'undefined') {
-    try {
-      sessionStorage.setItem('supabase_quota_exhausted_until', String(until));
-    } catch (_) {}
+    localStorage.setItem('supabase_quota_exhausted', val ? 'true' : 'false');
+    sessionStorage.setItem('supabase_quota_exhausted', val ? 'true' : 'false');
   }
 }
 
@@ -1621,3 +1621,10 @@ export async function syncAllFirebaseToSupabase(): Promise<{
     return { gradesCount: 0, examsCount: 0, error: err.message || "Gagal migrasi" };
   }
 }
+
+export async function checkAndClearQuotaOnRecovery(): Promise<boolean> {
+  // Do not falsely auto-clear using offline cache!
+  // Quota states remain persistent until genuinely reset or reloaded with fresh quota.
+  return false;
+}
+

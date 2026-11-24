@@ -8,7 +8,7 @@ import {
   doc,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery } from "../lib/supabaseSync";
 import { db, auth, storage } from "../lib/firebase";
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 import { getDriveImageUrl, getDriveImageFallbackUrl, getDrivePdfEmbedUrl, isYouTubeUrl, getYouTubeEmbedUrl, getYouTubeThumbnailUrl, getMediaEmbedUrl, getExternalOpenUrl, getDirectDownloadUrl, getAlternativePdfEmbedUrl } from "../lib/driveUtils";
@@ -697,6 +697,15 @@ export default function DashboardStudent() {
   const navigate = useNavigate();
   const [needsDriveAuth, setNeedsDriveAuth] = useState(true);
   const [isDriveAuthLoading, setIsDriveAuthLoading] = useState(false);
+  const [showStudentQuotaModal, setShowStudentQuotaModal] = useState(() => {
+    return isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted();
+  });
+
+  useEffect(() => {
+    if (isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) {
+      setShowStudentQuotaModal(true);
+    }
+  }, []);
   
   const [student, setStudent] = useState(() => {
     if (location.state?.student) {
@@ -6641,6 +6650,32 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
                   {/* BODY CONTAINER */}
                   <div className="pt-6 sm:pt-8 px-4 sm:px-6 max-w-4xl mx-auto space-y-7 pb-12">
+                    {/* Server Quota Information Banner for Student */}
+                    {(isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) && (
+                      <div className="p-4 sm:p-5 rounded-3xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in duration-300">
+                        <div className="flex items-center gap-3.5">
+                          <div className="w-12 h-12 rounded-2xl bg-amber-200/80 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0 text-2xl font-black shadow-inner">
+                            🛡️
+                          </div>
+                          <div>
+                            <h4 className="text-xs sm:text-sm font-black text-amber-950 dark:text-amber-100 uppercase tracking-wide">
+                              Pemberitahuan Server: Jangan Panik Ya! 😊
+                            </h4>
+                            <p className="text-xs text-amber-800 dark:text-amber-200 font-medium mt-0.5 leading-relaxed">
+                              Data nilai kamu <span className="font-bold underline text-amber-950 dark:text-white">sudah aman tersimpan</span> di sistem Pak Agan. Untuk upload tugas, silakan tunggu limit kuota aktif kembali.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShowStudentQuotaModal(true)}
+                          className="px-4 py-2 bg-[#85cc00] hover:brightness-105 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shrink-0 cursor-pointer transition-all shadow-sm active:scale-95 whitespace-nowrap self-end sm:self-center"
+                        >
+                          Buka Dialog
+                        </button>
+                      </div>
+                    )}
+
                     {/* Status Banner (Sakit/Izin/Alpa Hari Ini) */}
                     <AnimatePresence>
                       {todayAttendance && dismissedStatusDate !== todayAttendance.date && (
@@ -7266,6 +7301,32 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       </p>
                     </div>
                   </div>
+
+                  {/* Server Quota Information Banner for Student */}
+                  {(isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) && (
+                    <div className="p-4 sm:p-5 rounded-3xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in duration-300">
+                      <div className="flex items-center gap-3.5">
+                        <div className="w-12 h-12 rounded-2xl bg-amber-200/80 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0 text-2xl font-black shadow-inner">
+                          🛡️
+                        </div>
+                        <div>
+                          <h4 className="text-xs sm:text-sm font-black text-amber-950 dark:text-amber-100 uppercase tracking-wide">
+                            Pemberitahuan Server: Jangan Panik Ya! 😊
+                          </h4>
+                          <p className="text-xs text-amber-800 dark:text-amber-200 font-medium mt-0.5 leading-relaxed">
+                            Data nilai kamu <span className="font-bold underline text-amber-950 dark:text-white">sudah aman tersimpan</span> di sistem Pak Agan. Untuk upload tugas, silakan tunggu limit kuota aktif kembali.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowStudentQuotaModal(true)}
+                        className="px-4 py-2 bg-[#85cc00] hover:brightness-105 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shrink-0 cursor-pointer transition-all shadow-sm active:scale-95 whitespace-nowrap self-end sm:self-center"
+                      >
+                        Buka Dialog
+                      </button>
+                    </div>
+                  )}
 
                   {/* FRAME INFORMASI (Tugas Ditolak / Petunjuk Informasi Tugas) */}
                   {rejectedTasks.length > 0 ? (
@@ -12930,6 +12991,42 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
             onClick={(e) => e.stopPropagation()}
             className="max-w-full max-h-[88vh] rounded-2xl object-contain shadow-2xl border border-white/20 bg-white select-none"
           />
+        </div>
+      )}
+
+      {/* Student Quota Exhausted Notification Modal */}
+      {showStudentQuotaModal && (
+        <div className="fixed inset-0 z-[600] bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-300">
+          <div className="bg-white dark:bg-slate-900 w-full max-w-md rounded-[2.5rem] shadow-2xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 text-center overflow-hidden relative">
+            <div className="w-16 h-16 rounded-3xl bg-amber-500/20 text-amber-600 flex items-center justify-center mx-auto mb-5 text-3xl font-black shadow-inner">
+              🛡️
+            </div>
+            <h3 className="text-xl font-black text-slate-900 dark:text-white tracking-tight font-display mb-1">
+              Informasi Penting Siswa
+            </h3>
+            <p className="text-xs font-bold text-[#85cc00] mb-4 uppercase tracking-wider">
+              Jangan Panik Ya! 😊
+            </p>
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-200/80 dark:border-slate-700 text-xs sm:text-sm text-slate-700 dark:text-slate-300 font-medium leading-relaxed mb-6 space-y-2 text-left">
+              <p>
+                Halo! Saat ini server penyimpanan utama sedang mencapai batas kuota harian.
+              </p>
+              <p className="font-bold text-slate-900 dark:text-white">
+                • Data nilai kamu <span className="text-[#85cc00]">sudah aman tersimpan</span> di sistem Pak Agan.
+              </p>
+              <p className="font-bold text-slate-900 dark:text-white">
+                • Untuk upload tugas, silakan menunggu beberapa saat hingga kuota aktif kembali.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setShowStudentQuotaModal(false);
+              }}
+              className="w-full py-3.5 bg-[#85cc00] hover:brightness-105 text-slate-950 font-black uppercase text-xs tracking-wider rounded-2xl shadow-lg transition-all cursor-pointer active:scale-95"
+            >
+              Saya Mengerti, Terima Kasih 👍
+            </button>
+          </div>
         </div>
       )}
 
