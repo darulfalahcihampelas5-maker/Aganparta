@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import { useAuth } from "../AuthContext";
 import { db } from "../lib/firebase";
-import { getDriveImageUrl, getDrivePdfEmbedUrl } from "../lib/driveUtils";
+import { getDriveImageUrl, getDriveImageFallbackUrl, getDrivePdfEmbedUrl } from "../lib/driveUtils";
 import { CuteLoadingScreen } from "../components/CuteLoadingScreen";
 import {
   doc,
@@ -265,6 +265,9 @@ export default function DashboardTeacher() {
   // States and Handlers for Teacher Profile Photo & Sync
   const [teacherPhotoUrl, setTeacherPhotoUrl] = useState<string | null>(null);
   const [isUploadingTeacherPhoto, setIsUploadingTeacherPhoto] = useState(false);
+  const [isTeacherPhotoModalOpen, setIsTeacherPhotoModalOpen] = useState(false);
+  const [tempTeacherPhotoUrl, setTempTeacherPhotoUrl] = useState("");
+  const [isTeacherPhotoLinkDisabled, setIsTeacherPhotoLinkDisabled] = useState(false);
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
   const [onlineStatus, setOnlineStatus] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | null>(null);
@@ -309,6 +312,14 @@ export default function DashboardTeacher() {
   const [aiStatsFeedback, setAiStatsFeedback] = useState<string | null>(null);
 
   const fetchAiStats = async (isManual = false) => {
+    const cacheKey = "firas_cache_ai_stats";
+    if (!isManual) {
+      const cached = getLocalCache<any>(cacheKey, 10 * 60 * 1000);
+      if (cached) {
+        setAiStats(cached);
+        return;
+      }
+    }
     setIsRefreshingAiStats(true);
     if (isManual) {
       setAiStatsFeedback(null);
@@ -317,9 +328,10 @@ export default function DashboardTeacher() {
       const logMap = new Map<string, any>();
       const violMap = new Map<string, any>();
 
+      const canReadFs = !isFirebaseQuotaExhausted();
       const [fsLogsResult, fsViolResult, apiResult] = await Promise.allSettled([
-        firestoreGetDocs(collection(db, "aiChatLogs")),
-        firestoreGetDocs(collection(db, "aiViolations")),
+        canReadFs ? firestoreGetDocs(collection(db, "aiChatLogs")) : Promise.resolve(null),
+        canReadFs ? firestoreGetDocs(collection(db, "aiViolations")) : Promise.resolve(null),
         fetch(`${window.location.origin}/api/ai-stats?t=${Date.now()}`, { cache: "no-store" }).then((r) =>
           r.ok ? r.json() : null
         ),
@@ -387,11 +399,13 @@ export default function DashboardTeacher() {
         (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
       );
 
-      setAiStats({
+      const nextStats = {
         totalQuestions,
         avgDurationMs,
         violations,
-      });
+      };
+      setAiStats(nextStats);
+      setLocalCache(cacheKey, nextStats);
 
       if (isManual) {
         const timeStr = new Date().toLocaleTimeString("id-ID", {
@@ -413,10 +427,6 @@ export default function DashboardTeacher() {
       setIsRefreshingAiStats(false);
     }
   };
-
-  useEffect(() => {
-    void fetchAiStats(false);
-  }, []);
 
   useEffect(() => {
     if (activeMenu === "statistik-ai") {
@@ -655,87 +665,47 @@ export default function DashboardTeacher() {
     fetchProfile();
   }, [user?.uid]);
 
-  const compressImageToBase64 = (
-    file: File,
-    maxWidth = 360,
-    maxHeight = 360,
-    quality = 0.78
-  ): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
-        const img = new Image();
-        img.src = event.target?.result as string;
-        img.onload = () => {
-          try {
-            const canvas = document.createElement("canvas");
-            let width = img.width || maxWidth;
-            let height = img.height || maxHeight;
-
-            if (width > height) {
-              if (width > maxWidth) {
-                height = Math.round((height * maxWidth) / width);
-                width = maxWidth;
-              }
-            } else {
-              if (height > maxHeight) {
-                width = Math.round((width * maxHeight) / height);
-                height = maxHeight;
-              }
-            }
-
-            canvas.width = Math.max(1, width);
-            canvas.height = Math.max(1, height);
-            const ctx = canvas.getContext("2d");
-            if (!ctx) {
-              reject(new Error("Canvas context unavailable"));
-              return;
-            }
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-            const compressedBase64 = canvas.toDataURL("image/jpeg", quality);
-            resolve(compressedBase64);
-          } catch (canvasErr) {
-            reject(canvasErr);
-          }
-        };
-        img.onerror = (err) => reject(err);
-      };
-      reader.onerror = (err) => reject(err);
-    });
+  const isValidGoogleDrivePhotoInput = (url: string): boolean => {
+    const clean = url.trim();
+    if (!clean) return false;
+    if (/\/(?:file\/)?d\/([-\w]{25,})/i.test(clean)) return true;
+    if (/[?&]id=([-\w]{25,})/i.test(clean)) return true;
+    if (/lh3\.googleusercontent\.com\/d\/([-\w]{25,})/i.test(clean)) return true;
+    if (/^[a-zA-Z0-9_-]{25,45}$/.test(clean)) return true;
+    return false;
   };
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const inputEl = e.target;
-    const file = inputEl.files?.[0];
-    if (!file) return;
+  const openTeacherPhotoModal = () => {
+    const existing = (teacherPhotoUrl || "").trim();
+    const isExistingDrive = existing && !existing.startsWith("data:") && !existing.startsWith("blob:");
+    setTempTeacherPhotoUrl(isExistingDrive ? existing : "");
+    setIsTeacherPhotoLinkDisabled(Boolean(isExistingDrive));
+    setIsTeacherPhotoModalOpen(true);
+  };
 
-    if (!file.type.startsWith("image/")) {
-      showAlert("Peringatan", "Pilih file gambar yang valid (JPG, PNG, atau WebP).", "danger");
-      inputEl.value = "";
+  const handleSaveTeacherPhotoLink = async () => {
+    const cleanUrl = tempTeacherPhotoUrl.trim();
+    if (!cleanUrl) {
+      showAlert("Perhatian", "Silakan tempel link file Google Drive terlebih dahulu.", "danger");
       return;
     }
-
-    if (file.size > 10 * 1024 * 1024) {
-      showAlert("Peringatan", "Ukuran foto terlalu besar. Maksimal ukuran file adalah 10MB.", "danger");
-      inputEl.value = "";
+    if (!isValidGoogleDrivePhotoInput(cleanUrl)) {
+      showAlert(
+        "Link Tidak Valid",
+        "Foto profil guru wajib menggunakan link file Google Drive yang valid (contoh: https://drive.google.com/file/d/.../view?usp=sharing).",
+        "danger"
+      );
       return;
     }
 
     setIsUploadingTeacherPhoto(true);
     try {
-      // Kompres ke maks 360x360 JPEG (~20-45KB) agar aman untuk Firestore & localStorage
-      const compressedBase64 = await compressImageToBase64(file, 360, 360, 0.78);
-
       const uid = user?.uid || "default_teacher";
-      setTeacherPhotoUrl(compressedBase64);
-      saveTeacherPhotoLocally(uid, compressedBase64);
+      setTeacherPhotoUrl(cleanUrl);
+      saveTeacherPhotoLocally(uid, cleanUrl);
 
       const teacherProfilePayload = {
-        profilePhotoUrl: compressedBase64,
+        profilePhotoUrl: cleanUrl,
         subjectName: userSettings.subjectName || "Informatika",
         teacherName: userSettings.teacherName || "Agan Parta, S.Kom.",
         teacherNip: userSettings.teacherNip || "-",
@@ -749,7 +719,7 @@ export default function DashboardTeacher() {
       const results = await Promise.allSettled([
         setDoc(
           doc(db, "users", uid),
-          { profilePhotoUrl: compressedBase64 },
+          { profilePhotoUrl: cleanUrl },
           { merge: true }
         ),
         setDoc(
@@ -760,27 +730,27 @@ export default function DashboardTeacher() {
       ]);
 
       const anySuccess = results.some((r) => r.status === "fulfilled");
+      setIsTeacherPhotoLinkDisabled(true);
       if (anySuccess) {
         trackUsage(0, 1);
         showAlert(
           "Berhasil",
-          "Foto profil guru berhasil diperbarui dan otomatis tersinkron ke Beranda Guru serta Pesan & Nilai Siswa.",
+          "Link foto profil Google Drive guru berhasil disimpan dan otomatis tersinkron ke Beranda Guru serta dashboard siswa.",
           "alert"
         );
       } else {
-        console.warn("Gagal menyimpan foto ke cloud:", results);
+        console.warn("Gagal menyimpan link foto ke cloud:", results);
         showAlert(
           "Info",
-          "Foto profil guru diperbarui di perangkat ini secara lokal dan ditampilkan di Beranda.",
+          "Link foto profil guru tersimpan secara lokal dan ditampilkan di Beranda.",
           "alert"
         );
       }
     } catch (err) {
-      console.warn("Gagal memproses gambar:", err);
-      showAlert("Gagal", "Gagal memproses gambar foto profil. Pastikan file gambar tidak rusak.", "danger");
+      console.warn("Gagal menyimpan link foto profil:", err);
+      showAlert("Gagal", "Gagal menyimpan link foto profil Google Drive.", "danger");
     } finally {
       setIsUploadingTeacherPhoto(false);
-      inputEl.value = "";
     }
   };
 
@@ -807,9 +777,15 @@ export default function DashboardTeacher() {
             ),
           ]);
           trackUsage(0, 1);
+          setTempTeacherPhotoUrl("");
+          setIsTeacherPhotoLinkDisabled(false);
+          setIsTeacherPhotoModalOpen(false);
           showAlert("Berhasil", "Foto profil Anda telah dihapus dan dikembalikan ke tampilan awal.", "alert");
         } catch (error) {
           console.warn("Gagal menghapus foto dari cloud:", error);
+          setTempTeacherPhotoUrl("");
+          setIsTeacherPhotoLinkDisabled(false);
+          setIsTeacherPhotoModalOpen(false);
           showAlert("Berhasil", "Foto profil Anda telah dihapus.", "alert");
         }
         setShowProfileDropdown(false);
@@ -2408,7 +2384,7 @@ export default function DashboardTeacher() {
 
         // 3. Assignments
         (async () => {
-          const cachedAssignments = null; // ALWAYS FETCH
+          const cachedAssignments = !forceRefresh && getLocalCache<any[]>("firas_cache_assignments_v2", 15 * 60 * 1000);
           if (cachedAssignments && cachedAssignments.length > 0) {
             setAssignmentsList(cachedAssignments);
           } else {
@@ -2487,8 +2463,13 @@ export default function DashboardTeacher() {
           }
         })(),
 
-        // 7. Exams (Merge Supabase + Firestore via getExams so no exam is missed)
+        // 7. Exams (Merge Supabase + Firestore via getExams with 15-min TTL cache)
         (async () => {
+          const cachedExams = !forceRefresh && getLocalCache<any[]>("firas_cache_exams_v2", 15 * 60 * 1000);
+          if (cachedExams && cachedExams.length > 0) {
+            setExamsList(cachedExams);
+            return;
+          }
           try {
             const exams = await getExams();
             trackUsage(exams.length, 0);
@@ -3197,7 +3178,6 @@ export default function DashboardTeacher() {
             setLocalCache("firas_cache_final_grades", updatedFinalGrades);
 
             setIsDeleteColumnModalOpen(false);
-            clearTeacherCaches();
 
             showAlert(
               "Berhasil Dihapus dari Kelas",
@@ -4108,11 +4088,20 @@ export default function DashboardTeacher() {
       return () => unsubscribe();
     }
 
-    // Always pull latest exam & assignment grades (including exam_sessions recovery) when opening Buku Nilai
+    // Pull latest exam & assignment grades when opening Buku Nilai (using TTL cache & throttled refresh to preserve cloud quota)
     if (activeMenu === "manajemen-nilai" && activeNilaiTab === "rekapitulasi") {
       let cancelled = false;
-      const pullRekapLatest = () => {
-        Promise.all([getFinalGrades(), getExams()])
+      let lastRekapPullAt = 0;
+      const pullRekapLatest = (includeExams = false) => {
+        const now = Date.now();
+        if (now - lastRekapPullAt < 2 * 60 * 1000) return;
+        lastRekapPullAt = now;
+
+        const needExams = includeExams && !getLocalCache<any[]>("firas_cache_exams_v2", 15 * 60 * 1000);
+        Promise.all([
+          getFinalGrades(),
+          needExams ? getExams() : Promise.resolve(null),
+        ])
           .then(([grades, exams]) => {
             if (cancelled) return;
             if (Array.isArray(grades) && grades.length > 0) {
@@ -4134,10 +4123,12 @@ export default function DashboardTeacher() {
           });
       };
 
-      pullRekapLatest();
-      const pollTimer = setInterval(pullRekapLatest, 15000);
+      if (!getLocalCache<any[]>("firas_cache_final_grades", 2 * 60 * 1000)) {
+        pullRekapLatest(true);
+      }
+      const pollTimer = setInterval(() => pullRekapLatest(false), 3 * 60 * 1000);
       const handleVisibility = () => {
-        if (document.visibilityState === "visible") pullRekapLatest();
+        if (document.visibilityState === "visible") pullRekapLatest(false);
       };
       document.addEventListener("visibilitychange", handleVisibility);
 
@@ -7333,13 +7324,133 @@ export default function DashboardTeacher() {
 
    return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-700 relative">
-      <input
-        id="teacher-photo-input"
-        type="file"
-        accept="image/*"
-        onChange={handlePhotoUpload}
-        className="hidden"
-      />
+      {/* Teacher Profile Photo Google Drive Modal */}
+      <AnimatePresence>
+        {isTeacherPhotoModalOpen && (
+          <motion.div
+            key="teacher-profile-photo-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.18 }}
+            className="fixed inset-0 z-[130] flex items-center justify-center p-4"
+          >
+            <div
+              className="fixed inset-0 bg-slate-950/60 backdrop-blur-md"
+              onClick={() => setIsTeacherPhotoModalOpen(false)}
+            />
+            <motion.div
+              initial={{ scale: 0.96, opacity: 0, y: 12 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 12 }}
+              transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+              className="bg-white/95 backdrop-blur-xl rounded-3xl border border-slate-200/80 ring-1 ring-slate-900/5 p-7 sm:p-8 max-w-md w-full shadow-2xl overflow-hidden relative z-10"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-[#85cc00]/10 rounded-xl">
+                    <User className="w-5 h-5 text-[#85cc00]" />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-xl text-slate-900 tracking-tight">
+                      Update Foto Guru
+                    </h3>
+                    <p className="text-[11px] font-semibold text-slate-500">
+                      Ambil dari File Google Drive
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsTeacherPhotoModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-900 transition-all p-2 hover:bg-slate-50 rounded-xl active:scale-95 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 mb-7">
+                {/* Live Preview Avatar */}
+                <div className="flex flex-col items-center justify-center my-2 p-3 bg-slate-50 rounded-2xl border border-slate-200/80">
+                  <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-[#85cc00] shadow-md bg-white flex items-center justify-center relative">
+                    {tempTeacherPhotoUrl.trim() ? (
+                      <img
+                        src={getDriveImageUrl(tempTeacherPhotoUrl.trim())}
+                        alt="Pratinjau Foto Guru"
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const imgEl = e.target as HTMLImageElement;
+                          const fallback = getDriveImageFallbackUrl(tempTeacherPhotoUrl.trim());
+                          if (fallback && imgEl.src !== fallback) {
+                            imgEl.src = fallback;
+                          } else {
+                            imgEl.src = "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg";
+                          }
+                        }}
+                      />
+                    ) : (
+                      <User className="w-12 h-12 text-slate-400" />
+                    )}
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2">
+                    Pratinjau Foto Profil Guru
+                  </p>
+                </div>
+
+                {teacherPhotoUrl && (
+                  <div className="flex justify-end mb-1">
+                    <button
+                      type="button"
+                      onClick={handlePhotoDelete}
+                      disabled={isUploadingTeacherPhoto}
+                      className="text-rose-500 hover:text-rose-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-2 group transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 group-hover:rotate-12 transition-transform" /> Hapus Foto
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <input
+                    type="url"
+                    placeholder="Tempel Link File Google Drive (drive.google.com/file/d/...)"
+                    className="w-full bg-white border border-slate-200 rounded-xl p-4 text-sm focus:outline-none focus:ring-2 focus:ring-[#85cc00]/20 disabled:bg-slate-100 disabled:opacity-60 font-sans"
+                    value={tempTeacherPhotoUrl}
+                    onChange={(e) => setTempTeacherPhotoUrl(e.target.value)}
+                    disabled={isTeacherPhotoLinkDisabled}
+                  />
+                  <p className="text-[11px] text-slate-500 leading-relaxed px-1">
+                    Unggah foto ke Google Drive terlebih dahulu, atur akses menjadi{" "}
+                    <span className="font-semibold text-slate-700">Siapa saja yang memiliki link</span>, lalu tempel tautannya di sini.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                {isTeacherPhotoLinkDisabled ? (
+                  <button
+                    type="button"
+                    onClick={() => setIsTeacherPhotoLinkDisabled(false)}
+                    className="flex-1 rounded-2xl bg-amber-500 text-white px-4 py-3.5 text-center text-[12px] font-black uppercase tracking-wider hover:bg-amber-600 active:scale-95 transition-all font-display cursor-pointer"
+                  >
+                    Edit Link
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSaveTeacherPhotoLink}
+                    disabled={isUploadingTeacherPhoto}
+                    className="flex-1 rounded-2xl bg-[#85cc00] text-slate-900 px-4 py-3.5 text-center text-[12px] font-black uppercase tracking-wider hover:brightness-110 active:scale-95 transition-all font-display cursor-pointer disabled:opacity-60"
+                  >
+                    {isUploadingTeacherPhoto ? "Menyimpan..." : "Simpan"}
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <NotificationModal
         {...modalConfig}
         isOpen={modalConfig.isOpen}
@@ -7535,10 +7646,19 @@ export default function DashboardTeacher() {
                           <div className="relative group shrink-0">
                             <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-2xl border-2 border-slate-200/80 overflow-hidden bg-slate-100 shadow-xs">
                               <img
-                                src={teacherPhotoUrl || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"}
+                                src={getDriveImageUrl(teacherPhotoUrl) || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"}
                                 alt={userSettings.teacherName || "Foto Profil Guru"}
                                 className="w-full h-full object-cover"
                                 referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  const imgEl = e.target as HTMLImageElement;
+                                  const fallback = getDriveImageFallbackUrl(teacherPhotoUrl);
+                                  if (fallback && imgEl.src !== fallback) {
+                                    imgEl.src = fallback;
+                                  } else {
+                                    imgEl.src = "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg";
+                                  }
+                                }}
                               />
                             </div>
                           </div>
@@ -7549,7 +7669,7 @@ export default function DashboardTeacher() {
                               {userSettings.teacherNip ? ` · NIP ${userSettings.teacherNip}` : ""}
                             </p>
                             <p className="text-xs text-slate-500 max-w-md leading-relaxed">
-                              Unggah foto profil terbaru (JPG, PNG, atau WebP, maks. 10 MB). Foto ini akan otomatis tampil pada kartu profil Beranda guru.
+                              Gunakan link file foto dari Google Drive (pastikan akses disetel publik / siapa saja yang memiliki link). Foto ini akan otomatis tampil pada kartu profil Beranda guru dan dashboard siswa.
                             </p>
                           </div>
                         </div>
@@ -7558,23 +7678,20 @@ export default function DashboardTeacher() {
                           <button
                             type="button"
                             disabled={isUploadingTeacherPhoto}
-                            onClick={() => {
-                              const input = document.getElementById("teacher-photo-input") as HTMLInputElement | null;
-                              if (input) input.click();
-                            }}
+                            onClick={openTeacherPhotoModal}
                             className="h-11 px-5 bg-[#85cc00] hover:bg-[#74b300] text-slate-950 font-bold text-xs rounded-xl transition-all shadow-sm active:scale-95 disabled:opacity-60 cursor-pointer inline-flex items-center justify-center gap-2 whitespace-nowrap shrink-0"
                           >
                             {isUploadingTeacherPhoto ? (
                               <RefreshCw className="w-4 h-4 animate-spin shrink-0" />
                             ) : (
-                              <Upload className="w-4 h-4 shrink-0" />
+                              <Camera className="w-4 h-4 shrink-0" />
                             )}
                             <span>
                               {isUploadingTeacherPhoto
-                                ? "Mengunggah..."
+                                ? "Menyimpan..."
                                 : teacherPhotoUrl
-                                  ? "Ganti Foto Profil"
-                                  : "Upload Foto Profil"}
+                                  ? "Ubah Link Foto Drive"
+                                  : "Pasang Link Foto Drive"}
                             </span>
                           </button>
 
@@ -7755,24 +7872,33 @@ export default function DashboardTeacher() {
                         <div className="relative group">
                           <button
                             type="button"
-                            onClick={(e) => { e.stopPropagation(); 
-                              const input = document.getElementById("teacher-photo-input") as HTMLInputElement;
-                              if (input) input.click();
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openTeacherPhotoModal();
                             }}
                             className="w-36 h-36 sm:w-44 sm:h-44 md:w-48 md:h-48 rounded-3xl border-4 border-white shadow-xl shadow-emerald-950/10 ring-1 ring-slate-200/60 overflow-hidden shrink-0 bg-slate-100 relative block cursor-pointer hover:scale-[1.02] active:scale-95 transition-all group"
-                            title="Klik untuk mengganti foto profil guru"
+                            title="Klik untuk mengubah link Google Drive foto profil guru"
                           >
                             <img
                               loading="lazy"
-                              src={teacherPhotoUrl || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"}
+                              src={getDriveImageUrl(teacherPhotoUrl) || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"}
                               alt={userSettings.teacherName || "Agan Parta, S.Kom.Gr"}
                               className="h-full w-full object-cover"
                               referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                const imgEl = e.target as HTMLImageElement;
+                                const fallback = getDriveImageFallbackUrl(teacherPhotoUrl);
+                                if (fallback && imgEl.src !== fallback) {
+                                  imgEl.src = fallback;
+                                } else {
+                                  imgEl.src = "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg";
+                                }
+                              }}
                             />
                             {/* Hover overlay with camera icon */}
                             <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white gap-1 backdrop-blur-2xs">
                               <Camera className="w-6 h-6" />
-                              <span className="text-[10px] font-bold uppercase tracking-wider">Ubah Foto</span>
+                              <span className="text-[10px] font-bold uppercase tracking-wider">Link Google Drive</span>
                             </div>
                           </button>
                         </div>

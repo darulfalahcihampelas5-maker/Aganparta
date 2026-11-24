@@ -193,9 +193,11 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
     try {
       const collected: any[] = [];
 
-      // 1. Read from Supabase app_collections (via dbGetDocs)
+      // 1. Read from Supabase app_collections (filtered by examId to avoid scanning all historical exams)
       try {
-        const snap = await dbGetDocs(collection(db, "exam_sessions"));
+        const snap = await dbGetDocs(
+          query(collection(db, "exam_sessions"), where("examId", "==", exam.id))
+        );
         snap.forEach((d: any) => {
           const data = typeof d.data === "function" ? d.data() : d;
           if (data?.examId === exam.id && data?.nisn) {
@@ -206,8 +208,8 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
         console.warn("Supabase exam_sessions poll warning:", sbErr);
       }
 
-      // 2. Also read directly from Firestore exam_sessions and merge (so completed Firestore sessions never get masked by stale Supabase or vice versa)
-      if (!isFirebaseQuotaExhausted()) {
+      // 2. Only also query Firestore directly if onSnapshot isn't already streaming live or Supabase returned nothing
+      if (!isFirebaseQuotaExhausted() && collected.length === 0) {
         try {
           const fsSnap = await fsGetDocs(
             query(collection(db, "exam_sessions"), where("examId", "==", exam.id))
@@ -242,36 +244,45 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
 
     setSessionsMap({});
     loadFallbackSessions(true);
-    if (isFirebaseQuotaExhausted()) return;
 
     let unsubscribe: (() => void) | undefined;
-    try {
-      const q = query(collection(db, "exam_sessions"), where("examId", "==", exam.id));
-      unsubscribe = onSnapshot(
-        q,
-        (snapshot) => {
-          const updated: any[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            if (data?.nisn) {
-              updated.push(data);
+    let isSnapshotHealthy = false;
+    if (!isFirebaseQuotaExhausted()) {
+      try {
+        const q = query(collection(db, "exam_sessions"), where("examId", "==", exam.id));
+        unsubscribe = onSnapshot(
+          q,
+          (snapshot) => {
+            isSnapshotHealthy = true;
+            const updated: any[] = [];
+            snapshot.forEach((docSnap) => {
+              const data = docSnap.data();
+              if (data?.nisn) {
+                updated.push(data);
+              }
+            });
+            mergeIntoSessionsMap(updated);
+          },
+          (err) => {
+            isSnapshotHealthy = false;
+            const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
+            if (msg.includes("quota") || msg.includes("resource-exhausted") || msg.includes("unavailable") || msg.includes("permission")) {
+              setFirebaseQuotaExhausted(true);
             }
-          });
-          mergeIntoSessionsMap(updated);
-        },
-        (err) => {
-          const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
-          if (msg.includes("quota") || msg.includes("resource-exhausted") || msg.includes("unavailable") || msg.includes("permission")) {
-            setFirebaseQuotaExhausted(true);
+            console.warn("Realtime listener exam_sessions dialihkan ke polling:", err);
           }
-          console.warn("Realtime listener exam_sessions dialihkan ke polling:", err);
-        }
-      );
-    } catch (err) {
-      console.warn("onSnapshot exam_sessions fallback:", err);
+        );
+      } catch (err) {
+        console.warn("onSnapshot exam_sessions fallback:", err);
+      }
     }
 
-    const pollInterval = setInterval(() => loadFallbackSessions(false), 8000);
+    // Only poll periodically when Firestore realtime listener is inactive/exhausted (avoids double reads every 8s)
+    const pollInterval = setInterval(() => {
+      if (!isSnapshotHealthy || isFirebaseQuotaExhausted()) {
+        loadFallbackSessions(false);
+      }
+    }, 25000);
     return () => {
       if (unsubscribe) unsubscribe();
       clearInterval(pollInterval);

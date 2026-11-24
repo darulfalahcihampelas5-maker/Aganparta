@@ -11,7 +11,7 @@ import {
 import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted } from "../lib/supabaseSync";
 import { db, auth, storage } from "../lib/firebase";
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
-import { getDriveImageUrl, getDrivePdfEmbedUrl, isYouTubeUrl, getYouTubeEmbedUrl, getYouTubeThumbnailUrl, getMediaEmbedUrl, getExternalOpenUrl, getDirectDownloadUrl, getAlternativePdfEmbedUrl } from "../lib/driveUtils";
+import { getDriveImageUrl, getDriveImageFallbackUrl, getDrivePdfEmbedUrl, isYouTubeUrl, getYouTubeEmbedUrl, getYouTubeThumbnailUrl, getMediaEmbedUrl, getExternalOpenUrl, getDirectDownloadUrl, getAlternativePdfEmbedUrl } from "../lib/driveUtils";
 import { initAuth, googleSignIn, getAccessToken } from "../lib/googleAuth";
 import { uploadFileToDrive, uploadFileToDriveWithToken } from "../lib/driveUpload";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
@@ -19,7 +19,7 @@ import { Toast } from "../components/Toast";
 import { CuteLoadingScreen, SipinterAvatar } from "../components/CuteLoadingScreen";
 import { getLocalCache, setLocalCache, clearStudentCaches } from "../lib/firestoreUtils";
 import { getDisplayCallName } from "../lib/nameUtils";
-import { saveFinalGrade } from "../lib/supabaseSync";
+import { saveFinalGrade, getExams } from "../lib/supabaseSync";
 import { supabase, isSupabaseConfigured } from "../lib/supabase";
 import { stripBabAndLingkupFromKisiTitle } from "../lib/examKisiKisiPdf";
 
@@ -343,7 +343,7 @@ const SimulasiChapterMenu = React.lazy(() =>
 import { motion, AnimatePresence } from "motion/react";
 import { NotificationModal } from "../components/NotificationModal";
 import { AttendanceDonutChart } from "../components/AttendanceDonutChart";
-import { isAssignmentForClass, isExamForClass, isPTSItem, isPASItem, isSameNisn } from "../lib/gradeUtils";
+import { isAssignmentForClass, isExamForClass, isPTSItem, isPASItem, isSameNisn, isClassMatch } from "../lib/gradeUtils";
 
 const MOCK_EXAMS = [
   {
@@ -725,9 +725,50 @@ export default function DashboardStudent() {
     }
   }, [student, navigate]);
 
+  // Recover real student profile if logged in via temporary guest fallback
+  useEffect(() => {
+    if (!student?.isGuest) return;
+    const rawCode = String(student.accessCode || student.nisn || student.id || "").trim();
+    if (!rawCode) return;
+    const upperCode = rawCode.toUpperCase();
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const snap = await getDocs(collection(db, "studentsByNisn"));
+        if (cancelled || snap.empty) return;
+        let matched: any = null;
+        snap.forEach((d: any) => {
+          if (matched) return;
+          const sd = typeof d.data === "function" ? d.data() : d;
+          const sCode = String(sd?.accessCode || "").trim();
+          const sNisn = String(sd?.nisn || d.id || "").trim();
+          const sNis = String(sd?.nis || "").trim();
+          if (
+            sCode === rawCode ||
+            sCode.toUpperCase() === upperCode ||
+            isSameNisn(sNisn, rawCode) ||
+            isSameNisn(sNis, rawCode)
+          ) {
+            matched = { id: sNisn || d.id, ...sd, nisn: sNisn || d.id, isGuest: false };
+          }
+        });
+        if (matched && !cancelled) {
+          setStudent(matched);
+          try {
+            localStorage.setItem("current_student", JSON.stringify(matched));
+          } catch (_) {}
+        }
+      } catch (_) {}
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [student?.isGuest, student?.accessCode, student?.nisn, student?.id]);
+
   const [isLoadingInitialData, setIsLoadingInitialData] = useState(true);
   const [isOffline, setIsOffline] = useState(false);
-  const isFirstAssignmentsRun = useRef(true);
   const [newAssignmentToast, setNewAssignmentToast] = useState<any | null>(null);
 
   useEffect(() => {
@@ -1053,19 +1094,23 @@ export default function DashboardStudent() {
     // Only fetch absensi for student's own class with TTL cache to save 95% reads
     const cacheKey = `firas_cache_absensi_${student.kelas}`;
     const cached = getLocalCache<any[]>(cacheKey, 2 * 60 * 60 * 1000);
-    if (cached) {
+    if (cached && cached.length > 0) {
       setAbsensiList(cached);
       return;
     }
 
-    const q = query(collection(db, "absensi"), where("kelasRef", "==", student.kelas));
-    getDocs(q).then((snapshot) => {
+    getDocs(collection(db, "absensi")).then((snapshot) => {
       const abs: any[] = [];
-      snapshot.forEach((doc) => {
-        abs.push({ id: doc.id, ...doc.data() });
+      snapshot.forEach((docSnap: any) => {
+        const d = typeof docSnap.data === "function" ? docSnap.data() : docSnap;
+        if (isClassMatch(d?.kelasRef || "", student.kelas)) {
+          abs.push({ id: docSnap.id, ...d });
+        }
       });
       setAbsensiList(abs);
-      setLocalCache(cacheKey, abs);
+      if (abs.length > 0) {
+        setLocalCache(cacheKey, abs);
+      }
     }).catch((error) => { console.warn('Firestore error:', error.message); dispatchIfQuotaError(error); });
   }, [student?.kelas]);
 
@@ -1128,7 +1173,6 @@ export default function DashboardStudent() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [syncToastMessage, setSyncToastMessage] = useState("");
   const [isSyncingData, setIsSyncingData] = useState(false);
-  const hasAutoSyncedRef = useRef(false);
   const [kisiKisiFilterCategory, setKisiKisiFilterCategory] = useState<string>("Semua");
   const [kisiKisiSearch, setKisiKisiSearch] = useState<string>("");
   const [copiedKisiId, setCopiedKisiId] = useState<string | null>(null);
@@ -1274,63 +1318,34 @@ export default function DashboardStudent() {
       mergeTeacherSettingsPatch(d);
     };
 
-    const docRef = doc(db, "config", "motivational_quote");
-    getDoc(docRef).then((snap: any) => {
-      if (isMounted && snap && snap.exists() && snap.data()?.quote) {
-        setMotivationalQuote(snap.data().quote);
-      }
-    }).catch(() => {});
-
-    void fetchLatestTeacherProfileSettings();
-
-    const periodDocRef = doc(db, "config", "academic_period");
-    const teacherProfileDocRef = doc(db, "config", "teacher_profile");
-
-    let unsubscribe: any = null;
-    let unsubscribePeriod: any = null;
-    let unsubscribeTeacherProfile: any = null;
-    if (!isFirebaseQuotaExhausted()) {
-      import("firebase/firestore").then(({ onSnapshot }) => {
-        if (!isMounted) return;
-        unsubscribe = onSnapshot(docRef, (snap: any) => {
-          if (snap && snap.exists() && snap.data()?.quote) {
-            setMotivationalQuote(snap.data().quote);
-          }
-        }, (err: any) => {
-          dispatchIfQuotaError(err);
-        });
-        unsubscribePeriod = onSnapshot(periodDocRef, (snap: any) => {
-          if (snap && snap.exists()) {
-            const d = snap.data();
-            if (d?.academicYear || d?.semester) {
-              setAcademicPeriod({
-                academicYear: d.academicYear || "2026/2027",
-                semester: d.semester || "Ganjil",
-              });
-              mergeTeacherSettingsPatch({
-                academicYear: d.academicYear,
-                semester: d.semester,
-              });
-            }
-          }
-        }, (err: any) => {
-          dispatchIfQuotaError(err);
-        });
-        unsubscribeTeacherProfile = onSnapshot(teacherProfileDocRef, (snap: any) => {
-          if (snap && snap.exists()) {
-            applyTeacherProfile(snap.data());
-          }
-        }, (err: any) => {
-          dispatchIfQuotaError(err);
-        });
+    const quoteCacheKey = "firas_cache_motivational_quote";
+    const cachedQuote = getLocalCache<string>(quoteCacheKey, 6 * 60 * 60 * 1000);
+    if (cachedQuote) {
+      setMotivationalQuote(cachedQuote);
+    } else {
+      const docRef = doc(db, "config", "motivational_quote");
+      getDoc(docRef).then((snap: any) => {
+        if (isMounted && snap && snap.exists() && snap.data()?.quote) {
+          setMotivationalQuote(snap.data().quote);
+          setLocalCache(quoteCacheKey, snap.data().quote);
+        }
       }).catch(() => {});
+    }
+
+    const profileCacheKey = "firas_cache_teacher_profile_settings";
+    const cachedProfile = getLocalCache<any>(profileCacheKey, 60 * 60 * 1000);
+    if (cachedProfile) {
+      applyTeacherProfile(cachedProfile);
+    } else {
+      void fetchLatestTeacherProfileSettings().then((merged) => {
+        if (isMounted && merged) {
+          setLocalCache(profileCacheKey, merged);
+        }
+      });
     }
 
     return () => {
       isMounted = false;
-      if (unsubscribe) unsubscribe();
-      if (unsubscribePeriod) unsubscribePeriod();
-      if (unsubscribeTeacherProfile) unsubscribeTeacherProfile();
     };
   }, []);
 
@@ -2606,8 +2621,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       ).catch(() => {});
     };
 
-    const debounceTimer = setTimeout(pushSessionUpdate, 1500);
-    const heartbeatTimer = setInterval(pushSessionUpdate, 20000);
+    const debounceTimer = setTimeout(pushSessionUpdate, 4500);
+    const heartbeatTimer = setInterval(pushSessionUpdate, 60000);
     return () => {
       clearTimeout(debounceTimer);
       clearInterval(heartbeatTimer);
@@ -3178,13 +3193,15 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const fetchAssignments = async () => {
     const cacheKey = `firas_cache_assignments_v2_${student?.nisn || 'guest'}`;
     const cached = getLocalCache<any[]>(cacheKey, 4 * 60 * 60 * 1000);
-    if (cached) return cached;
+    if (cached && cached.length > 0) return cached;
 
     try {
       const snapshot = await getDocs(query(collection(db, "assignments")));
       trackUsage(snapshot.size, 0);
       const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
-      setLocalCache(cacheKey, data);
+      if (data.length > 0) {
+        setLocalCache(cacheKey, data);
+      }
       setIsOffline(false);
       return data;
     } catch (e: any) {
@@ -3212,6 +3229,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const fetchSubmissions = async () => {
     if (!currentNisn) return [];
     const cacheKey = `firas_cache_submissions_${currentNisn}`;
+    const cached = getLocalCache<any[]>(cacheKey, 15 * 60 * 1000);
+    if (cached) return cached;
 
     try {
       const rawNisn = currentNisn;
@@ -3242,8 +3261,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     fetchSubmissions,
     { 
       fallbackData: currentNisn ? (getLocalCache<any[]>(`firas_cache_submissions_${currentNisn}`, 24 * 60 * 60 * 1000) || undefined) : undefined,
-      revalidateOnFocus: true,
-      revalidateOnMount: true
+      revalidateOnFocus: false,
+      revalidateOnMount: true,
+      refreshInterval: 0
     }
   );
 
@@ -3299,11 +3319,40 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const fetchFinalGrades = async () => {
     if (!currentNisn) return [];
     const cacheKey = `firas_cache_final_grades_${currentNisn}`;
+    const cached = getLocalCache<any[]>(cacheKey, 15 * 60 * 1000);
+    if (cached && cached.length > 0) return cached;
 
     const rawNisn = currentNisn;
     const unpadded = rawNisn.replace(/^0+/, "");
     const padded = unpadded.padStart(10, "0");
     const variants = Array.from(new Set([rawNisn, unpadded, padded].filter(Boolean)));
+
+    const mergedByKey = new Map<string, any>();
+    const putMergedGrade = (g: any) => {
+      const colKey = String(g.assignmentId || g.examId || g.alignmentId || g.id || "").trim();
+      const k = colKey || g.id;
+      if (!k) return;
+      const prev = mergedByKey.get(k);
+      if (!prev) {
+        mergedByKey.set(k, g);
+        return;
+      }
+      const prevScore = prev.nilai ?? prev.score;
+      const nextScore = g.nilai ?? g.score;
+      const prevHasScore = hasValidExamScoreVal(prevScore);
+      const nextHasScore = hasValidExamScoreVal(nextScore);
+      mergedByKey.set(k, {
+        ...prev,
+        ...g,
+        title: g.title || prev.title || g.examTitle || prev.examTitle,
+        examTitle: g.examTitle || prev.examTitle || g.title || prev.title,
+        bab: g.bab || prev.bab,
+        type: g.type || prev.type,
+        gradedAt: g.gradedAt || prev.gradedAt,
+        submittedAt: g.submittedAt || prev.submittedAt,
+        ...(prevHasScore && !nextHasScore ? { nilai: prevScore, score: prevScore } : {}),
+      });
+    };
 
     if (isSupabaseConfigured && supabase) {
       try {
@@ -3312,24 +3361,30 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
           .select("*")
           .in("nisn", variants);
         if (!error && Array.isArray(supaData) && supaData.length > 0) {
-          const data = supaData.map((d) => ({
-            id: d.id,
-            assignmentId: d.assignment_id || d.exam_id,
-            examId: d.exam_id || d.assignment_id,
-            nisn: d.nisn,
-            studentName: d.student_name,
-            kelas: d.kelas,
-            nilai: d.nilai ?? d.score,
-            score: d.score ?? d.nilai,
-            submittedAt: d.submitted_at,
-            violationCount: d.violation_count || 0,
-            answers: d.answers || {},
-            isRemedial: d.is_remedial,
-            remedialScore: d.remedial_score,
-          }));
-          setLocalCache(cacheKey, data);
-          setIsOffline(false);
-          return data;
+          supaData.forEach((d) => {
+            putMergedGrade({
+              id: d.id,
+              assignmentId: d.assignment_id || d.exam_id,
+              examId: d.exam_id || d.assignment_id,
+              nisn: d.nisn,
+              studentName: d.student_name,
+              kelas: d.kelas,
+              title: d.title || d.exam_title,
+              examTitle: d.exam_title || d.title,
+              bab: d.bab,
+              type: d.type,
+              status: d.status,
+              isManualColumn: d.is_manual_column,
+              gradedAt: d.graded_at || d.submitted_at,
+              nilai: d.nilai ?? d.score,
+              score: d.score ?? d.nilai,
+              submittedAt: d.submitted_at,
+              violationCount: d.violation_count || 0,
+              answers: d.answers || {},
+              isRemedial: d.is_remedial,
+              remedialScore: d.remedial_score,
+            });
+          });
         }
       } catch (err) {
         console.warn("Supabase student final grades fallback:", err);
@@ -3341,13 +3396,23 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         ? await getDocs(query(collection(db, "final_grades"), where("nisn", "in", variants)))
         : await getDocs(query(collection(db, "final_grades"), where("nisn", "==", rawNisn)));
       trackUsage(snapshot.size, 0);
-      const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
-      setLocalCache(cacheKey, data);
+      snapshot.docs.forEach((docItem: any) => {
+        putMergedGrade({ id: docItem.id, ...(docItem.data() as any) });
+      });
+      const data = Array.from(mergedByKey.values());
+      if (data.length > 0) {
+        setLocalCache(cacheKey, data);
+      }
       setIsOffline(false);
       return data;
     } catch (e: any) {
       console.warn(`SWR fetch error final grades:`, e.message);
       dispatchIfQuotaError(e);
+      if (mergedByKey.size > 0) {
+        const data = Array.from(mergedByKey.values());
+        setLocalCache(cacheKey, data);
+        return data;
+      }
       if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || [];
@@ -3359,9 +3424,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     fetchFinalGrades,
     { 
       fallbackData: currentNisn ? (getLocalCache<any[]>(`firas_cache_final_grades_${currentNisn}`, 24 * 60 * 60 * 1000) || undefined) : undefined,
-      revalidateOnFocus: true,
+      revalidateOnFocus: false,
       revalidateOnMount: true,
-      refreshInterval: 15000
+      refreshInterval: 0
     }
   );
 
@@ -3394,43 +3459,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     return () => unsubscribe();
   }, [currentNisn, mutateFinalGrades]);
 
-  // Real-time listener for new assignments (tasks) notification
-  useEffect(() => {
-    if (!student?.kelas || isFirebaseQuotaExhausted()) return;
-
-    const q = query(collection(db, "assignments"));
-    const unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        // Skip initial load documents to only catch truly new additions during session
-        if (isFirstAssignmentsRun.current) {
-          isFirstAssignmentsRun.current = false;
-          return;
-        }
-
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === "added") {
-            const newTask = { id: change.doc.id, ...change.doc.data() as any };
-            // Notify if the task is relevant to the student's class
-            if (isAssignmentForClass(newTask, student.kelas)) {
-              setNewAssignmentToast(newTask);
-            }
-          }
-        });
-      },
-      (error) => {
-        console.warn("Realtime assignments notification snapshot error:", error);
-        dispatchIfQuotaError(error);
-      }
-    );
-
-    return () => unsubscribe();
-  }, [student?.kelas]);
-
-  // Safari / Apple device resume listener (visibilitychange & pageshow)
+  // Safari / Apple device resume listener (throttled to prevent quota spikes on tab switching)
+  const lastVisibilitySyncRef = useRef<number>(0);
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
+        const now = Date.now();
+        if (now - lastVisibilitySyncRef.current < 10 * 60 * 1000) return;
+        lastVisibilitySyncRef.current = now;
         mutateSubmissions();
         mutateFinalGrades();
       }
@@ -3444,17 +3480,57 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   }, [mutateSubmissions, mutateFinalGrades]);
 
   const finalGradesList = useMemo(() => {
-    if (realtimeFinalGrades && realtimeFinalGrades.length > 0) return realtimeFinalGrades;
-    if (Array.isArray(rawFinalGradesList) && rawFinalGradesList.length > 0) return rawFinalGradesList;
+    const mergedMap = new Map<string, any>();
+    const addList = (items: any[] | null | undefined) => {
+      if (!Array.isArray(items)) return;
+      items.forEach((item) => {
+        if (!item) return;
+        const key = String(item.assignmentId || item.examId || item.id || "").trim();
+        if (!key) return;
+        const prev = mergedMap.get(key);
+        if (!prev) {
+          mergedMap.set(key, item);
+          return;
+        }
+        const prevScore = prev.nilai ?? prev.score;
+        const nextScore = item.nilai ?? item.score;
+        mergedMap.set(key, {
+          ...prev,
+          ...item,
+          title: item.title || prev.title || item.examTitle || prev.examTitle,
+          examTitle: item.examTitle || prev.examTitle || item.title || prev.title,
+          bab: item.bab || prev.bab,
+          type: item.type || prev.type,
+          ...(hasValidExamScoreVal(prevScore) && !hasValidExamScoreVal(nextScore)
+            ? { nilai: prevScore, score: prevScore }
+            : {}),
+        });
+      });
+    };
+
     if (currentNisn) {
       const cached = getLocalCache<any[]>(`firas_cache_final_grades_${currentNisn}`, 24 * 60 * 60 * 1000);
-      if (cached && cached.length > 0) return cached;
+      addList(cached);
+    }
+    addList(rawFinalGradesList);
+    addList(realtimeFinalGrades);
+
+    if (mergedMap.size > 0) {
+      return Array.from(mergedMap.values());
     }
     return EMPTY_ARRAY;
   }, [realtimeFinalGrades, rawFinalGradesList, currentNisn]);
 
-  const reconcileResetSessionsFromCloud = async (targetNisn: string) => {
+  const reconcileResetSessionsFromCloud = async (targetNisn: string, force = false) => {
     if (!targetNisn || !isOnline) return;
+    const throttleKey = `reconcile_reset_ts_${targetNisn}`;
+    if (!force) {
+      try {
+        const lastCheck = Number(sessionStorage.getItem(throttleKey) || "0");
+        if (Date.now() - lastCheck < 10 * 60 * 1000) return;
+        sessionStorage.setItem(throttleKey, String(Date.now()));
+      } catch (_) {}
+    }
     try {
       const snap = await getDocs(query(collection(db, "exam_sessions"), where("nisn", "==", targetNisn)));
       if (snap.empty) return;
@@ -3528,7 +3604,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   useEffect(() => {
     if (student?.nisn && isOnline) {
-      void reconcileResetSessionsFromCloud(student.nisn);
+      void reconcileResetSessionsFromCloud(student.nisn, false);
     }
   }, [student?.nisn, isOnline]);
 
@@ -3783,14 +3859,15 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   const fetchExams = async () => {
     const cacheKey = `firas_cache_exams_v2_${student?.nisn || 'guest'}`;
-    const cached = getLocalCache<any[]>(cacheKey, 5 * 60 * 1000);
-    if (cached) return cached;
+    const cached = getLocalCache<any[]>(cacheKey, 15 * 60 * 1000);
+    if (cached && cached.length > 0) return cached;
 
     try {
-      const snapshot = await getDocs(query(collection(db, "exams")));
-      trackUsage(snapshot.size, 0);
-      const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
-      setLocalCache(cacheKey, data);
+      const data = await getExams();
+      trackUsage(data.length, 0);
+      if (data.length > 0) {
+        setLocalCache(cacheKey, data);
+      }
       setIsOffline(false);
       return data;
     } catch (e: any) {
@@ -3837,11 +3914,12 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     if (isSyncingData) return;
     setIsSyncingData(true);
     try {
-      if (student?.nisn) {
+      // Only clear caches on explicit manual sync, never automatically on page load
+      if (!isAuto && student?.nisn) {
         clearStudentCaches(student.nisn, student?.kelas);
       }
       const syncTasks: Promise<any>[] = [fetchLatestTeacherProfileSettings()];
-      if (student?.nisn) syncTasks.push(reconcileResetSessionsFromCloud(student.nisn));
+      if (student?.nisn) syncTasks.push(reconcileResetSessionsFromCloud(student.nisn, !isAuto));
       if (typeof mutateAnnouncements === "function") syncTasks.push(Promise.resolve(mutateAnnouncements()));
       if (typeof mutateAssignments === "function") syncTasks.push(Promise.resolve(mutateAssignments()));
       if (typeof mutateSubmissions === "function") syncTasks.push(Promise.resolve(mutateSubmissions()));
@@ -3876,12 +3954,6 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   };
 
   const handleSyncData = () => runSyncData(false);
-
-  useEffect(() => {
-    if (!student?.nisn || hasAutoSyncedRef.current) return;
-    hasAutoSyncedRef.current = true;
-    void runSyncData(true);
-  }, [student?.nisn]);
 
   const [isRefreshingData, setIsRefreshingData] = useState(false);
 
@@ -4075,28 +4147,26 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         const asgMatch = assignmentsList.find(a => a.id === targetId || a.id === fGrade.assignmentId);
         const exmMatch = examsList.find(e => e.id === targetId || e.id === fGrade.assignmentId || e.id === fGrade.examId);
 
-        const titleResolved = fGrade.title || fGrade.materi || fGrade.examTitle || asgMatch?.title || asgMatch?.materi || exmMatch?.title;
-        if (titleResolved || asgMatch || exmMatch) {
-          const startDateRaw = fGrade.startDate || fGrade.publishedAt || asgMatch?.startDate || asgMatch?.publishedAt || asgMatch?.createdAt || exmMatch?.startDate || exmMatch?.publishedAt || exmMatch?.createdAt;
-          const formattedStartDate = startDateRaw ? new Date(startDateRaw).toLocaleDateString("id-ID", {
-            day: "numeric",
-            month: "short",
-            year: "numeric"
-          }) : (fGrade.gradedAt ? new Date(fGrade.gradedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : "-");
+        const titleResolved = fGrade.title || fGrade.materi || fGrade.examTitle || asgMatch?.title || asgMatch?.materi || exmMatch?.title || (isExam ? "Ujian Online" : "Tugas / Penilaian");
+        const startDateRaw = fGrade.startDate || fGrade.publishedAt || asgMatch?.startDate || asgMatch?.publishedAt || asgMatch?.createdAt || exmMatch?.startDate || exmMatch?.publishedAt || exmMatch?.createdAt;
+        const formattedStartDate = startDateRaw ? new Date(startDateRaw).toLocaleDateString("id-ID", {
+          day: "numeric",
+          month: "short",
+          year: "numeric"
+        }) : (fGrade.gradedAt ? new Date(fGrade.gradedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : (fGrade.submittedAt ? new Date(fGrade.submittedAt).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" }) : "-"));
 
-          list.push({
-            id: targetId,
-            title: titleResolved || (isExam ? "Ujian CBT" : "Tugas"),
-            bab: fGrade.bab || asgMatch?.bab || exmMatch?.bab || "Informatika",
-            subtitle: isExam ? "Ujian / Evaluasi" : (fGrade.description || "Tugas / Penilaian"),
-            type: isExam ? "Ujian" : "Tugas",
-            nilai: Number(fGrade.nilai),
-            isManual: true,
-            tanggalMulai: formattedStartDate,
-            tanggal: formattedStartDate,
-            rawDate: startDateRaw || fGrade.gradedAt || ""
-          });
-        }
+        list.push({
+          id: targetId,
+          title: titleResolved,
+          bab: fGrade.bab || asgMatch?.bab || exmMatch?.bab || "Informatika",
+          subtitle: isExam ? "Ujian / Evaluasi" : (fGrade.description || "Tugas / Penilaian"),
+          type: isExam ? "Ujian" : "Tugas",
+          nilai: Number(fGrade.nilai ?? fGrade.score),
+          isManual: true,
+          tanggalMulai: formattedStartDate,
+          tanggal: formattedStartDate,
+          rawDate: startDateRaw || fGrade.gradedAt || fGrade.submittedAt || ""
+        });
       }
     });
 
@@ -4160,10 +4230,21 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     return assignmentsList.filter(a => {
       const pubDate = getAssignmentPublishedAtForStudent(a, student?.kelas);
       if (pubDate > new Date()) return false;
-      const isSubmitted = submissionsList.some((s) => s.assignmentId === a.id);
+      const sub = submissionsList.find((s) =>
+        (String(s.assignmentId || "").trim() === String(a.id).trim() ||
+          s.id === `SUB-${student?.nisn}-${a.id}` ||
+          (s.id && s.id.includes(a.id))) &&
+        (isSameNisn(s.nisn, student?.nisn) || isSameNisn(s.nis, student?.nisn) || !s.nisn)
+      );
+      const fGrade = finalGradesList.find((f) =>
+        (String(f.assignmentId || "").trim() === String(a.id).trim() || f.id === `${a.id}_${student?.nisn}`) &&
+        (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn))
+      );
+      const hasScore = hasValidExamScoreVal(sub?.nilai) || hasValidExamScoreVal(fGrade?.nilai ?? fGrade?.score);
+      const isSubmitted = (!!sub && sub.status !== "ditolak") || hasScore;
       return !isSubmitted;
     }).length;
-  }, [assignmentsList, submissionsList, student]);
+  }, [assignmentsList, submissionsList, finalGradesList, student]);
 
   const rejectedSubmissionsCount = useMemo(() => {
     return submissionsList.filter(s => s.status === "ditolak").length;
@@ -4172,15 +4253,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const rataRataNilaiUjian = useMemo(() => {
     const examGrades = finalGradesList.filter(
       (f) =>
-        f.nisn === student?.nisn &&
-        f.assignmentId && 
-        (f.assignmentId.startsWith("EXM-") ||
-          f.assignmentId.startsWith("ujian-") ||
-          examsList.some((e) => e.id === f.assignmentId) ||
+        (isSameNisn(f.nisn, student?.nisn) || isSameNisn(f.nis, student?.nisn)) &&
+        (f.assignmentId || f.examId) &&
+        ((f.assignmentId || "").startsWith("EXM-") ||
+          (f.assignmentId || "").startsWith("ujian-") ||
+          (f.examId || "").startsWith("EXM-") ||
+          examsList.some((e) => e.id === f.assignmentId || e.id === f.examId) ||
           MOCK_EXAMS.some((e) => e.id === f.assignmentId))
     );
     if (examGrades.length === 0) return 0;
-    const total = examGrades.reduce((acc, curr) => acc + Number(curr.nilai || 0), 0);
+    const total = examGrades.reduce((acc, curr) => acc + Number(curr.nilai ?? curr.score ?? 0), 0);
     return Math.round(total / examGrades.length);
   }, [finalGradesList, student, examsList]);
 
@@ -4203,7 +4285,12 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     let totalMeetings = 0;
 
     absensiList.forEach(a => {
-        const studentStatus = a.data[student.nisn];
+        const dataMap = a.data || {};
+        let studentStatus = dataMap[student.nisn];
+        if (!studentStatus) {
+          const found = Object.entries(dataMap).find(([k]) => isSameNisn(k, student.nisn));
+          if (found) studentStatus = found[1];
+        }
         if (studentStatus) {
             stats[studentStatus as keyof typeof stats]++;
             totalMeetings++;
@@ -4248,12 +4335,17 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     // 1. Nilai Kehadiran
     let stuHadirCount = 0;
     let stuTotalMeetings = 0;
-    const myClass = String(student.kelas || "").trim().toLowerCase();
     absensiList.forEach((a: any) => {
-      if (String(a.kelasRef || "").trim().toLowerCase() === myClass) {
+      if (isClassMatch(a.kelasRef || "", student.kelas)) {
         stuTotalMeetings++;
-        if (a.data && a.data[student.nisn]) {
-          const sStatus = String(a.data[student.nisn]).toLowerCase();
+        const dataMap = a.data || {};
+        let rawStatus = dataMap[student.nisn];
+        if (!rawStatus) {
+          const found = Object.entries(dataMap).find(([k]) => isSameNisn(k, student.nisn));
+          if (found) rawStatus = found[1];
+        }
+        if (rawStatus) {
+          const sStatus = String(rawStatus).toLowerCase();
           if (sStatus === "hadir" || sStatus === "dispen") {
             stuHadirCount++;
           }
@@ -4264,30 +4356,30 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     // 2. Nilai Tugas & Harian
     const tugasItems = allFinalGrades.filter((g: any) => {
-      if (g.nisn !== student.nisn) return false;
+      if (!(isSameNisn(g.nisn, student.nisn) || isSameNisn(g.nis, student.nisn))) return false;
       if (g.type === "Tugas") return true;
-      const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.id);
+      const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.examId || e.id === g.id);
       return !isPTSItem(exam || g) && !isPASItem(exam || g);
     });
     const avgTugas = tugasItems.length > 0 
-      ? tugasItems.reduce((sum: number, item: any) => sum + (Number(item.nilai) || 0), 0) / tugasItems.length 
+      ? tugasItems.reduce((sum: number, item: any) => sum + (Number(item.nilai ?? item.score) || 0), 0) / tugasItems.length 
       : 0;
 
     // 3. Nilai UTS
     const utsItem = allFinalGrades.find((g: any) => {
-      if (g.nisn !== student.nisn) return false;
-      const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.id);
+      if (!(isSameNisn(g.nisn, student.nisn) || isSameNisn(g.nis, student.nisn))) return false;
+      const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.examId || e.id === g.id);
       return isPTSItem(exam || g);
     });
-    const nilaiUts = utsItem ? (Number(utsItem.nilai) || 0) : 0;
+    const nilaiUts = utsItem ? (Number(utsItem.nilai ?? utsItem.score) || 0) : 0;
 
     // 4. Nilai UAS
     const uasItem = allFinalGrades.find((g: any) => {
-      if (g.nisn !== student.nisn) return false;
-      const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.id);
+      if (!(isSameNisn(g.nisn, student.nisn) || isSameNisn(g.nis, student.nisn))) return false;
+      const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.examId || e.id === g.id);
       return isPASItem(exam || g);
     });
-    const nilaiUas = uasItem ? (Number(uasItem.nilai) || 0) : 0;
+    const nilaiUas = uasItem ? (Number(uasItem.nilai ?? uasItem.score) || 0) : 0;
 
     // Final Calculation based on teacher's rubric
     const finalScore = (
@@ -4427,15 +4519,24 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const studentAttendanceData = useMemo(() => {
     if (!student || absensiList.length === 0) return [];
     return absensiList
-      .filter(a => a.data && a.data[student.nisn])
-      .map(a => ({
-        id: a.id,
-        date: a.date,
-        subject: a.subject,
-        status: a.data[student.nisn],
-        keterangan: a.keterangan?.[student.nisn] || "-",
-        teacher: a.teacherName || "Guru Mata Pelajaran"
-      }))
+      .map(a => {
+        const dataMap = a.data || {};
+        let matchedKey = dataMap[student.nisn] ? student.nisn : "";
+        if (!matchedKey) {
+          const found = Object.keys(dataMap).find((k) => isSameNisn(k, student.nisn));
+          if (found) matchedKey = found;
+        }
+        if (!matchedKey || !dataMap[matchedKey]) return null;
+        return {
+          id: a.id,
+          date: a.date,
+          subject: a.subject,
+          status: dataMap[matchedKey],
+          keterangan: a.keterangan?.[matchedKey] || a.keterangan?.[student.nisn] || "-",
+          teacher: a.teacherName || "Guru Mata Pelajaran"
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [absensiList, student]);
 
@@ -4627,12 +4728,18 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     let studentHadirCount = 0;
     let studentTotalMeetings = 0;
 
-    // Filter absensi by student's class and count meetings
+    // Filter absensi by student's class (normalized) and count meetings
     absensiList.forEach(a => {
-      if (a.kelasRef === student.kelas) {
+      if (isClassMatch(a.kelasRef || "", student.kelas)) {
         studentTotalMeetings++;
-        if (a.data && a.data[student.nisn]) {
-          const sStatus = String(a.data[student.nisn]).toLowerCase();
+        const dataMap = a.data || {};
+        let rawStatus = dataMap[student.nisn];
+        if (!rawStatus) {
+          const matchedEntry = Object.entries(dataMap).find(([k]) => isSameNisn(k, student.nisn));
+          if (matchedEntry) rawStatus = matchedEntry[1];
+        }
+        if (rawStatus) {
+          const sStatus = String(rawStatus).toLowerCase();
           if (sStatus === "hadir" || sStatus === "dispen") {
             studentHadirCount++;
           }
@@ -4646,6 +4753,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     const tugasVals: number[] = [];
     let nilaiUts = 0;
     let nilaiUas = 0;
+    const matchedGradeIds = new Set<string>();
 
     const studentAssignments = assignmentsList.filter(a => isAssignmentForClass(a, student.kelas));
     studentAssignments.forEach(a => {
@@ -4654,7 +4762,9 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         (isSameNisn(s.nisn, student.nisn) || !s.nisn)
       );
       const fGrade = finalGradesList.find(f => (f.assignmentId === a.id || f.id === `${a.id}_${student.nisn}`) && isSameNisn(f.nisn, student.nisn));
-      const val = sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" ? sub.nilai : fGrade?.nilai;
+      if (fGrade?.id) matchedGradeIds.add(String(fGrade.id));
+      matchedGradeIds.add(String(a.id));
+      const val = sub?.nilai !== undefined && sub?.nilai !== null && sub?.nilai !== "" ? sub.nilai : (fGrade?.nilai ?? fGrade?.score);
       if (val !== undefined && val !== null && val !== "") {
         tugasVals.push(Number(val));
       } else {
@@ -4668,6 +4778,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         (f.alignmentId === e.id || f.assignmentId === e.id || f.examId === e.id || (f.id && f.id.startsWith(`${e.id}_`))) &&
         (isSameNisn(f.nisn, student.nisn) || isSameNisn(f.nis, student.nisn))
       );
+      if (fGrade?.id) matchedGradeIds.add(String(fGrade.id));
+      matchedGradeIds.add(String(e.id));
       const rawScore = fGrade?.nilai ?? fGrade?.score;
       if (rawScore !== undefined && rawScore !== null && rawScore !== "") {
         const n = Number(rawScore);
@@ -4679,6 +4791,20 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         else if (isPASItem(e)) nilaiUas = 0;
         else tugasVals.push(0);
       }
+    });
+
+    // Include any standalone/unmatched grades from finalGradesList (e.g. if metadata wasn't in assignmentsList/examsList)
+    finalGradesList.forEach(f => {
+      if (!(isSameNisn(f.nisn, student.nisn) || isSameNisn(f.nis, student.nisn))) return;
+      if (isIncompleteViolationStub(f)) return;
+      const targetId = String(f.assignmentId || f.examId || f.alignmentId || f.id || "");
+      if (matchedGradeIds.has(String(f.id)) || (targetId && matchedGradeIds.has(targetId))) return;
+      const rawScore = f.nilai ?? f.score;
+      if (!hasValidExamScoreVal(rawScore)) return;
+      const n = Number(rawScore);
+      if (isPTSItem(f)) nilaiUts = n;
+      else if (isPASItem(f)) nilaiUas = n;
+      else tugasVals.push(n);
     });
 
     const avgTugas = tugasVals.length > 0 
@@ -4702,7 +4828,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       totalMeetings: studentTotalMeetings,
       hadirCount: studentHadirCount
     };
-  }, [student, rubric, absensiList, combinedGrades, examsList]);
+  }, [student, rubric, absensiList, assignmentsList, submissionsList, finalGradesList, examsList]);
 
   const [taskSearch, setTaskSearch] = useState("");
   const [activeProfileTab, setActiveProfileTab] = useState("Data Pribadi");
@@ -11673,10 +11799,19 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                 </button>
                 <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border-2 border-white/40 shadow-sm">
                    <img 
-                    src={teacherPhotoUrl || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"} 
+                    src={getDriveImageUrl(teacherPhotoUrl) || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"} 
                     alt="Pak Agan" 
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const imgEl = e.target as HTMLImageElement;
+                      const fallback = getDriveImageFallbackUrl(teacherPhotoUrl);
+                      if (fallback && imgEl.src !== fallback) {
+                        imgEl.src = fallback;
+                      } else {
+                        imgEl.src = "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg";
+                      }
+                    }}
                    />
                 </div>
                 <div className="flex-1 min-w-0">
@@ -11973,10 +12108,19 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                 </button>
                 <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex-shrink-0 border-2 border-white/40 shadow-sm">
                    <img 
-                    src={teacherPhotoUrl || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"} 
+                    src={getDriveImageUrl(teacherPhotoUrl) || "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg"} 
                     alt="Pak Agan" 
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
+                    onError={(e) => {
+                      const imgEl = e.target as HTMLImageElement;
+                      const fallback = getDriveImageFallbackUrl(teacherPhotoUrl);
+                      if (fallback && imgEl.src !== fallback) {
+                        imgEl.src = fallback;
+                      } else {
+                        imgEl.src = "/assets/aistudio/faceu_20230225135623_f97f0c29.jpg";
+                      }
+                    }}
                    />
                 </div>
                 <div className="flex-1 min-w-0">

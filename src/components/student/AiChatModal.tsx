@@ -287,7 +287,6 @@ const QUICK_PROMPTS = [
   "Apakah ada pesan hari ini?",
   "Apa saja kisi-kisi ujian terbaru?",
   "Berapa nilai rapor sementara saya dan rinciannya?",
-  "Siapa siswa dengan nilai rapor tertinggi di kelas?",
   "Komponen nilai mana yang perlu saya tingkatkan?",
   "Bagaimana peringkat saya dan status integritas ujian?",
   "Tugas apa saja yang belum saya kerjakan & tenggat terdekat?",

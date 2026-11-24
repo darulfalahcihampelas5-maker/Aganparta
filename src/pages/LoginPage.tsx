@@ -413,34 +413,37 @@ export default function LoginPage() {
         }
       } catch (_) {}
 
-      // 4. Query Supabase + parallel Firestore fallback with fast 3.5s timeout
+      // 4. Query Supabase + parallel Firestore fallback with fast targeted lookup
       const fetchStudentPromise = async () => {
         if (isSupabaseConfigured && supabase) {
           try {
-            const { data, error } = await supabase
+            const unpadded = rawCode.replace(/^0+/, "");
+            const padded = unpadded ? unpadded.padStart(10, "0") : rawCode;
+            const codeCandidates = Array.from(new Set([rawCode, upperCode, inputCode, unpadded, padded].filter(Boolean)));
+            const orFilters = codeCandidates
+              .flatMap((c) => {
+                const escaped = c.replace(/,/g, "");
+                return [
+                  `doc_id.eq.${escaped}`,
+                  `data->>accessCode.ilike.${escaped}`,
+                  `data->>nisn.eq.${escaped}`,
+                  `data->>nis.eq.${escaped}`,
+                ];
+              })
+              .join(",");
+
+            const { data: targetedData, error: targetedError } = await supabase
               .from("app_collections")
               .select("doc_id, data")
-              .eq("collection_name", "studentsByNisn");
+              .eq("collection_name", "studentsByNisn")
+              .or(orFilters)
+              .limit(10);
 
-            if (!error && Array.isArray(data)) {
-              for (const item of data) {
-                const studentData = item.data;
-                if (studentData) {
-                  const storedCode = String(studentData.accessCode || "").trim();
-                  const storedNisn = String(studentData.nisn || "").trim();
-                  const storedNis = String(studentData.nis || "").trim();
-
-                  if (
-                    storedCode === rawCode ||
-                    storedCode.toUpperCase() === upperCode ||
-                    storedNisn === rawCode ||
-                    storedNis === rawCode
-                  ) {
-                    const resolvedNisn = studentData.nisn || item.doc_id;
-                    return { id: resolvedNisn, ...studentData, nisn: resolvedNisn };
-                  }
-                }
-              }
+            if (!targetedError && Array.isArray(targetedData) && targetedData.length > 0) {
+              const item = targetedData[0];
+              const studentData = item.data || {};
+              const resolvedNisn = studentData.nisn || item.doc_id;
+              return { id: resolvedNisn, ...studentData, nisn: resolvedNisn };
             }
           } catch (supErr) {
             console.warn("Supabase student direct query note:", supErr);
@@ -469,7 +472,7 @@ export default function LoginPage() {
       };
 
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("TIMEOUT")), 3500)
+        setTimeout(() => reject(new Error("TIMEOUT")), 6500)
       );
 
       const foundStudentData = await Promise.race([

@@ -24,6 +24,42 @@ export function setFirebaseQuotaExhausted(val: boolean = true): void {
   }
 }
 
+let supabaseQuotaUntil = 0;
+
+export function isSupabaseQuotaExhausted(): boolean {
+  if (supabaseQuotaUntil > Date.now()) return true;
+  if (typeof window !== 'undefined') {
+    const raw = Number(sessionStorage.getItem('supabase_quota_exhausted_until') || '0');
+    if (raw > Date.now()) {
+      supabaseQuotaUntil = raw;
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isSupabaseQuotaError(err: any): boolean {
+  const msg = String(err?.message || err?.details || err?.hint || err?.code || err || '').toLowerCase();
+  return (
+    msg.includes('exceed_egress_quota') ||
+    msg.includes('egress') ||
+    msg.includes('quota') ||
+    msg.includes('spend cap') ||
+    msg.includes('payment required') ||
+    msg.includes('402')
+  );
+}
+
+export function setSupabaseQuotaExhausted(cooldownMs = 5 * 60 * 1000): void {
+  const until = Date.now() + cooldownMs;
+  supabaseQuotaUntil = until;
+  if (typeof window !== 'undefined') {
+    try {
+      sessionStorage.setItem('supabase_quota_exhausted_until', String(until));
+    } catch (_) {}
+  }
+}
+
 /**
  * Service to sync & read high-volume data (Grades & CBT Exams) with Supabase
  * with automatic fallback to Firestore if Supabase is offline or not yet migrated.
@@ -249,10 +285,13 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
     }
   };
 
-  // 1. Always Try Supabase First (Primary, paginated)
-  if (isSupabaseConfigured && supabase) {
+  let supaGradesSucceeded = false;
+
+  // 1. Always Try Supabase First (Primary, paginated) unless temporarily flagged quota-exhausted
+  if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
       let allSupaData: any[] = [];
+      let supaHadError = false;
       let page = 0;
       const pageSize = 1000;
       while (true) {
@@ -260,14 +299,20 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
           .from("final_grades")
           .select("*")
           .range(page * pageSize, (page + 1) * pageSize - 1);
-        if (error || !data || data.length === 0) break;
+        if (error) {
+          supaHadError = true;
+          if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+          break;
+        }
+        if (!data || data.length === 0) break;
         allSupaData.push(...data);
         if (data.length < pageSize) break;
         page++;
         if (page >= 10) break;
       }
 
-      if (allSupaData.length > 0) {
+      if (!supaHadError && allSupaData.length > 0) {
+        supaGradesSucceeded = true;
         allSupaData.forEach((d) => {
           const item: GradeItem = {
             id: d.id,
@@ -288,65 +333,74 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
         });
       }
     } catch (err) {
+      if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
       console.warn("Supabase fetch grades exception:", err);
     }
   }
 
-  // 2. Also check Firestore for any fresh or existing grades
-  let fsSnap: any = null;
-  if (!isFirebaseDisabled) {
-    try {
-      fsSnap = await getDocs(collection(db, "final_grades"));
-    } catch (err: any) {
-      if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-        isFirebaseDisabled = true;
+  // 2. Only scan Firestore final_grades when Supabase failed or returned empty (avoids double full-table scans)
+  if (!supaGradesSucceeded) {
+    let fsSnap: any = null;
+    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
+      try {
+        fsSnap = await getDocs(collection(db, "final_grades"));
+      } catch (err: any) {
+        if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+          setFirebaseQuotaExhausted(true);
+        }
+        try {
+          fsSnap = await getDocsFromCache(collection(db, "final_grades"));
+        } catch (_) {}
       }
+    } else {
       try {
         fsSnap = await getDocsFromCache(collection(db, "final_grades"));
       } catch (_) {}
     }
-  } else {
-    try {
-      fsSnap = await getDocsFromCache(collection(db, "final_grades"));
-    } catch (_) {}
+
+    if (fsSnap && fsSnap.docs) {
+      fsSnap.docs.forEach((docSnap: any) => {
+        const d = docSnap.data();
+        const nisnVal = String(d.nisn || d.nis || "").trim();
+        const asgId = d.assignmentId || d.examId || extractColIdFromDocId(docSnap.id, nisnVal) || "";
+        const item: GradeItem = {
+          ...d,
+          id: docSnap.id,
+          assignmentId: asgId,
+          examId: d.examId || asgId,
+          nisn: nisnVal,
+          studentName: d.studentName || d.student_name || "",
+          kelas: d.kelas || "",
+          nilai: d.nilai ?? d.score,
+          score: d.score ?? d.nilai,
+        };
+        putGrade(item, true);
+      });
+    }
   }
 
-  if (fsSnap && fsSnap.docs) {
-    fsSnap.docs.forEach((docSnap: any) => {
-      const d = docSnap.data();
-      const nisnVal = String(d.nisn || d.nis || "").trim();
-      const asgId = d.assignmentId || d.examId || extractColIdFromDocId(docSnap.id, nisnVal) || "";
-      const item: GradeItem = {
-        ...d,
-        id: docSnap.id,
-        assignmentId: asgId,
-        examId: d.examId || asgId,
-        nisn: nisnVal,
-        studentName: d.studentName || d.student_name || "",
-        kelas: d.kelas || "",
-        nilai: d.nilai ?? d.score,
-        score: d.score ?? d.nilai,
-      };
-      putGrade(item, true);
-    });
-  }
-
-  // 3. Recovery from BOTH Supabase app_collections ("exam_sessions") AND Firestore ("exam_sessions"):
-  // If a student finished an exam (status === "selesai" or finishedAt with numeric score) in exam_sessions,
-  // ensure it appears in Buku Nilai even if final_grades write failed, lagged, or hit quota on one backend.
+  // 3. Recovery from completed exam_sessions (filtered to status = 'selesai' to minimize egress)
   const allSessionDocs: Array<{ id: string; data: any }> = [];
+  let supaSessionsSucceeded = false;
 
-  if (isSupabaseConfigured && supabase) {
+  if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
       let page = 0;
       const pageSize = 1000;
+      let hadSessErr = false;
       while (true) {
         const { data, error } = await supabase
           .from("app_collections")
           .select("doc_id, data")
           .eq("collection_name", "exam_sessions")
+          .eq("data->>status", "selesai")
           .range(page * pageSize, (page + 1) * pageSize - 1);
-        if (error || !data || data.length === 0) break;
+        if (error) {
+          hadSessErr = true;
+          if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+          break;
+        }
+        if (!data || data.length === 0) break;
         data.forEach((row: any) => {
           if (row?.data) {
             allSessionDocs.push({ id: row.doc_id || row.data?.id || "", data: row.data });
@@ -356,33 +410,39 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
         page++;
         if (page >= 10) break;
       }
+      if (!hadSessErr && supaGradesSucceeded) {
+        supaSessionsSucceeded = true;
+      }
     } catch (err) {
+      if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
       console.warn("Supabase fetch exam_sessions recovery warning:", err);
     }
   }
 
-  let sessionsSnap: any = null;
-  if (!isFirebaseDisabled) {
-    try {
-      sessionsSnap = await getDocs(collection(db, "exam_sessions"));
-    } catch (err: any) {
-      if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-        isFirebaseDisabled = true;
+  if (!supaSessionsSucceeded) {
+    let sessionsSnap: any = null;
+    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
+      try {
+        sessionsSnap = await getDocs(collection(db, "exam_sessions"));
+      } catch (err: any) {
+        if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+          setFirebaseQuotaExhausted(true);
+        }
+        try {
+          sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
+        } catch (_) {}
       }
+    } else {
       try {
         sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
       } catch (_) {}
     }
-  } else {
-    try {
-      sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
-    } catch (_) {}
-  }
 
-  if (sessionsSnap && sessionsSnap.docs) {
-    sessionsSnap.docs.forEach((docSnap: any) => {
-      allSessionDocs.push({ id: docSnap.id, data: docSnap.data() });
-    });
+    if (sessionsSnap && sessionsSnap.docs) {
+      sessionsSnap.docs.forEach((docSnap: any) => {
+        allSessionDocs.push({ id: docSnap.id, data: docSnap.data() });
+      });
+    }
   }
 
   const missingGradesToBackfill: GradeItem[] = [];
@@ -422,13 +482,13 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
     }
   });
 
-  // Self-heal missing final_grades in background so future loads/exports find them natively
-  if (missingGradesToBackfill.length > 0 && typeof window !== "undefined") {
+  // Self-heal missing final_grades in background (only when Supabase/Firebase are not quota-blocked)
+  if (missingGradesToBackfill.length > 0 && typeof window !== "undefined" && !isSupabaseQuotaExhausted()) {
     const dedupedBackfill = Array.from(
       new Map(missingGradesToBackfill.map((item) => [item.id, item])).values()
     );
     setTimeout(() => {
-      dedupedBackfill.slice(0, 25).forEach((item) => {
+      dedupedBackfill.slice(0, 10).forEach((item) => {
         saveFinalGrade(item).catch(() => {});
       });
     }, 100);
@@ -437,15 +497,18 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
   return Array.from(gradesMap.values());
 }
 
-// 2. Fetch Exams (Merge Supabase + Firestore so no exam is missed)
+// 2. Fetch Exams (Supabase Primary, Firestore Fallback only if Supabase empty/unavailable)
 export async function getExams(): Promise<ExamItem[]> {
   const examsMap = new Map<string, ExamItem>();
+  let supaExamsSucceeded = false;
 
   // 1. Try Supabase First
-  if (isSupabaseConfigured && supabase) {
+  if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
       const { data, error } = await supabase.from("exams").select("*");
-      if (!error && Array.isArray(data) && data.length > 0) {
+      if (error) {
+        if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+      } else if (Array.isArray(data) && data.length > 0) {
         data.forEach((d) => {
           examsMap.set(d.id, {
             id: d.id,
@@ -459,40 +522,46 @@ export async function getExams(): Promise<ExamItem[]> {
             createdAt: d.created_at,
           });
         });
+        if (data.every((d) => Boolean(d.kelas_ref))) {
+          supaExamsSucceeded = true;
+        }
       }
     } catch (err) {
+      if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
       console.warn("Supabase fetch exams exception:", err);
     }
   }
 
-  // 2. Also merge Firestore exams (which contains full targets/targetClasses/bab/tema metadata)
-  let snap: any = null;
-  if (!isFirebaseDisabled) {
-    try {
-      snap = await getDocs(collection(db, "exams"));
-    } catch (err: any) {
-      if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-        isFirebaseDisabled = true;
+  // 2. Fallback to Firestore only when Supabase didn't already provide full exams
+  if (!supaExamsSucceeded) {
+    let snap: any = null;
+    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
+      try {
+        snap = await getDocs(collection(db, "exams"));
+      } catch (err: any) {
+        if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+          setFirebaseQuotaExhausted(true);
+        }
+        try {
+          snap = await getDocsFromCache(collection(db, "exams"));
+        } catch (_) {}
       }
+    } else {
       try {
         snap = await getDocsFromCache(collection(db, "exams"));
       } catch (_) {}
     }
-  } else {
-    try {
-      snap = await getDocsFromCache(collection(db, "exams"));
-    } catch (_) {}
-  }
 
-  if (snap && snap.docs) {
-    snap.docs.forEach((docSnap: any) => {
-      const existing = examsMap.get(docSnap.id) || {};
-      examsMap.set(docSnap.id, {
-        ...existing,
-        id: docSnap.id,
-        ...docSnap.data(),
-      } as ExamItem);
-    });
+    if (snap && snap.docs) {
+      snap.docs.forEach((docSnap: any) => {
+        const existing = examsMap.get(docSnap.id) || {};
+        examsMap.set(docSnap.id, {
+          ...existing,
+          id: docSnap.id,
+          ...docSnap.data(),
+        } as ExamItem);
+      });
+    }
   }
 
   return Array.from(examsMap.values());
@@ -756,18 +825,51 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
   const collectionName = getCollectionName(queryOrCollectionRef);
 
   // 1. Try Supabase first (Primary Source)
-  if (isSupabaseConfigured && supabase && collectionName) {
+  if (isSupabaseConfigured && supabase && collectionName && !isSupabaseQuotaExhausted()) {
     try {
+      // Helper to extract simple equality filter from Firestore query
+      const extractEqFilter = (targetFields: string[]): { field: string; value: string } | null => {
+        const filters = queryOrCollectionRef?._query?.filters;
+        if (!Array.isArray(filters)) return null;
+        for (const f of filters) {
+          const fName = Array.isArray(f.field?.segments)
+            ? f.field.segments[0]
+            : typeof f.field === "string"
+            ? f.field
+            : null;
+          if (fName && targetFields.includes(fName) && (f.op === "==" || f.op === "EQUAL")) {
+            const val = f.value?.stringValue ?? (typeof f.value === "string" ? f.value : "");
+            if (val) return { field: fName, value: String(val).trim() };
+          }
+        }
+        return null;
+      };
+
       if (collectionName === "final_grades") {
+        const nisnEq = extractEqFilter(["nisn", "nis"]);
+        const kelasEq = extractEqFilter(["kelas"]);
+        const examEq = extractEqFilter(["examId", "assignmentId"]);
+
         let allData: any[] = [];
         let page = 0;
         const pageSize = 1000;
         while (true) {
-          const { data, error } = await supabase
-            .from("final_grades")
-            .select("*")
-            .range(page * pageSize, (page + 1) * pageSize - 1);
-          if (error || !data || data.length === 0) break;
+          let req = supabase.from("final_grades").select("*");
+          if (nisnEq) {
+            const unp = nisnEq.value.replace(/^0+/, "");
+            const pad = unp.padStart(10, "0");
+            req = req.in("nisn", Array.from(new Set([nisnEq.value, unp, pad].filter(Boolean))));
+          } else if (kelasEq) {
+            req = req.eq("kelas", kelasEq.value);
+          } else if (examEq) {
+            req = req.or(`exam_id.eq.${examEq.value},assignment_id.eq.${examEq.value}`);
+          }
+          const { data, error } = await req.range(page * pageSize, (page + 1) * pageSize - 1);
+          if (error) {
+            if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+            break;
+          }
+          if (!data || data.length === 0) break;
           allData.push(...data);
           if (data.length < pageSize) break;
           page++;
@@ -785,6 +887,13 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             nilai: d.nilai ?? d.score,
             score: d.score ?? d.nilai,
             submittedAt: d.submitted_at,
+            gradedAt: d.graded_at || d.submitted_at,
+            title: d.title || d.exam_title,
+            examTitle: d.exam_title || d.title,
+            bab: d.bab,
+            type: d.type,
+            status: d.status,
+            isManualColumn: d.is_manual_column,
             violationCount: d.violation_count || 0,
             answers: d.answers || {},
             isRemedial: d.is_remedial,
@@ -800,7 +909,9 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         }
       } else if (collectionName === "exams") {
         const { data, error } = await supabase.from("exams").select("*").limit(1000);
-        if (!error && Array.isArray(data)) {
+        if (error) {
+          if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+        } else if (Array.isArray(data) && data.length > 0) {
           const formatted = data.map((d) => ({
             id: d.id,
             title: d.title,
@@ -821,12 +932,11 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
           return wrapSnapshot(docs);
         }
       } else {
-        // Generic app_collections table (e.g. submissions, studentsByNisn, assignments)
+        // Generic app_collections table (e.g. submissions, studentsByNisn, assignments, exam_sessions)
         const _query = queryOrCollectionRef?._query;
         let fetchedData: any[] = [];
         let isSupabaseSuccess = false;
 
-        // Check if query contains a NISN filter for efficient querying
         let nisnFilter: any = null;
         if (_query && Array.isArray(_query.filters)) {
           for (const f of _query.filters) {
@@ -865,38 +975,57 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
               .select("doc_id, data")
               .eq("collection_name", collectionName)
               .in("data->>nisn", uniqueVariants);
-            if (!error && Array.isArray(data)) {
+            if (error) {
+              if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+            } else if (Array.isArray(data) && data.length > 0) {
               fetchedData = data;
               isSupabaseSuccess = true;
+            } else {
+              const { data: nisData, error: nisErr } = await supabase
+                .from("app_collections")
+                .select("doc_id, data")
+                .eq("collection_name", collectionName)
+                .in("data->>nis", uniqueVariants);
+              if (nisErr) {
+                if (isSupabaseQuotaError(nisErr)) setSupabaseQuotaExhausted();
+              } else if (Array.isArray(nisData) && nisData.length > 0) {
+                fetchedData = nisData;
+                isSupabaseSuccess = true;
+              }
             }
           }
         } else {
-          // Full collection query: Paginate to retrieve ALL records without 1000-row cap truncation
+          // Push down common equality filters (examId, assignmentId, kelas, studentId) so we don't scan the full collection
+          const pushedFilter = extractEqFilter(["examId", "assignmentId", "kelas", "studentId"]);
           let page = 0;
           const pageSize = 1000;
           let hadError = false;
           while (true) {
-            const { data, error } = await supabase
+            let req = supabase
               .from("app_collections")
               .select("doc_id, data")
-              .eq("collection_name", collectionName)
-              .range(page * pageSize, (page + 1) * pageSize - 1);
+              .eq("collection_name", collectionName);
+            if (pushedFilter) {
+              req = req.eq(`data->>${pushedFilter.field}`, pushedFilter.value);
+            }
+            const { data, error } = await req.range(page * pageSize, (page + 1) * pageSize - 1);
             if (error) {
               hadError = true;
+              if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
               break;
             }
             if (!data || data.length === 0) break;
             fetchedData.push(...data);
             if (data.length < pageSize) break;
             page++;
-            if (page >= 10) break; // safety limit at 10,000 items
+            if (page >= 10) break;
           }
-          if (!hadError) {
+          if (!hadError && fetchedData.length > 0) {
             isSupabaseSuccess = true;
           }
         }
 
-        if (isSupabaseSuccess) {
+        if (isSupabaseSuccess && fetchedData.length > 0) {
           const formatted = fetchedData.map((item: any) => ({
             id: item.doc_id,
             ...item.data
@@ -911,6 +1040,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         }
       }
     } catch (err: any) {
+      if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
       console.warn(`Supabase getDocs read bypass for ${collectionName}:`, err?.message || err);
     }
   }
@@ -935,29 +1065,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         if (cacheSnap && !cacheSnap.empty) {
           snap = cacheSnap;
         }
-      } catch (_) {
-        // cache read error is ignored
-      }
-    }
-    
-    // Auto-populate Supabase cache in the background if we got data
-    if (isSupabaseConfigured && supabase && snap && !snap.empty && collectionName) {
-      setTimeout(async () => {
-        try {
-          if (collectionName !== "final_grades" && collectionName !== "exams" && snap.docs) {
-            const formatted = snap.docs.map((docSnap: any) => ({
-              id: `${collectionName}_${docSnap.id}`,
-              collection_name: collectionName,
-              doc_id: docSnap.id,
-              data: docSnap.data(),
-              updated_at: new Date().toISOString()
-            }));
-            await supabase.from("app_collections").upsert(formatted, { onConflict: "id" });
-          }
-        } catch (err) {
-          // background sync fail is ok
-        }
-      }, 50);
+      } catch (_) {}
     }
 
     if (snap && typeof snap.forEach === "function" && snap.docs && snap.docs.length > 0) {
@@ -977,8 +1085,15 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
   // 3. Fallback to localStorage backup if available
   if (collectionName) {
     try {
-      const localKey = collectionName === "studentsByNisn" ? "firas_cache_students" : `firas_cache_${collectionName}`;
-      const rawCached = localStorage.getItem(localKey);
+      const localKey =
+        collectionName === "studentsByNisn"
+          ? "firas_cache_students"
+          : collectionName === "assignments"
+          ? "firas_cache_assignments_v2"
+          : collectionName === "exams"
+          ? "firas_cache_exams_v2"
+          : `firas_cache_${collectionName}`;
+      const rawCached = localStorage.getItem(localKey) || localStorage.getItem(`firas_cache_${collectionName}`);
       if (rawCached) {
         const parsed = JSON.parse(rawCached);
         let items: any[] = [];
@@ -1014,7 +1129,7 @@ export async function dbGetDoc(docRef: any): Promise<any> {
   const docId = pathSegments[1];
 
   // 1. Try Supabase first (Primary Source)
-  if (isSupabaseConfigured && supabase) {
+  if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
       const id = `${collectionName}_${docId}`;
       const { data, error } = await supabase
@@ -1023,7 +1138,9 @@ export async function dbGetDoc(docRef: any): Promise<any> {
         .eq("id", id)
         .maybeSingle();
 
-      if (!error && data && data.data) {
+      if (error) {
+        if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+      } else if (data && data.data) {
         return {
           id: docId,
           exists: () => true,
@@ -1031,6 +1148,7 @@ export async function dbGetDoc(docRef: any): Promise<any> {
         };
       }
     } catch (err: any) {
+      if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
       console.warn(`Supabase getDoc read bypass for ${collectionName}/${docId}:`, err?.message || err);
     }
   }
@@ -1038,12 +1156,12 @@ export async function dbGetDoc(docRef: any): Promise<any> {
   // 2. Fallback to Firestore (Secondary Source) or Offline Persistent Cache
   try {
     let snap: any = null;
-    if (!isFirebaseDisabled) {
+    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
       try {
         snap = await getDoc(docRef);
       } catch (err: any) {
         if (err?.message?.includes("Quota") || err?.code === "resource-exhausted" || err?.code === "unavailable") {
-          isFirebaseDisabled = true;
+          setFirebaseQuotaExhausted(true);
         }
       }
     }
@@ -1058,25 +1176,11 @@ export async function dbGetDoc(docRef: any): Promise<any> {
     }
 
     if (snap && snap.exists()) {
-      if (isSupabaseConfigured && supabase) {
-        setTimeout(async () => {
-          try {
-            const id = `${collectionName}_${docId}`;
-            await supabase.from("app_collections").upsert({
-              id,
-              collection_name: collectionName,
-              doc_id: docId,
-              data: snap.data(),
-              updated_at: new Date().toISOString()
-            });
-          } catch (err) {}
-        }, 50);
-      }
       return snap;
     }
   } catch (err: any) {
     if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-      isFirebaseDisabled = true;
+      setFirebaseQuotaExhausted(true);
     }
   }
 
@@ -1093,8 +1197,8 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
   const collectionName = pathSegments[0];
   const docId = pathSegments[1];
 
-  // 1. Write to Supabase first
-  if (isSupabaseConfigured && supabase) {
+  // 1. Write to Supabase first unless quota cooldown is active
+  if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
       if (collectionName === "final_grades") {
         const rawNumeric = data.nilai ?? data.score;
