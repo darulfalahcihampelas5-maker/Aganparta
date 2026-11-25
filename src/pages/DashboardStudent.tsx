@@ -698,12 +698,14 @@ export default function DashboardStudent() {
   const [needsDriveAuth, setNeedsDriveAuth] = useState(true);
   const [isDriveAuthLoading, setIsDriveAuthLoading] = useState(false);
   const [showStudentQuotaModal, setShowStudentQuotaModal] = useState(() => {
-    return isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted();
+    return isFirebaseQuotaExhausted();
   });
 
   useEffect(() => {
-    if (isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) {
+    if (isFirebaseQuotaExhausted()) {
       setShowStudentQuotaModal(true);
+    } else {
+      setShowStudentQuotaModal(false);
     }
   }, []);
   
@@ -6651,7 +6653,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   {/* BODY CONTAINER */}
                   <div className="pt-6 sm:pt-8 px-4 sm:px-6 max-w-4xl mx-auto space-y-7 pb-12">
                     {/* Server Quota Information Banner for Student */}
-                    {(isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) && (
+                    {isFirebaseQuotaExhausted() && (
                       <div className="p-4 sm:p-5 rounded-3xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in duration-300">
                         <div className="flex items-center gap-3.5">
                           <div className="w-12 h-12 rounded-2xl bg-amber-200/80 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0 text-2xl font-black shadow-inner">
@@ -7303,7 +7305,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   </div>
 
                   {/* Server Quota Information Banner for Student */}
-                  {(isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) && (
+                  {isFirebaseQuotaExhausted() && (
                     <div className="p-4 sm:p-5 rounded-3xl bg-amber-50 dark:bg-amber-950/40 border-2 border-amber-300 dark:border-amber-700 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in duration-300">
                       <div className="flex items-center gap-3.5">
                         <div className="w-12 h-12 rounded-2xl bg-amber-200/80 dark:bg-amber-900/60 text-amber-800 dark:text-amber-300 flex items-center justify-center shrink-0 text-2xl font-black shadow-inner">

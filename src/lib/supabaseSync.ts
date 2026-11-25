@@ -3,17 +3,25 @@ import { db } from "./firebase";
 import { doc, getDocs, collection, setDoc, getDoc, getDocsFromCache, getDocFromCache, deleteDoc } from "firebase/firestore";
 import { clearTeacherCaches } from "./firestoreUtils";
 
-let isFirebaseDisabled = typeof window !== 'undefined'
-  ? (localStorage.getItem('firebase_quota_exhausted') !== 'false')
-  : true;
+let isFirebaseDisabled = false;
+
+if (typeof window !== 'undefined') {
+  try {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const lastCheck = localStorage.getItem('firebase_last_reset_day');
+    // Once 15:00 WIB rollover occurs, automatically clear previous exhaustion flag
+    if (lastCheck !== todayStr) {
+      localStorage.removeItem('firebase_quota_exhausted');
+      sessionStorage.removeItem('firebase_quota_exhausted');
+      localStorage.setItem('firebase_last_reset_day', todayStr);
+    }
+    isFirebaseDisabled = localStorage.getItem('firebase_quota_exhausted') === 'true' || sessionStorage.getItem('firebase_quota_exhausted') === 'true';
+  } catch (_) {}
+}
 
 export function isFirebaseQuotaExhausted(): boolean {
   if (typeof window !== 'undefined') {
-    const localVal = localStorage.getItem('firebase_quota_exhausted');
-    const sessionVal = sessionStorage.getItem('firebase_quota_exhausted');
-    if (localVal === 'false' && sessionVal === 'false') return false;
-    if (localVal === 'true' || sessionVal === 'true') return true;
-    return true;
+    return localStorage.getItem('firebase_quota_exhausted') === 'true' || sessionStorage.getItem('firebase_quota_exhausted') === 'true';
   }
   return isFirebaseDisabled;
 }
@@ -21,8 +29,13 @@ export function isFirebaseQuotaExhausted(): boolean {
 export function setFirebaseQuotaExhausted(val: boolean = true): void {
   isFirebaseDisabled = val;
   if (typeof window !== 'undefined') {
-    localStorage.setItem('firebase_quota_exhausted', val ? 'true' : 'false');
-    sessionStorage.setItem('firebase_quota_exhausted', val ? 'true' : 'false');
+    if (val) {
+      localStorage.setItem('firebase_quota_exhausted', 'true');
+      sessionStorage.setItem('firebase_quota_exhausted', 'true');
+    } else {
+      localStorage.removeItem('firebase_quota_exhausted');
+      sessionStorage.removeItem('firebase_quota_exhausted');
+    }
   }
 }
 

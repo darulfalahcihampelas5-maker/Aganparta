@@ -7950,7 +7950,7 @@ export default function DashboardTeacher() {
                 {activeMenu === "dashboard" && (
                   <div className="space-y-10">
                     {/* Firebase Quota Exhausted Warning Banner */}
-                    {(isFirebaseQuotaExhausted() || isSupabaseQuotaExhausted()) && (
+                    {isFirebaseQuotaExhausted() && (
                       <div className="mb-6 p-5 bg-rose-50 dark:bg-rose-950/40 border-2 border-rose-300 dark:border-rose-800 rounded-3xl shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in duration-300">
                         <div className="flex items-center gap-4">
                           <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-600 flex items-center justify-center shrink-0 font-black text-xl">
