@@ -70,6 +70,147 @@ export function setSupabaseQuotaExhausted(val: boolean = true): void {
   if (typeof window !== 'undefined') {
     localStorage.setItem('supabase_quota_exhausted', val ? 'true' : 'false');
     sessionStorage.setItem('supabase_quota_exhausted', val ? 'true' : 'false');
+    if (!val) {
+      localStorage.removeItem('supabase_quota_exhausted_until');
+      sessionStorage.removeItem('supabase_quota_exhausted_until');
+    }
+    window.dispatchEvent(new CustomEvent('supabase-quota-updated', { detail: { exhausted: val } }));
+  }
+}
+
+export const SUPABASE_EGRESS_LIMIT_BYTES = 5 * 1024 * 1024 * 1024; // 5 GB / bulan (Free Tier)
+
+export interface SupabaseEgressStats {
+  month: string;
+  bytesUsed: number;
+  limitBytes: number;
+  remainingBytes: number;
+  percentage: number;
+  requests: number;
+  isExhausted: boolean;
+  lastUpdated: string | null;
+}
+
+function getCurrentMonthKey(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+}
+
+export function trackSupabaseEgressPayload(payload: unknown): void {
+  if (typeof window === 'undefined' || payload === undefined || payload === null) return;
+  try {
+    const month = getCurrentMonthKey();
+    const storageKey = `sipinter_supabase_egress_${month}`;
+    let byteSize = 350; // Base HTTP/TLS header overhead per response
+    try {
+      const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      byteSize += typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(serialized).length : serialized.length;
+    } catch (_) {
+      byteSize += 512;
+    }
+
+    let prevBytes = 0;
+    let prevRequests = 0;
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.month === month) {
+          prevBytes = Number(parsed.bytesUsed) || 0;
+          prevRequests = Number(parsed.requests) || 0;
+        }
+      } catch (_) {}
+    }
+
+    const updated = {
+      month,
+      bytesUsed: prevBytes + byteSize,
+      requests: prevRequests + 1,
+      lastUpdated: new Date().toISOString(),
+    };
+    localStorage.setItem(storageKey, JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('supabase-egress-updated', { detail: updated }));
+  } catch (_) {}
+}
+
+export function getSupabaseEgressStats(): SupabaseEgressStats {
+  const month = getCurrentMonthKey();
+  const exhausted = isSupabaseQuotaExhausted();
+  let bytesUsed = 0;
+  let requests = 0;
+  let lastUpdated: string | null = null;
+
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(`sipinter_supabase_egress_${month}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.month === month) {
+          bytesUsed = Math.max(0, Number(parsed.bytesUsed) || 0);
+          requests = Math.max(0, Number(parsed.requests) || 0);
+          lastUpdated = parsed.lastUpdated || null;
+        }
+      }
+    } catch (_) {}
+  }
+
+  const remainingBytes = Math.max(0, SUPABASE_EGRESS_LIMIT_BYTES - bytesUsed);
+  const rawPct = (bytesUsed / SUPABASE_EGRESS_LIMIT_BYTES) * 100;
+  const percentage = exhausted
+    ? 100
+    : Math.min(100, Number(rawPct.toFixed(2)));
+
+  return {
+    month,
+    bytesUsed,
+    limitBytes: SUPABASE_EGRESS_LIMIT_BYTES,
+    remainingBytes,
+    percentage,
+    requests,
+    isExhausted: exhausted,
+    lastUpdated,
+  };
+}
+
+export function resetSupabaseEgressStats(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const month = getCurrentMonthKey();
+    localStorage.removeItem(`sipinter_supabase_egress_${month}`);
+    window.dispatchEvent(new CustomEvent('supabase-egress-updated'));
+  } catch (_) {}
+}
+
+export async function probeSupabaseQuotaStatus(): Promise<{ active: boolean; message: string }> {
+  if (!isSupabaseConfigured || !supabase) {
+    return { active: false, message: 'Konfigurasi Supabase belum tersedia.' };
+  }
+  try {
+    const { data, error } = await supabase.from('exams').select('id').limit(1);
+    if (!error) {
+      trackSupabaseEgressPayload(data || []);
+      setSupabaseQuotaExhausted(false);
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('supabase_was_exhausted');
+      }
+      return { active: true, message: 'Server Supabase aktif & kuota egress tersedia.' };
+    }
+    if (isSupabaseQuotaError(error)) {
+      setSupabaseQuotaExhausted(true);
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('supabase_was_exhausted', 'true');
+      }
+      return { active: false, message: 'Batas kuota egress 5 GB/bulan Supabase sedang tercapai.' };
+    }
+    return { active: !isSupabaseQuotaExhausted(), message: error.message || 'Gagal menghubungi Supabase.' };
+  } catch (err: any) {
+    if (isSupabaseQuotaError(err)) {
+      setSupabaseQuotaExhausted(true);
+      return { active: false, message: 'Batas kuota egress 5 GB/bulan Supabase sedang tercapai.' };
+    }
+    return { active: false, message: err?.message || 'Koneksi ke Supabase gagal.' };
   }
 }
 
@@ -325,6 +466,7 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
       }
 
       if (!supaHadError && allSupaData.length > 0) {
+        trackSupabaseEgressPayload(allSupaData);
         supaGradesSucceeded = true;
         allSupaData.forEach((d) => {
           const item: GradeItem = {
@@ -424,6 +566,7 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
         if (page >= 10) break;
       }
       if (!hadSessErr && supaGradesSucceeded) {
+        trackSupabaseEgressPayload(allSessionDocs);
         supaSessionsSucceeded = true;
       }
     } catch (err) {
@@ -434,22 +577,9 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
 
   if (!supaSessionsSucceeded) {
     let sessionsSnap: any = null;
-    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
-      try {
-        sessionsSnap = await getDocs(collection(db, "exam_sessions"));
-      } catch (err: any) {
-        if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-          setFirebaseQuotaExhausted(true);
-        }
-        try {
-          sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
-        } catch (_) {}
-      }
-    } else {
-      try {
-        sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
-      } catch (_) {}
-    }
+    try {
+      sessionsSnap = await getDocsFromCache(collection(db, "exam_sessions"));
+    } catch (_) {}
 
     if (sessionsSnap && sessionsSnap.docs) {
       sessionsSnap.docs.forEach((docSnap: any) => {
@@ -522,6 +652,7 @@ export async function getExams(): Promise<ExamItem[]> {
       if (error) {
         if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
       } else if (Array.isArray(data) && data.length > 0) {
+        trackSupabaseEgressPayload(data);
         data.forEach((d) => {
           examsMap.set(d.id, {
             id: d.id,
@@ -890,6 +1021,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         }
 
         if (allData.length > 0) {
+          trackSupabaseEgressPayload(allData);
           const formatted = allData.map((d) => ({
             id: d.id,
             assignmentId: d.assignment_id || d.exam_id,
@@ -925,6 +1057,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         if (error) {
           if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
         } else if (Array.isArray(data) && data.length > 0) {
+          trackSupabaseEgressPayload(data);
           const formatted = data.map((d) => ({
             id: d.id,
             title: d.title,
@@ -1039,6 +1172,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         }
 
         if (isSupabaseSuccess && fetchedData.length > 0) {
+          trackSupabaseEgressPayload(fetchedData);
           const formatted = fetchedData.map((item: any) => ({
             id: item.doc_id,
             ...item.data
@@ -1154,6 +1288,7 @@ export async function dbGetDoc(docRef: any): Promise<any> {
       if (error) {
         if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
       } else if (data && data.data) {
+        trackSupabaseEgressPayload(data);
         return {
           id: docId,
           exists: () => true,

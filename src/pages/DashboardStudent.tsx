@@ -746,24 +746,17 @@ export default function DashboardStudent() {
 
     (async () => {
       try {
-        const snap = await getDocs(collection(db, "studentsByNisn"));
-        if (cancelled || snap.empty) return;
-        let matched: any = null;
-        snap.forEach((d: any) => {
-          if (matched) return;
-          const sd = typeof d.data === "function" ? d.data() : d;
-          const sCode = String(sd?.accessCode || "").trim();
-          const sNisn = String(sd?.nisn || d.id || "").trim();
-          const sNis = String(sd?.nis || "").trim();
-          if (
-            sCode === rawCode ||
-            sCode.toUpperCase() === upperCode ||
-            isSameNisn(sNisn, rawCode) ||
-            isSameNisn(sNis, rawCode)
-          ) {
-            matched = { id: sNisn || d.id, ...sd, nisn: sNisn || d.id, isGuest: false };
-          }
-        });
+        const qCode = query(collection(db, "studentsByNisn"), where("accessCode", "in", [rawCode, upperCode]));
+        let snap = await getDocs(qCode).catch(() => null);
+        if (!snap || snap.empty) {
+          const qNisn = query(collection(db, "studentsByNisn"), where("nisn", "==", rawCode));
+          snap = await getDocs(qNisn).catch(() => null);
+        }
+        if (cancelled || !snap || snap.empty) return;
+        const d = snap.docs[0];
+        const sd = d.data();
+        const sNisn = String(sd?.nisn || d.id || "").trim();
+        const matched = { id: sNisn || d.id, ...sd, nisn: sNisn || d.id, isGuest: false };
         if (matched && !cancelled) {
           setStudent(matched);
           try {
@@ -826,41 +819,8 @@ export default function DashboardStudent() {
       console.warn("Failed loading simulasiBK config:", err);
     });
 
-    if (isFirebaseQuotaExhausted()) return;
-
-    let unsubscribe: any = null;
-    import("firebase/firestore").then(({ onSnapshot }) => {
-      if (!isMounted) return;
-      unsubscribe = onSnapshot(
-        docRef,
-        (snap) => {
-          if (!isMounted) return;
-          if (snap.exists()) {
-            const data = snap.data();
-            const activeClasses = data.activeClasses || [];
-            const classConfigs = data.classConfigs || {};
-            const isEnabled = activeClasses.includes(student.kelas);
-            setIsSimulasiEnabled(isEnabled);
-            if (isEnabled && classConfigs[student.kelas]) {
-              setSimConfig(classConfigs[student.kelas]);
-            } else {
-              setSimConfig({ active: isEnabled, chapters: ["dekomposisi", "pola", "abstraksi", "algoritma", "classic_sim", "modul_kuis"] });
-            }
-          } else {
-            setIsSimulasiEnabled(false);
-            setSimConfig(null);
-          }
-        },
-        (error) => {
-          console.warn("Snapshot error fetching simulasiBK config:", error);
-          dispatchIfQuotaError(error);
-        }
-      );
-    });
-
     return () => {
       isMounted = false;
-      if (unsubscribe) unsubscribe();
     };
   }, [student?.kelas]);
 
@@ -1104,25 +1064,27 @@ export default function DashboardStudent() {
     
     // Only fetch absensi for student's own class with TTL cache to save 95% reads
     const cacheKey = `firas_cache_absensi_${student.kelas}`;
-    const cached = getLocalCache<any[]>(cacheKey, 2 * 60 * 60 * 1000);
+    const cached = getLocalCache<any[]>(cacheKey, 12 * 60 * 60 * 1000);
     if (cached && cached.length > 0) {
       setAbsensiList(cached);
       return;
     }
 
-    getDocs(collection(db, "absensi")).then((snapshot) => {
+    const q = query(collection(db, "absensi"), where("kelasRef", "==", student.kelas));
+    getDocs(q).then((snapshot) => {
       const abs: any[] = [];
       snapshot.forEach((docSnap: any) => {
         const d = typeof docSnap.data === "function" ? docSnap.data() : docSnap;
-        if (isClassMatch(d?.kelasRef || "", student.kelas)) {
-          abs.push({ id: docSnap.id, ...d });
-        }
+        abs.push({ id: docSnap.id, ...d });
       });
       setAbsensiList(abs);
       if (abs.length > 0) {
         setLocalCache(cacheKey, abs);
       }
-    }).catch((error) => { console.warn('Firestore error:', error.message); dispatchIfQuotaError(error); });
+    }).catch((error) => {
+      console.warn('Firestore absensi error:', error.message);
+      dispatchIfQuotaError(error);
+    });
   }, [student?.kelas]);
 
   const [chaptersList, setChaptersList] = useState<any[]>([]);
@@ -1677,34 +1639,25 @@ export default function DashboardStudent() {
   // Fetch Grading Rubric from Firestore with cache & real-time snapshot listener
   useEffect(() => {
     const cacheKey = "firas_cache_rubric";
-    const cached = getLocalCache<any>(cacheKey, 60 * 60 * 1000);
+    const cached = getLocalCache<any>(cacheKey, 24 * 60 * 60 * 1000);
     if (cached) {
       setRubric(cached);
+      return;
     }
     if (isFirebaseQuotaExhausted()) return;
-    let unsubscribe = () => {};
-    try {
-      unsubscribe = onSnapshot(
-        doc(db, "config", "grading_rubric"),
-        (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const r = {
-              kehadiran: Number(data.kehadiran) ?? 20,
-              tugas: Number(data.tugas) ?? 50,
-              uts: Number(data.uts) ?? 10,
-              uas: Number(data.uas) ?? 20,
-            };
-            setRubric(r);
-            setLocalCache(cacheKey, r);
-          }
-        },
-        (error) => {
-          dispatchIfQuotaError(error);
-        }
-      );
-    } catch (_) {}
-    return () => unsubscribe();
+    getDoc(doc(db, "config", "grading_rubric")).then((docSnap) => {
+      if (docSnap && docSnap.exists()) {
+        const data = docSnap.data();
+        const r = {
+          kehadiran: Number(data.kehadiran) ?? 20,
+          tugas: Number(data.tugas) ?? 50,
+          uts: Number(data.uts) ?? 10,
+          uas: Number(data.uas) ?? 20,
+        };
+        setRubric(r);
+        setLocalCache(cacheKey, r);
+      }
+    }).catch(() => {});
   }, []);
 
   // Announcement interaction
@@ -3812,58 +3765,16 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     };
   }, [isOnline, student?.nisn, student?.kelas, examHistoryList, rawFinalGradesList, activeExam?.id]);
 
-  const fetchAllStudents = async () => {
-    if (!student?.kelas) return [];
-    const cacheKey = `firas_cache_all_students_${student.kelas}`;
-    const cached = getLocalCache<any[]>(cacheKey, 12 * 60 * 60 * 1000);
-    if (cached) return cached;
-
-    try {
-      // Query only classmates to save over 90% in Firestore read counts and ensure privacy
-      const q = query(collection(db, "studentsByNisn"), where("kelas", "==", student.kelas));
-      const snapshot = await getDocs(q);
-      trackUsage(snapshot.size, 0);
-      const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
-      setLocalCache(cacheKey, data);
-      return data;
-    } catch (e: any) {
-      console.warn(`SWR fetch error all students:`, e.message);
-      dispatchIfQuotaError(e);
-      const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
-      return stale || [];
-    }
-  };
-
+  const fetchAllStudents = async () => [];
   const { data: allStudentsList = EMPTY_ARRAY, mutate: mutateAllStudents } = useSWR(
-    student?.kelas ? ['all_students_list', student.kelas] : null,
+    null,
     fetchAllStudents,
     { refreshInterval: 0, revalidateOnFocus: false }
   );
 
-  const fetchAllFinalGrades = async () => {
-    if (!student?.kelas) return [];
-    const cacheKey = `firas_cache_all_final_grades_${student.kelas}`;
-    const cached = getLocalCache<any[]>(cacheKey, 2 * 60 * 60 * 1000);
-    if (cached) return cached;
-
-    try {
-      // Query only grades within student's class (kelas) to reduce reads dramatically
-      const q = query(collection(db, "final_grades"), where("kelas", "==", student.kelas));
-      const snapshot = await getDocs(q);
-      trackUsage(snapshot.size, 0);
-      const data = snapshot.docs.map((doc: any) => ({ id: doc.id, ...(doc.data() as any) }));
-      setLocalCache(cacheKey, data);
-      return data;
-    } catch (e: any) {
-      console.warn(`SWR fetch error all final grades:`, e.message);
-      dispatchIfQuotaError(e);
-      const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
-      return stale || [];
-    }
-  };
-
+  const fetchAllFinalGrades = async () => [];
   const { data: allFinalGrades = EMPTY_ARRAY, mutate: mutateAllFinalGrades } = useSWR(
-    student?.kelas ? ['all_final_grades', student.kelas] : null,
+    null,
     fetchAllFinalGrades,
     { refreshInterval: 0, revalidateOnFocus: false }
   );
@@ -4366,8 +4277,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     const nilaiKehadiran = stuTotalMeetings > 0 ? (stuHadirCount / stuTotalMeetings) * 100 : 0;
 
     // 2. Nilai Tugas & Harian
-    const tugasItems = allFinalGrades.filter((g: any) => {
-      if (!(isSameNisn(g.nisn, student.nisn) || isSameNisn(g.nis, student.nisn))) return false;
+    const tugasItems = (finalGradesList || []).filter((g: any) => {
       if (g.type === "Tugas") return true;
       const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.examId || e.id === g.id);
       return !isPTSItem(exam || g) && !isPASItem(exam || g);
@@ -4377,16 +4287,14 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       : 0;
 
     // 3. Nilai UTS
-    const utsItem = allFinalGrades.find((g: any) => {
-      if (!(isSameNisn(g.nisn, student.nisn) || isSameNisn(g.nis, student.nisn))) return false;
+    const utsItem = (finalGradesList || []).find((g: any) => {
       const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.examId || e.id === g.id);
       return isPTSItem(exam || g);
     });
     const nilaiUts = utsItem ? (Number(utsItem.nilai ?? utsItem.score) || 0) : 0;
 
     // 4. Nilai UAS
-    const uasItem = allFinalGrades.find((g: any) => {
-      if (!(isSameNisn(g.nisn, student.nisn) || isSameNisn(g.nis, student.nisn))) return false;
+    const uasItem = (finalGradesList || []).find((g: any) => {
       const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.examId || e.id === g.id);
       return isPASItem(exam || g);
     });
@@ -4401,106 +4309,25 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     );
     
     return Math.round(finalScore);
-  }, [allFinalGrades, absensiList, examsList, student, rubric]);
+  }, [finalGradesList, absensiList, examsList, student, rubric]);
 
   const rankings = useMemo(() => {
-    if (!student || !rubric || allStudentsList.length === 0) {
+    if (!student) {
       return { rank: "-", total: "-", topStudents: [] as Array<{ rank: number; name: string; score: number; isSelf?: boolean }> };
     }
-    
-    // Normalize class names for more robust matching
-    const myClass = String(student.kelas || "").trim().toLowerCase();
-    const studentsInClass = allStudentsList.filter((s: any) => 
-      String(s.kelas || "").trim().toLowerCase() === myClass
-    );
-
-    if (studentsInClass.length === 0) {
-      return {
-        rank: 1,
-        total: 1,
-        topStudents: [
-          {
-            rank: 1,
-            name: String(student.name || student.displayName || student.studentName || "Siswa").trim(),
-            score: rataRataSemester,
-            isSelf: true,
-          },
-        ],
-      };
-    }
-    
-    const studentPerformance = studentsInClass.map((stu: any) => {
-      // 1. Nilai Kehadiran
-      let stuHadirCount = 0;
-      let stuTotalMeetings = 0;
-      absensiList.forEach((a: any) => {
-        if (String(a.kelasRef || "").trim().toLowerCase() === myClass) {
-          stuTotalMeetings++;
-          if (a.data && a.data[stu.nisn]) {
-            const sStatus = String(a.data[stu.nisn]).toLowerCase();
-            if (sStatus === "hadir" || sStatus === "dispen") {
-              stuHadirCount++;
-            }
-          }
-        }
-      });
-      const nilaiKehadiran = stuTotalMeetings > 0 ? (stuHadirCount / stuTotalMeetings) * 100 : 0;
-
-      // 2. Nilai Tugas & Harian
-      const stuAllGrades = allFinalGrades.filter((g: any) => g.nisn === stu.nisn);
-      const tugasItems = stuAllGrades.filter((g: any) => {
-        if (g.type === "Tugas") return true;
-        const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.id);
-        return !isPTSItem(exam || g) && !isPASItem(exam || g);
-      });
-      const avgTugas = tugasItems.length > 0 
-        ? tugasItems.reduce((sum: number, item: any) => sum + (Number(item.nilai) || 0), 0) / tugasItems.length 
-        : 0;
-
-      // 3. Nilai UTS
-      const utsItem = stuAllGrades.find((g: any) => {
-        const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.id);
-        return isPTSItem(exam || g);
-      });
-      const nilaiUts = utsItem ? (Number(utsItem.nilai) || 0) : 0;
-
-      // 4. Nilai UAS
-      const uasItem = stuAllGrades.find((g: any) => {
-        const exam = examsList.find((e: any) => e.id === g.assignmentId || e.id === g.id);
-        return isPASItem(exam || g);
-      });
-      const nilaiUas = uasItem ? (Number(uasItem.nilai) || 0) : 0;
-
-      // Final Calculation based on teacher's rubric
-      const finalScore = (
-        (nilaiKehadiran * (rubric.kehadiran / 100)) +
-        (avgTugas * (rubric.tugas / 100)) +
-        (nilaiUts * (rubric.uts / 100)) +
-        (nilaiUas * (rubric.uas / 100))
-      );
-
-      return {
-        nisn: stu.nisn,
-        name: String(stu.name || stu.displayName || stu.studentName || "Siswa").trim(),
-        finalScore: finalScore
-      };
-    });
-
-    studentPerformance.sort((a, b) => b.finalScore - a.finalScore);
-
-    const myNisn = String(student.nisn || "").trim();
-    const myIndex = studentPerformance.findIndex((item) => String(item.nisn || "").trim() === myNisn);
-    const rank = myIndex !== -1 ? myIndex + 1 : 1;
-    const total = studentsInClass.length;
-    const topStudents = studentPerformance.slice(0, 5).map((item, idx) => ({
-      rank: idx + 1,
-      name: item.name,
-      score: Math.round(item.finalScore),
-      isSelf: String(item.nisn || "").trim() === myNisn,
-    }));
-
-    return { rank, total, topStudents };
-  }, [allStudentsList, allFinalGrades, absensiList, examsList, student, rubric, rataRataSemester]);
+    return {
+      rank: "-",
+      total: "-",
+      topStudents: [
+        {
+          rank: 1,
+          name: String(student.name || student.displayName || student.studentName || "Siswa").trim(),
+          score: rataRataSemester,
+          isSelf: true,
+        },
+      ],
+    };
+  }, [student, rataRataSemester]);
 
   const predikatAkhir = useMemo(() => {
     const avg = rataRataSemester;

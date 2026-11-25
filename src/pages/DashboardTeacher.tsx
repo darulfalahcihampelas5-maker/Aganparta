@@ -17,7 +17,7 @@ import {
   where,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, setSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, setSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery, getSupabaseEgressStats, resetSupabaseEgressStats, probeSupabaseQuotaStatus, SupabaseEgressStats } from "../lib/supabaseSync";
 import { OperationType, handleFirestoreError, getLocalCache, setLocalCache, clearTeacherCaches } from "../lib/firestoreUtils";
 import { googleSignIn } from "../lib/googleAuth";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
@@ -435,6 +435,22 @@ export default function DashboardTeacher() {
   }, [activeMenu]);
 
   const [quotaTick] = useState(0);
+  const [supabaseEgress, setSupabaseEgress] = useState<SupabaseEgressStats>(() => getSupabaseEgressStats());
+  const [isCheckingSupabaseQuota, setIsCheckingSupabaseQuota] = useState(false);
+
+  useEffect(() => {
+    const syncEgress = () => {
+      setSupabaseEgress(getSupabaseEgressStats());
+    };
+    window.addEventListener("supabase-egress-updated", syncEgress as EventListener);
+    window.addEventListener("supabase-quota-updated", syncEgress as EventListener);
+    window.addEventListener("storage", syncEgress as EventListener);
+    return () => {
+      window.removeEventListener("supabase-egress-updated", syncEgress as EventListener);
+      window.removeEventListener("supabase-quota-updated", syncEgress as EventListener);
+      window.removeEventListener("storage", syncEgress as EventListener);
+    };
+  }, []);
 
   useEffect(() => {
     if (isSupabaseConfigured && supabase) {
@@ -442,6 +458,7 @@ export default function DashboardTeacher() {
         try {
           const { error } = await supabase.from("exams").select("id").limit(1);
           if (!error) {
+            setSupabaseQuotaExhausted(false);
             const wasExhausted = sessionStorage.getItem("supabase_was_exhausted") === "true";
             if (wasExhausted) {
               sessionStorage.removeItem("supabase_was_exhausted");
@@ -454,18 +471,37 @@ export default function DashboardTeacher() {
           } else {
             const msg = String(error.message || error.details || "").toLowerCase();
             if (msg.includes("quota") || msg.includes("egress") || msg.includes("spend cap")) {
+              setSupabaseQuotaExhausted(true);
               sessionStorage.setItem("supabase_was_exhausted", "true");
             }
           }
         } catch (err: any) {
           const msg = String(err?.message || err || "").toLowerCase();
           if (msg.includes("quota") || msg.includes("egress") || msg.includes("spend cap")) {
+            setSupabaseQuotaExhausted(true);
             sessionStorage.setItem("supabase_was_exhausted", "true");
           }
+        } finally {
+          setSupabaseEgress(getSupabaseEgressStats());
         }
       })();
     }
   }, [quotaTick]);
+
+  const handleCheckSupabaseQuota = async () => {
+    setIsCheckingSupabaseQuota(true);
+    try {
+      const res = await probeSupabaseQuotaStatus();
+      setSupabaseEgress(getSupabaseEgressStats());
+      showAlert(
+        res.active ? "Supabase Aktif" : "Kuota Egress Supabase Habis",
+        res.message,
+        res.active ? "alert" : "danger"
+      );
+    } finally {
+      setIsCheckingSupabaseQuota(false);
+    }
+  };
 
   const handleSaveMotivationalQuote = async () => {
     if (!motivationalQuoteInput.trim()) return;
@@ -4102,24 +4138,25 @@ export default function DashboardTeacher() {
 
   useEffect(() => {
     if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas" && !isFirebaseQuotaExhausted()) {
-      const q = collection(db, "submissions");
-      const unsubscribe = onSnapshot(
-        q,
-        (snap) => {
-          const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-          setSubmissionsList(subs);
-          setLocalCache("firas_cache_submissions", subs);
-        },
-        (error) => {
-          console.warn("Gagal sinkron otomatis respon tugas realtime:", error);
-          const msg = error && (error as any).message ? (error as any).message.toLowerCase() : String(error).toLowerCase();
-          if (msg.includes('quota') || msg.includes('resource-exhausted') || msg.includes('exceeded')) {
-            setFirebaseQuotaExhausted(true);
-            window.dispatchEvent(new CustomEvent('firestore-quota-exceeded'));
-          }
-        }
-      );
-      return () => unsubscribe();
+      const cached = getLocalCache<any[]>("firas_cache_submissions", 5 * 60 * 1000);
+      if (cached && cached.length > 0) {
+        setSubmissionsList(cached);
+      } else {
+        getDocs(collection(db, "submissions"))
+          .then((snap) => {
+            const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+            setSubmissionsList(subs);
+            setLocalCache("firas_cache_submissions", subs);
+          })
+          .catch((err) => {
+            const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
+            if (msg.includes("quota") || msg.includes("resource-exhausted") || msg.includes("exceeded")) {
+              setFirebaseQuotaExhausted(true);
+              window.dispatchEvent(new CustomEvent("firestore-quota-exceeded"));
+            }
+          });
+      }
+      return;
     }
 
     // Pull latest exam & assignment grades when opening Buku Nilai (using TTL cache & throttled refresh to preserve cloud quota)
@@ -4128,10 +4165,10 @@ export default function DashboardTeacher() {
       let lastRekapPullAt = 0;
       const pullRekapLatest = (includeExams = false) => {
         const now = Date.now();
-        if (now - lastRekapPullAt < 2 * 60 * 1000) return;
+        if (now - lastRekapPullAt < 5 * 60 * 1000) return;
         lastRekapPullAt = now;
 
-        const needExams = includeExams && !getLocalCache<any[]>("firas_cache_exams_v2", 15 * 60 * 1000);
+        const needExams = includeExams && !getLocalCache<any[]>("firas_cache_exams_v2", 30 * 60 * 1000);
         Promise.all([
           getFinalGrades(),
           needExams ? getExams() : Promise.resolve(null),
@@ -4157,58 +4194,12 @@ export default function DashboardTeacher() {
           });
       };
 
-      if (!getLocalCache<any[]>("firas_cache_final_grades", 2 * 60 * 1000)) {
+      if (!getLocalCache<any[]>("firas_cache_final_grades", 5 * 60 * 1000)) {
         pullRekapLatest(true);
-      }
-      const pollTimer = setInterval(() => pullRekapLatest(false), 3 * 60 * 1000);
-      const handleVisibility = () => {
-        if (document.visibilityState === "visible") pullRekapLatest(false);
-      };
-      document.addEventListener("visibilitychange", handleVisibility);
-
-      let unsubscribeFsGrades: (() => void) | undefined;
-      if (!isFirebaseQuotaExhausted()) {
-        try {
-          unsubscribeFsGrades = onSnapshot(
-            collection(db, "final_grades"),
-            (snap) => {
-              if (cancelled || snap.empty) return;
-              setFinalGradesList((prev) => {
-                const mergedMap = new Map<string, any>();
-                prev.forEach((g) => {
-                  const key = String(g.id || `${g.assignmentId || g.examId}_${g.nisn}`);
-                  mergedMap.set(key, g);
-                });
-                snap.docs.forEach((d) => {
-                  const raw = d.data() as any;
-                  const nisnVal = String(raw.nisn || raw.nis || "").trim();
-                  const asgId = raw.assignmentId || raw.examId || "";
-                  const item = {
-                    ...raw,
-                    id: d.id,
-                    assignmentId: asgId,
-                    examId: raw.examId || asgId,
-                    nisn: nisnVal,
-                    nilai: raw.nilai ?? raw.score,
-                    score: raw.score ?? raw.nilai,
-                  };
-                  mergedMap.set(d.id, pickPreferredGrade(mergedMap.get(d.id), item));
-                });
-                const next = Array.from(mergedMap.values());
-                setLocalCache("firas_cache_final_grades", next);
-                return next;
-              });
-            },
-            () => {}
-          );
-        } catch (_) {}
       }
 
       return () => {
         cancelled = true;
-        clearInterval(pollTimer);
-        document.removeEventListener("visibilitychange", handleVisibility);
-        if (unsubscribeFsGrades) unsubscribeFsGrades();
       };
     }
   }, [activeMenu, activeNilaiTab]);
@@ -4935,6 +4926,23 @@ export default function DashboardTeacher() {
       }
     }
   };
+
+  const formatEgressSize = (bytes: number) => {
+    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+    if (bytes >= 1024) return (bytes / 1024).toFixed(2) + " KB";
+    return bytes + " B";
+  };
+
+  const egressMonthLabel = useMemo(() => {
+    const [year, month] = supabaseEgress.month.split("-");
+    const monthNames = [
+      "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+      "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+    ];
+    const idx = Math.max(0, Math.min(11, Number(month) - 1));
+    return `${monthNames[idx]} ${year}`;
+  }, [supabaseEgress.month]);
 
   // Retention Policy (Option 3) State & Function
   const [isCleaningRetention, setIsCleaningRetention] = useState(false);
@@ -14599,6 +14607,145 @@ export default function DashboardTeacher() {
                             </div>
                           </div>
                         </div>
+                      </div>
+
+                      {/* Row 1.5: Monitoring Egress Supabase (5 GB / Bulan) */}
+                      <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-6">
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                          <div className="flex items-start sm:items-center gap-4">
+                            <div
+                              className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 ${
+                                supabaseEgress.isExhausted
+                                  ? "bg-rose-50 border-rose-200 text-rose-600"
+                                  : "bg-emerald-50 border-emerald-200 text-emerald-600"
+                              }`}
+                            >
+                              <Activity className="w-6 h-6" />
+                            </div>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2.5">
+                                <h3 className="text-lg font-bold text-slate-950 tracking-tight">
+                                  Progres Egress Supabase ({egressMonthLabel})
+                                </h3>
+                                <span
+                                  className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                                    supabaseEgress.isExhausted
+                                      ? "bg-rose-50 text-rose-700 border-rose-200"
+                                      : "bg-emerald-50 text-emerald-700 border-emerald-200"
+                                  }`}
+                                >
+                                  {supabaseEgress.isExhausted ? "Limit Egress Tercapai" : "Aktif & Normal"}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500 font-medium mt-0.5">
+                                Batas Kuota Gratis Bulanan: <span className="font-bold text-slate-700 tabular-nums">5.00 GB / Bulan</span> •{" "}
+                                <span className="tabular-nums">{supabaseEgress.requests.toLocaleString()}</span> penarikan data tercatat di perangkat ini
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                            <button
+                              type="button"
+                              disabled={isCheckingSupabaseQuota}
+                              onClick={handleCheckSupabaseQuota}
+                              className="h-10 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer inline-flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 shrink-0 ${isCheckingSupabaseQuota ? "animate-spin" : ""}`} />
+                              <span>{isCheckingSupabaseQuota ? "Mengecek..." : "Cek Status Server"}</span>
+                            </button>
+                            <a
+                              href="https://supabase.com/dashboard/org/_/usage"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="h-10 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-xs inline-flex items-center justify-center gap-2 whitespace-nowrap"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
+                              <span>Cek Resmi di Supabase</span>
+                            </a>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`border rounded-2xl p-5 sm:p-6 space-y-3 ${
+                            supabaseEgress.isExhausted
+                              ? "bg-rose-50/50 border-rose-200/80"
+                              : "bg-slate-50/80 border-slate-200/70"
+                          }`}
+                        >
+                          <div className="flex justify-between items-end gap-4">
+                            <div>
+                              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                Estimasi Egress Terpakai (Perangkat Ini)
+                              </p>
+                              <p
+                                className={`text-2xl sm:text-3xl font-black tabular-nums ${
+                                  supabaseEgress.isExhausted ? "text-rose-700" : "text-slate-900"
+                                }`}
+                              >
+                                {supabaseEgress.isExhausted
+                                  ? `Limit 5.00 GB Tercapai (${formatEgressSize(supabaseEgress.bytesUsed)} lokal)`
+                                  : formatEgressSize(supabaseEgress.bytesUsed)}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                Sisa Kuota Bulanan
+                              </p>
+                              <p
+                                className={`text-lg sm:text-xl font-bold tabular-nums ${
+                                  supabaseEgress.isExhausted ? "text-rose-600" : "text-emerald-600"
+                                }`}
+                              >
+                                {supabaseEgress.isExhausted ? "0 B" : formatEgressSize(supabaseEgress.remainingBytes)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden flex">
+                            <div
+                              className={`h-3 rounded-full transition-all duration-700 ${
+                                supabaseEgress.isExhausted || supabaseEgress.percentage >= 90
+                                  ? "bg-rose-500"
+                                  : supabaseEgress.percentage >= 70
+                                  ? "bg-amber-500"
+                                  : "bg-emerald-500"
+                              }`}
+                              style={{ width: `${Math.max(supabaseEgress.bytesUsed > 0 || supabaseEgress.isExhausted ? 2 : 0, supabaseEgress.percentage)}%` }}
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap justify-between items-center gap-2 text-xs font-semibold">
+                            <span
+                              className={`tabular-nums ${
+                                supabaseEgress.isExhausted || supabaseEgress.percentage >= 90
+                                  ? "text-rose-600"
+                                  : "text-slate-600"
+                              }`}
+                            >
+                              {supabaseEgress.percentage}% Terpakai • Reset otomatis setiap tanggal 1 bulan berikutnya
+                            </span>
+                            <div className="flex items-center gap-3">
+                              {supabaseEgress.bytesUsed > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    resetSupabaseEgressStats();
+                                    setSupabaseEgress(getSupabaseEgressStats());
+                                  }}
+                                  className="text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                                >
+                                  Reset Hitungan Lokal
+                                </button>
+                              )}
+                              <span className="text-slate-400 tabular-nums">Batas 5.00 GB / Bulan</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-500 leading-relaxed">
+                          <span className="font-semibold text-slate-700">Catatan:</span> Indikator lokal mencatat lalu lintas data yang ditarik oleh browser ini. Untuk melihat total gabungan resmi dari seluruh HP siswa, klik tombol <span className="font-semibold text-emerald-700">Cek Resmi di Supabase</span>.
+                        </p>
                       </div>
 
                       {/* Row 2: Kapasitas Penyimpanan Berkas */}
