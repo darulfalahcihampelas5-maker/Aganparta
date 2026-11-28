@@ -36,6 +36,14 @@ export function setFirebaseQuotaExhausted(val: boolean = true): void {
       localStorage.removeItem('firebase_quota_exhausted');
       sessionStorage.removeItem('firebase_quota_exhausted');
     }
+    try {
+      fetch('/api/quota-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firebaseExhausted: val }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
   }
 }
 
@@ -46,12 +54,21 @@ export function isSupabaseQuotaExhausted(): boolean {
     const localVal = localStorage.getItem('supabase_quota_exhausted');
     const sessionVal = sessionStorage.getItem('supabase_quota_exhausted');
     if (localVal === 'false' && sessionVal === 'false') return false;
+    const rawUntil = Number(sessionStorage.getItem('supabase_quota_exhausted_until') || localStorage.getItem('supabase_quota_exhausted_until') || '0');
+    if (rawUntil > 0) {
+      if (Date.now() < rawUntil) return true;
+      // Cooldown expired: allow re-checking Supabase
+      localStorage.removeItem('supabase_quota_exhausted');
+      sessionStorage.removeItem('supabase_quota_exhausted');
+      localStorage.removeItem('supabase_quota_exhausted_until');
+      sessionStorage.removeItem('supabase_quota_exhausted_until');
+      return false;
+    }
     if (localVal === 'true' || sessionVal === 'true') return true;
-    const raw = Number(sessionStorage.getItem('supabase_quota_exhausted_until') || localStorage.getItem('supabase_quota_exhausted_until') || '0');
-    if (raw > Date.now()) return true;
-    return true;
+    // Fresh device with no prior quota error should NOT assume Supabase is exhausted
+    return false;
   }
-  return true;
+  return false;
 }
 
 export function isSupabaseQuotaError(err: any): boolean {
@@ -70,11 +87,23 @@ export function setSupabaseQuotaExhausted(val: boolean = true): void {
   if (typeof window !== 'undefined') {
     localStorage.setItem('supabase_quota_exhausted', val ? 'true' : 'false');
     sessionStorage.setItem('supabase_quota_exhausted', val ? 'true' : 'false');
-    if (!val) {
+    if (val) {
+      const until = String(Date.now() + 15 * 60 * 1000);
+      localStorage.setItem('supabase_quota_exhausted_until', until);
+      sessionStorage.setItem('supabase_quota_exhausted_until', until);
+    } else {
       localStorage.removeItem('supabase_quota_exhausted_until');
       sessionStorage.removeItem('supabase_quota_exhausted_until');
     }
     window.dispatchEvent(new CustomEvent('supabase-quota-updated', { detail: { exhausted: val } }));
+    try {
+      fetch('/api/quota-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ supabaseExhausted: val }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_) {}
   }
 }
 
@@ -96,6 +125,28 @@ function getCurrentMonthKey(): string {
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, '0');
   return `${y}-${m}`;
+}
+
+let pendingReportBytes = 0;
+let pendingReportRequests = 0;
+let reportTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTelemetryFlush(): void {
+  if (typeof window === 'undefined' || reportTimer) return;
+  reportTimer = setTimeout(() => {
+    reportTimer = null;
+    const bytes = pendingReportBytes;
+    const reqs = pendingReportRequests;
+    pendingReportBytes = 0;
+    pendingReportRequests = 0;
+    if (bytes <= 0 && reqs <= 0) return;
+    fetch('/api/quota-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supabaseBytes: bytes, supabaseRequests: reqs }),
+      keepalive: true,
+    }).catch(() => {});
+  }, 4000);
 }
 
 export function trackSupabaseEgressPayload(payload: unknown): void {
@@ -131,6 +182,9 @@ export function trackSupabaseEgressPayload(payload: unknown): void {
       lastUpdated: new Date().toISOString(),
     };
     localStorage.setItem(storageKey, JSON.stringify(updated));
+    pendingReportBytes += byteSize;
+    pendingReportRequests += 1;
+    scheduleTelemetryFlush();
     window.dispatchEvent(new CustomEvent('supabase-egress-updated', { detail: updated }));
   } catch (_) {}
 }
@@ -183,35 +237,284 @@ export function resetSupabaseEgressStats(): void {
   } catch (_) {}
 }
 
-export async function probeSupabaseQuotaStatus(): Promise<{ active: boolean; message: string }> {
-  if (!isSupabaseConfigured || !supabase) {
-    return { active: false, message: 'Konfigurasi Supabase belum tersedia.' };
+export type SupabaseHealthMode = 'active' | 'maintenance' | 'unreachable' | 'restricted';
+
+export interface SupabaseHealthInfo {
+  mode: SupabaseHealthMode;
+  title: string;
+  reason: string;
+  estimatedRecovery: string;
+  checkedAt: string;
+  httpStatus?: number;
+}
+
+export function classifySupabaseFailure(err: any, httpStatus?: number): SupabaseHealthInfo {
+  const checkedAt = new Date().toISOString();
+  const msg = String(err?.message || err?.details || err?.hint || err?.code || err || '').toLowerCase();
+
+  if (
+    httpStatus === 402 ||
+    isSupabaseQuotaError(err) ||
+    msg.includes('exceed_egress_quota') ||
+    msg.includes('spend cap')
+  ) {
+    return {
+      mode: 'restricted',
+      title: 'Layanan Supabase sedang dibatasi sementara oleh server pusat.',
+      reason: 'Proyek Supabase saat ini berstatus restricted (melewati batas kuota egress atau sedang menunggu pencabutan pembatasan otomatis setelah reset siklus).',
+      estimatedRecovery: '± 1 – 3 jam (atau hingga pembatasan siklus di dashboard Supabase dilepas otomatis)',
+      checkedAt,
+      httpStatus: httpStatus || 402,
+    };
   }
+
+  if (
+    (httpStatus && [502, 503, 504, 520, 521, 522, 523, 524, 525, 526].includes(httpStatus)) ||
+    msg.includes('maintenance') ||
+    msg.includes('paused') ||
+    msg.includes('restoring') ||
+    msg.includes('upgrading') ||
+    msg.includes('unavailable') ||
+    msg.includes('starting up') ||
+    msg.includes('503') ||
+    msg.includes('502') ||
+    msg.includes('504')
+  ) {
+    return {
+      mode: 'maintenance',
+      title: 'Server database Supabase sedang dalam mode pemeliharaan (maintenance).',
+      reason: 'Server atau instance database Supabase sedang melakukan restart, pembaruan sistem, atau dalam kondisi paused/restoring.',
+      estimatedRecovery: '± 15 – 60 menit (hingga proses pemeliharaan server Supabase selesai)',
+      checkedAt,
+      httpStatus: httpStatus || 503,
+    };
+  }
+
+  return {
+    mode: 'unreachable',
+    title: 'Server database Supabase sementara tidak dapat dijangkau.',
+    reason: 'Permintaan ke server Supabase mengalami timeout, terputus, atau server belum memberikan respons.',
+    estimatedRecovery: '± 5 – 30 menit (silakan cek kembali secara berkala atau pastikan koneksi internet stabil)',
+    checkedAt,
+    httpStatus,
+  };
+}
+
+export function isSupabaseConnectivityOrMaintenanceError(err: any): boolean {
+  if (!err) return false;
+  if (isSupabaseQuotaError(err)) return true;
+  const msg = String(err?.message || err?.details || err?.hint || err?.code || err || '').toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('network request failed') ||
+    msg.includes('timeout') ||
+    msg.includes('aborted') ||
+    msg.includes('abort') ||
+    msg.includes('econnrefused') ||
+    msg.includes('maintenance') ||
+    msg.includes('paused') ||
+    msg.includes('restoring') ||
+    msg.includes('upgrading') ||
+    msg.includes('unavailable') ||
+    msg.includes('500') ||
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('504')
+  );
+}
+
+export function emitSupabaseHealthIssue(err: any, httpStatus?: number): void {
+  if (typeof window === 'undefined') return;
+  if (!isSupabaseConnectivityOrMaintenanceError(err) && !httpStatus) return;
+  const info = classifySupabaseFailure(err, httpStatus);
+  window.dispatchEvent(new CustomEvent('supabase-health-issue', { detail: info }));
+}
+
+export async function checkSupabaseHealth(): Promise<SupabaseHealthInfo> {
+  const checkedAt = new Date().toISOString();
+  if (!isSupabaseConfigured || !supabase) {
+    return {
+      mode: 'unreachable',
+      title: 'Konfigurasi database Supabase belum aktif.',
+      reason: 'Kredensial atau alamat server Supabase tidak ditemukan pada aplikasi ini.',
+      estimatedRecovery: '± 5 – 15 menit setelah konfigurasi diperiksa oleh admin',
+      checkedAt,
+    };
+  }
+
+  let clientFailure: SupabaseHealthInfo | null = null;
+
   try {
-    const { data, error } = await supabase.from('exams').select('id').limit(1);
+    const probePromise = supabase.from('exams').select('id').limit(1);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Request timeout menghubungi Supabase')), 7000)
+    );
+    const { data, error, status } = (await Promise.race([probePromise, timeoutPromise])) as any;
     if (!error) {
       trackSupabaseEgressPayload(data || []);
       setSupabaseQuotaExhausted(false);
       if (typeof window !== 'undefined') {
         sessionStorage.removeItem('supabase_was_exhausted');
       }
-      return { active: true, message: 'Server Supabase aktif & kuota egress tersedia.' };
+      return {
+        mode: 'active',
+        title: 'Database Supabase aktif & terhubung normal.',
+        reason: 'Seluruh layanan sinkronisasi berjalan baik.',
+        estimatedRecovery: 'Normal',
+        checkedAt,
+        httpStatus: status || 200,
+      };
     }
-    if (isSupabaseQuotaError(error)) {
+
+    if (isSupabaseQuotaError(error) || status === 402) {
       setSupabaseQuotaExhausted(true);
       if (typeof window !== 'undefined') {
         sessionStorage.setItem('supabase_was_exhausted', 'true');
       }
-      return { active: false, message: 'Batas kuota egress 5 GB/bulan Supabase sedang tercapai.' };
     }
-    return { active: !isSupabaseQuotaExhausted(), message: error.message || 'Gagal menghubungi Supabase.' };
+    clientFailure = classifySupabaseFailure(error, status);
   } catch (err: any) {
     if (isSupabaseQuotaError(err)) {
       setSupabaseQuotaExhausted(true);
-      return { active: false, message: 'Batas kuota egress 5 GB/bulan Supabase sedang tercapai.' };
     }
-    return { active: false, message: err?.message || 'Koneksi ke Supabase gagal.' };
+    clientFailure = classifySupabaseFailure(err);
   }
+
+  // Confirm via backend /api/quota-status?force=1 so we distinguish local internet issues vs real Supabase downtime
+  try {
+    const resp = await fetch('/api/quota-status?force=1', { cache: 'no-store' });
+    if (resp.ok) {
+      const serverData = await resp.json();
+      const supa = serverData?.supabase;
+      if (supa?.healthStatus === 'active') {
+        setSupabaseQuotaExhausted(false);
+        return {
+          mode: 'active',
+          title: 'Database Supabase aktif & terhubung normal.',
+          reason: 'Server mengonfirmasi layanan Supabase aktif.',
+          estimatedRecovery: 'Normal',
+          checkedAt: serverData.checkedAt || checkedAt,
+          httpStatus: supa.httpStatus || 200,
+        };
+      }
+      if (supa?.healthStatus === 'maintenance' || supa?.healthStatus === 'restricted' || supa?.healthStatus === 'unreachable') {
+        const merged: SupabaseHealthInfo = {
+          mode: supa.healthStatus,
+          title:
+            supa.healthStatus === 'maintenance'
+              ? 'Server database Supabase sedang dalam mode pemeliharaan (maintenance).'
+              : supa.healthStatus === 'restricted'
+              ? 'Layanan Supabase sedang dibatasi sementara oleh server pusat.'
+              : 'Server database Supabase sementara tidak dapat dijangkau.',
+          reason: supa.message || clientFailure.reason,
+          estimatedRecovery: supa.estimatedRecovery || clientFailure.estimatedRecovery,
+          checkedAt: serverData.checkedAt || checkedAt,
+          httpStatus: supa.httpStatus || clientFailure.httpStatus,
+        };
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('supabase-health-issue', { detail: merged }));
+        }
+        return merged;
+      }
+    }
+  } catch (_) {}
+
+  if (typeof window !== 'undefined' && clientFailure) {
+    window.dispatchEvent(new CustomEvent('supabase-health-issue', { detail: clientFailure }));
+  }
+  return clientFailure!;
+}
+
+export async function probeSupabaseQuotaStatus(): Promise<{ active: boolean; message: string }> {
+  const health = await checkSupabaseHealth();
+  if (health.mode === 'active') {
+    return { active: true, message: 'Server Supabase aktif & kuota egress tersedia.' };
+  }
+  return { active: false, message: health.reason };
+}
+
+export interface UnifiedQuotaStatus {
+  month: string;
+  supabase: {
+    status: 'active' | 'exhausted' | 'unknown';
+    healthStatus?: SupabaseHealthMode;
+    httpStatus?: number;
+    estimatedRecovery?: string;
+    egressBytes: number;
+    limitBytes: number;
+    remainingBytes: number;
+    percentage: number;
+    requests: number;
+    message: string;
+  };
+  firebase: {
+    status: 'active' | 'exhausted' | 'unknown';
+    dailyReads: number;
+    dailyLimitReads: number;
+    dailyWrites: number;
+    message: string;
+  };
+  alertLevel: 'normal' | 'warning' | 'critical' | 'exhausted';
+  checkedAt: string;
+}
+
+export async function fetchUnifiedQuotaStatus(force: boolean = false): Promise<UnifiedQuotaStatus> {
+  const localStats = getSupabaseEgressStats();
+  let clientProbe: { active: boolean; message: string } | null = null;
+  if (force) {
+    clientProbe = await probeSupabaseQuotaStatus();
+  }
+
+  let serverData: UnifiedQuotaStatus | null = null;
+  try {
+    const resp = await fetch(`/api/quota-status${force ? '?force=1' : ''}`, { cache: 'no-store' });
+    if (resp.ok) {
+      serverData = await resp.json();
+    }
+  } catch (_) {}
+
+  const freshLocal = getSupabaseEgressStats();
+  const isSupaExhausted =
+    clientProbe ? !clientProbe.active : serverData?.supabase?.status === 'exhausted' || freshLocal.isExhausted;
+  const mergedBytes = Math.max(freshLocal.bytesUsed, serverData?.supabase?.egressBytes || 0);
+  const mergedRequests = Math.max(freshLocal.requests, serverData?.supabase?.requests || 0);
+  const limitBytes = SUPABASE_EGRESS_LIMIT_BYTES;
+  const rawPct = (mergedBytes / limitBytes) * 100;
+  const percentage = isSupaExhausted ? 100 : Math.min(100, Number(rawPct.toFixed(2)));
+  const remainingBytes = isSupaExhausted ? 0 : Math.max(0, limitBytes - mergedBytes);
+
+  const isFbExhausted = isFirebaseQuotaExhausted() || serverData?.firebase?.status === 'exhausted';
+  let alertLevel: 'normal' | 'warning' | 'critical' | 'exhausted' = 'normal';
+  if (isSupaExhausted || percentage >= 100) {
+    alertLevel = 'exhausted';
+  } else if (percentage >= 90) {
+    alertLevel = 'critical';
+  } else if (percentage >= 75) {
+    alertLevel = 'warning';
+  }
+
+  return {
+    month: serverData?.month || freshLocal.month || localStats.month,
+    supabase: {
+      status: isSupaExhausted ? 'exhausted' : (serverData?.supabase?.status || 'active'),
+      egressBytes: mergedBytes,
+      limitBytes,
+      remainingBytes,
+      percentage,
+      requests: mergedRequests,
+      message: clientProbe?.message || serverData?.supabase?.message || (isSupaExhausted ? 'Limit egress 5 GB/bulan tercapai.' : 'Server Supabase aktif & kuota tersedia.'),
+    },
+    firebase: {
+      status: isFbExhausted ? 'exhausted' : (serverData?.firebase?.status || 'active'),
+      dailyReads: serverData?.firebase?.dailyReads || 0,
+      dailyLimitReads: serverData?.firebase?.dailyLimitReads || 50000,
+      dailyWrites: serverData?.firebase?.dailyWrites || 0,
+      message: serverData?.firebase?.message || (isFbExhausted ? 'Kuota baca harian Firebase (50.000/hari) habis.' : 'Firebase Firestore aktif.'),
+    },
+    alertLevel,
+    checkedAt: serverData?.checkedAt || new Date().toISOString(),
+  };
 }
 
 /**
@@ -378,10 +681,24 @@ const mergeGradeRecords = (existing: GradeItem | undefined, incoming: GradeItem)
   };
 };
 
-// 1. Fetch all Final Grades (Unlimited Reads from Supabase + Firestore Fallback/Merge + exam_sessions recovery)
-export async function getFinalGrades(): Promise<GradeItem[]> {
-  const gradesMap = new Map<string, GradeItem>();
-  const scoredKeysInFinalGrades = new Set<string>();
+// 1. Fetch all Final Grades (Lightweight column projection by default to avoid pulling 3,600+ answers JSON blobs + in-flight deduplication)
+let inFlightFinalGrades: Promise<GradeItem[]> | null = null;
+let lastFinalGradesCache: { ts: number; includeAnswers: boolean; data: GradeItem[] } | null = null;
+
+export async function getFinalGrades(options?: { includeAnswers?: boolean; force?: boolean }): Promise<GradeItem[]> {
+  const includeAnswers = Boolean(options?.includeAnswers);
+  const force = Boolean(options?.force);
+
+  if (!force && lastFinalGradesCache && Date.now() - lastFinalGradesCache.ts < 15_000 && (!includeAnswers || lastFinalGradesCache.includeAnswers)) {
+    return lastFinalGradesCache.data;
+  }
+  if (!force && inFlightFinalGrades && !includeAnswers) {
+    return inFlightFinalGrades;
+  }
+
+  const runFetch = async (): Promise<GradeItem[]> => {
+    const gradesMap = new Map<string, GradeItem>();
+    const scoredKeysInFinalGrades = new Set<string>();
 
   const isViolationOnlyStub = (item: GradeItem): boolean => {
     const hasAnswerItems = Boolean(
@@ -448,14 +765,18 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
       let supaHadError = false;
       let page = 0;
       const pageSize = 1000;
+      const selectCols = includeAnswers
+        ? "*"
+        : "id,exam_id,assignment_id,nisn,student_name,kelas,nilai,score,submitted_at,violation_count,is_remedial,remedial_score";
       while (true) {
         const { data, error } = await supabase
           .from("final_grades")
-          .select("*")
+          .select(selectCols)
           .range(page * pageSize, (page + 1) * pageSize - 1);
         if (error) {
           supaHadError = true;
           if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+          emitSupabaseHealthIssue(error);
           break;
         }
         if (!data || data.length === 0) break;
@@ -637,78 +958,171 @@ export async function getFinalGrades(): Promise<GradeItem[]> {
     }, 100);
   }
 
-  return Array.from(gradesMap.values());
+  const finalResult = Array.from(gradesMap.values());
+  lastFinalGradesCache = { ts: Date.now(), includeAnswers, data: finalResult };
+  return finalResult;
+  };
+
+  if (!includeAnswers) {
+    inFlightFinalGrades = runFetch().finally(() => {
+      inFlightFinalGrades = null;
+    });
+    return inFlightFinalGrades;
+  }
+  return runFetch();
 }
 
-// 2. Fetch Exams (Supabase Primary, Firestore Fallback only if Supabase empty/unavailable)
-export async function getExams(): Promise<ExamItem[]> {
-  const examsMap = new Map<string, ExamItem>();
-  let supaExamsSucceeded = false;
-
-  // 1. Try Supabase First
+// Fetch grades for a single exam only (avoids full 3,600+ row egress during Live Proctoring)
+export async function getFinalGradesForExam(examId: string): Promise<GradeItem[]> {
+  if (!examId) return [];
   if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
-      const { data, error } = await supabase.from("exams").select("*");
-      if (error) {
-        if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
-      } else if (Array.isArray(data) && data.length > 0) {
+      const { data, error } = await supabase
+        .from("final_grades")
+        .select("id,exam_id,assignment_id,nisn,student_name,kelas,nilai,score,submitted_at,violation_count,is_remedial,remedial_score")
+        .or(`exam_id.eq.${examId},assignment_id.eq.${examId}`);
+      if (!error && Array.isArray(data)) {
         trackSupabaseEgressPayload(data);
-        data.forEach((d) => {
-          examsMap.set(d.id, {
-            id: d.id,
-            title: d.title,
-            subject: d.subject,
-            kelasRef: d.kelas_ref,
-            token: d.token,
-            duration: d.duration,
-            kkm: d.kkm,
-            questions: d.questions || [],
-            createdAt: d.created_at,
-          });
-        });
-        if (data.every((d) => Boolean(d.kelas_ref))) {
-          supaExamsSucceeded = true;
-        }
+        return data.map((d: any) => ({
+          id: d.id,
+          assignmentId: d.assignment_id || d.exam_id,
+          examId: d.exam_id || d.assignment_id,
+          nisn: d.nisn || "",
+          studentName: d.student_name || "",
+          kelas: d.kelas || "",
+          nilai: d.nilai ?? d.score,
+          score: d.score ?? d.nilai,
+          submittedAt: d.submitted_at,
+          violationCount: d.violation_count || 0,
+          isRemedial: d.is_remedial,
+          remedialScore: d.remedial_score,
+        }));
       }
     } catch (err) {
       if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
-      console.warn("Supabase fetch exams exception:", err);
     }
   }
+  return [];
+}
 
-  // 2. Fallback to Firestore only when Supabase didn't already provide full exams
-  if (!supaExamsSucceeded) {
-    let snap: any = null;
-    if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
-      try {
-        snap = await getDocs(collection(db, "exams"));
-      } catch (err: any) {
-        if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
-          setFirebaseQuotaExhausted(true);
+// Fetch answers JSON for a single exam only (used on-demand by ExamItemAnalysisModal)
+export async function getExamGradeAnswers(examId: string): Promise<Record<string, any>> {
+  const answersMap: Record<string, any> = {};
+  if (!examId || !isSupabaseConfigured || !supabase || isSupabaseQuotaExhausted()) return answersMap;
+  try {
+    const { data, error } = await supabase
+      .from("final_grades")
+      .select("id,nisn,answers")
+      .or(`exam_id.eq.${examId},assignment_id.eq.${examId}`);
+    if (!error && Array.isArray(data)) {
+      trackSupabaseEgressPayload(data);
+      data.forEach((row: any) => {
+        if (row?.id && row?.answers) {
+          answersMap[row.id] = row.answers;
         }
+        if (row?.nisn && row?.answers) {
+          answersMap[`nisn_${normalizeNisnForKey(row.nisn)}`] = row.answers;
+        }
+      });
+    } else if (error) {
+      if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+      emitSupabaseHealthIssue(error);
+    }
+  } catch (err) {
+    if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
+  }
+  return answersMap;
+}
+
+// 2. Fetch Exams (Supabase Primary, Firestore Fallback only if Supabase empty/unavailable, with burst dedup)
+let inFlightExams: Promise<ExamItem[]> | null = null;
+let lastExamsCache: { ts: number; data: ExamItem[] } | null = null;
+
+export async function getExams(force = false): Promise<ExamItem[]> {
+  if (!force && lastExamsCache && Date.now() - lastExamsCache.ts < 15_000) {
+    return lastExamsCache.data;
+  }
+  if (!force && inFlightExams) {
+    return inFlightExams;
+  }
+
+  inFlightExams = (async () => {
+    const examsMap = new Map<string, ExamItem>();
+    let supaExamsSucceeded = false;
+
+    // 1. Try Supabase First
+    if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
+      try {
+        const { data, error } = await supabase.from("exams").select("*");
+        if (error) {
+          if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+          emitSupabaseHealthIssue(error);
+        } else if (Array.isArray(data) && data.length > 0) {
+          trackSupabaseEgressPayload(data);
+          data.forEach((d) => {
+            examsMap.set(d.id, {
+              id: d.id,
+              title: d.title,
+              subject: d.subject,
+              kelasRef: d.kelas_ref,
+              token: d.token,
+              duration: d.duration,
+              kkm: d.kkm,
+              questions: d.questions || [],
+              createdAt: d.created_at,
+            });
+          });
+          if (data.every((d) => Boolean(d.kelas_ref))) {
+            supaExamsSucceeded = true;
+          }
+        }
+      } catch (err) {
+        if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
+        emitSupabaseHealthIssue(err);
+        console.warn("Supabase fetch exams exception:", err);
+      }
+    }
+
+    // 2. Fallback to Firestore only when Supabase didn't already provide full exams
+    if (!supaExamsSucceeded) {
+      let snap: any = null;
+      if (!isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
+        try {
+          snap = await getDocs(collection(db, "exams"));
+        } catch (err: any) {
+          if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
+            setFirebaseQuotaExhausted(true);
+          }
+          try {
+            snap = await getDocsFromCache(collection(db, "exams"));
+          } catch (_) {}
+        }
+      } else {
         try {
           snap = await getDocsFromCache(collection(db, "exams"));
         } catch (_) {}
       }
-    } else {
-      try {
-        snap = await getDocsFromCache(collection(db, "exams"));
-      } catch (_) {}
+
+      if (snap && snap.docs) {
+        snap.docs.forEach((docSnap: any) => {
+          const existing = examsMap.get(docSnap.id) || {};
+          examsMap.set(docSnap.id, {
+            ...existing,
+            id: docSnap.id,
+            ...docSnap.data(),
+          } as ExamItem);
+        });
+      }
     }
 
-    if (snap && snap.docs) {
-      snap.docs.forEach((docSnap: any) => {
-        const existing = examsMap.get(docSnap.id) || {};
-        examsMap.set(docSnap.id, {
-          ...existing,
-          id: docSnap.id,
-          ...docSnap.data(),
-        } as ExamItem);
-      });
-    }
-  }
+    const result = Array.from(examsMap.values());
+    lastExamsCache = { ts: Date.now(), data: result };
+    return result;
+  })().finally(() => {
+    inFlightExams = null;
+  });
 
-  return Array.from(examsMap.values());
+  return inFlightExams;
 }
 
 // 3. Save a Final Grade (Saves to Supabase as primary AND Firestore as durable backup)
@@ -1011,6 +1425,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
           const { data, error } = await req.range(page * pageSize, (page + 1) * pageSize - 1);
           if (error) {
             if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+            emitSupabaseHealthIssue(error);
             break;
           }
           if (!data || data.length === 0) break;
@@ -1056,6 +1471,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
         const { data, error } = await supabase.from("exams").select("*").limit(1000);
         if (error) {
           if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+          emitSupabaseHealthIssue(error);
         } else if (Array.isArray(data) && data.length > 0) {
           trackSupabaseEgressPayload(data);
           const formatted = data.map((d) => ({
@@ -1123,6 +1539,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
               .in("data->>nisn", uniqueVariants);
             if (error) {
               if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+              emitSupabaseHealthIssue(error);
             } else if (Array.isArray(data) && data.length > 0) {
               fetchedData = data;
               isSupabaseSuccess = true;
@@ -1134,6 +1551,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
                 .in("data->>nis", uniqueVariants);
               if (nisErr) {
                 if (isSupabaseQuotaError(nisErr)) setSupabaseQuotaExhausted();
+                emitSupabaseHealthIssue(nisErr);
               } else if (Array.isArray(nisData) && nisData.length > 0) {
                 fetchedData = nisData;
                 isSupabaseSuccess = true;
@@ -1141,8 +1559,31 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             }
           }
         } else {
-          // Push down common equality filters (examId, assignmentId, kelas, studentId) so we don't scan the full collection
-          const pushedFilter = extractEqFilter(["examId", "assignmentId", "kelas", "studentId"]);
+          // Push down equality & IN filters (including accessCode & kelasRef) to prevent full-table scans on studentsByNisn & absensi
+          const pushedEqFilter = extractEqFilter(["examId", "assignmentId", "kelas", "kelasRef", "studentId", "accessCode"]);
+          let pushedInFilter: { field: string; values: string[] } | null = null;
+          if (!pushedEqFilter && Array.isArray(_query?.filters)) {
+            for (const f of _query.filters) {
+              const fName = Array.isArray(f.field?.segments)
+                ? f.field.segments[0]
+                : typeof f.field === "string"
+                ? f.field
+                : null;
+              if (fName && ["accessCode", "kelas", "kelasRef", "examId", "assignmentId"].includes(fName) && (f.op === "in" || f.op === "IN")) {
+                let rawVals: any[] = [];
+                if (Array.isArray(f.value?.arrayValue?.values)) {
+                  rawVals = f.value.arrayValue.values.map((v: any) => String(v.stringValue ?? v.integerValue ?? v ?? "").trim()).filter(Boolean);
+                } else if (Array.isArray(f.value)) {
+                  rawVals = f.value.map((v: any) => String(v || "").trim()).filter(Boolean);
+                }
+                if (rawVals.length > 0) {
+                  pushedInFilter = { field: fName, values: rawVals };
+                  break;
+                }
+              }
+            }
+          }
+
           let page = 0;
           const pageSize = 1000;
           let hadError = false;
@@ -1151,13 +1592,16 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
               .from("app_collections")
               .select("doc_id, data")
               .eq("collection_name", collectionName);
-            if (pushedFilter) {
-              req = req.eq(`data->>${pushedFilter.field}`, pushedFilter.value);
+            if (pushedEqFilter) {
+              req = req.eq(`data->>${pushedEqFilter.field}`, pushedEqFilter.value);
+            } else if (pushedInFilter) {
+              req = req.in(`data->>${pushedInFilter.field}`, pushedInFilter.values);
             }
             const { data, error } = await req.range(page * pageSize, (page + 1) * pageSize - 1);
             if (error) {
               hadError = true;
               if (isSupabaseQuotaError(error)) setSupabaseQuotaExhausted();
+              emitSupabaseHealthIssue(error);
               break;
             }
             if (!data || data.length === 0) break;
@@ -1177,8 +1621,54 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
             id: item.doc_id,
             ...item.data
           }));
-          const filtered = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
-          const docs = filtered.map(item => ({
+          const filteredSupa = applyQueryFilters(collectionName, formatted, queryOrCollectionRef);
+
+          // For submissions, also merge any newer/unsynced records from Firestore so student uploads
+          // never go missing due to split writes between Supabase and Firestore.
+          if (collectionName === "submissions" && !isFirebaseDisabled && !isFirebaseQuotaExhausted()) {
+            try {
+              const mergedMap = new Map<string, any>();
+              const getSubTimestamp = (item: any) => {
+                const raw = item?.updatedAt || item?.resubmittedAt || item?.gradedAt || item?.submittedAt || item?.createdAt || "";
+                const ts = new Date(raw).getTime();
+                return Number.isNaN(ts) ? 0 : ts;
+              };
+              const pickPreferredSub = (a: any, b: any) => {
+                if (!a) return b;
+                if (!b) return a;
+                const tsA = getSubTimestamp(a);
+                const tsB = getSubTimestamp(b);
+                if (tsB > tsA) return b;
+                if (tsA > tsB) return a;
+                const bGraded = b.status === "sudah dinilai" || (b.nilai !== undefined && b.nilai !== null && b.nilai !== "");
+                const aGraded = a.status === "sudah dinilai" || (a.nilai !== undefined && a.nilai !== null && a.nilai !== "");
+                return bGraded && !aGraded ? b : a;
+              };
+
+              filteredSupa.forEach((item: any) => {
+                if (item?.id) mergedMap.set(String(item.id), item);
+              });
+
+              const fsSnap = await getDocs(queryOrCollectionRef);
+              fsSnap.docs.forEach((docSnap: any) => {
+                const fsItem = { id: docSnap.id, ...(docSnap.data() as any) };
+                mergedMap.set(String(docSnap.id), pickPreferredSub(mergedMap.get(String(docSnap.id)), fsItem));
+              });
+
+              const mergedDocs = Array.from(mergedMap.values()).map((item) => ({
+                id: item.id,
+                exists: () => true,
+                data: () => item,
+              }));
+              return wrapSnapshot(mergedDocs);
+            } catch (fsErr: any) {
+              if (fsErr?.message?.includes("Quota") || fsErr?.code === "resource-exhausted") {
+                setFirebaseQuotaExhausted(true);
+              }
+            }
+          }
+
+          const docs = filteredSupa.map(item => ({
             id: item.id,
             exists: () => true,
             data: () => item
@@ -1188,6 +1678,7 @@ export async function dbGetDocs(queryOrCollectionRef: any): Promise<any> {
       }
     } catch (err: any) {
       if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted();
+      emitSupabaseHealthIssue(err);
       console.warn(`Supabase getDocs read bypass for ${collectionName}:`, err?.message || err);
     }
   }
@@ -1345,13 +1836,16 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
   const collectionName = pathSegments[0];
   const docId = pathSegments[1];
 
+  let supabaseSaved = false;
+  let firestoreSaved = false;
+
   // 1. Write to Supabase first unless quota cooldown is active
   if (isSupabaseConfigured && supabase && !isSupabaseQuotaExhausted()) {
     try {
       if (collectionName === "final_grades") {
         const rawNumeric = data.nilai ?? data.score;
         const hasNumeric = hasValidNumericScore(rawNumeric);
-        await supabase.from("final_grades").upsert({
+        const { error } = await supabase.from("final_grades").upsert({
           id: docId,
           exam_id: data.examId || data.assignmentId,
           assignment_id: data.assignmentId || data.examId,
@@ -1366,8 +1860,15 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
           is_remedial: data.isRemedial || false,
           remedial_score: data.remedialScore ?? null,
         });
+        if (!error) {
+          supabaseSaved = true;
+        } else if (isSupabaseQuotaError(error)) {
+          setSupabaseQuotaExhausted(true);
+        } else {
+          console.warn(`Supabase final_grades upsert error:`, error);
+        }
       } else if (collectionName === "exams") {
-        await supabase.from("exams").upsert({
+        const { error } = await supabase.from("exams").upsert({
           id: docId,
           title: data.title,
           subject: data.subject,
@@ -1378,6 +1879,13 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
           questions: data.questions || [],
           created_at: data.createdAt || new Date().toISOString()
         });
+        if (!error) {
+          supabaseSaved = true;
+        } else if (isSupabaseQuotaError(error)) {
+          setSupabaseQuotaExhausted(true);
+        } else {
+          console.warn(`Supabase exams upsert error:`, error);
+        }
       } else {
         const id = `${collectionName}_${docId}`;
         let dataToSave = data;
@@ -1385,13 +1893,15 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
         // If merge option is specified, merge with existing data in Supabase
         if (options && (options.merge === true || options.mergeFields)) {
           try {
-            const { data: existingRow } = await supabase
+            const { data: existingRow, error: mergeErr } = await supabase
               .from("app_collections")
               .select("data")
               .eq("id", id)
               .maybeSingle();
 
-            if (existingRow && existingRow.data && typeof existingRow.data === "object") {
+            if (mergeErr && isSupabaseQuotaError(mergeErr)) {
+              setSupabaseQuotaExhausted(true);
+            } else if (existingRow && existingRow.data && typeof existingRow.data === "object") {
               dataToSave = { ...existingRow.data, ...data };
               if (
                 collectionName === "exam_sessions" &&
@@ -1432,29 +1942,48 @@ export async function dbSetDoc(docRef: any, data: any, options?: any): Promise<v
           }
         }
 
-        await supabase.from("app_collections").upsert({
+        const { error } = await supabase.from("app_collections").upsert({
           id,
           collection_name: collectionName,
           doc_id: docId,
           data: dataToSave,
           updated_at: new Date().toISOString()
         });
+        if (!error) {
+          supabaseSaved = true;
+        } else if (isSupabaseQuotaError(error)) {
+          setSupabaseQuotaExhausted(true);
+        } else {
+          console.warn(`Supabase app_collections upsert error for ${collectionName}/${docId}:`, error);
+        }
       }
     } catch (err: any) {
+      if (isSupabaseQuotaError(err)) setSupabaseQuotaExhausted(true);
       console.warn(`Supabase write sync warning for ${collectionName}/${docId}:`, err?.message || err);
     }
   }
 
-  // 2. Fallback to Firestore (ignore quota exhaustion, treat as success if saved to Supabase)
+  // 2. Write to Firestore (Backup / Dual-Write)
   try {
     await setDoc(docRef, data, options);
+    firestoreSaved = true;
   } catch (err: any) {
     if (err?.message?.includes("Quota") || err?.code === "resource-exhausted") {
       setFirebaseQuotaExhausted(true);
-      console.warn(`Firestore write quota reached for ${collectionName}. Successfully synced to Supabase!`);
-    } else {
+      if (supabaseSaved) {
+        console.warn(`Firestore write quota reached for ${collectionName}. Successfully synced to Supabase!`);
+      } else {
+        throw new Error("Kuota server penyimpanan (Firebase & Supabase) sedang penuh. Silakan coba kirim ulang beberapa saat lagi.");
+      }
+    } else if (!supabaseSaved) {
       throw err;
+    } else {
+      console.warn(`Firestore write failed for ${collectionName}/${docId}, but saved to Supabase:`, err?.message || err);
     }
+  }
+
+  if (!supabaseSaved && !firestoreSaved) {
+    throw new Error("Gagal menyimpan data ke server database. Periksa koneksi internet Anda.");
   }
 }
 

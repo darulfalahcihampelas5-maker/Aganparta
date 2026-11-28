@@ -277,12 +277,13 @@ export const LiveProctoringModal: React.FC<LiveProctoringModalProps> = ({
       }
     }
 
-    // Only poll periodically when Firestore realtime listener is inactive/exhausted (avoids double reads every 8s)
+    // Only poll periodically when tab is visible AND Firestore realtime listener is inactive/exhausted
     const pollInterval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       if (!isSnapshotHealthy || isFirebaseQuotaExhausted()) {
         loadFallbackSessions(false);
       }
-    }, 25000);
+    }, 30000);
     return () => {
       if (unsubscribe) unsubscribe();
       clearInterval(pollInterval);

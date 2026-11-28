@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   BarChart3,
@@ -13,7 +13,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import { isClassMatch, isSameNisn } from "../../lib/gradeUtils";
-import { saveFinalGrade } from "../../lib/supabaseSync";
+import { getExamGradeAnswers, saveFinalGrade } from "../../lib/supabaseSync";
 import { getDriveImageUrl } from "../../lib/driveUtils";
 
 interface ExamItemAnalysisModalProps {
@@ -47,28 +47,48 @@ export const ExamItemAnalysisModal: React.FC<ExamItemAnalysisModalProps> = ({
   const [editedScores, setEditedScores] = useState<Record<string, Record<number, number>>>({});
   const [savingStudentNisn, setSavingStudentNisn] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [examAnswersMap, setExamAnswersMap] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    if (!isOpen || !exam?.id) return;
+    let cancelled = false;
+    getExamGradeAnswers(exam.id).then((ansMap) => {
+      if (!cancelled) setExamAnswersMap(ansMap || {});
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, exam?.id]);
 
   const questions: any[] = useMemo(() => (Array.isArray(exam?.questions) ? exam.questions : []), [exam]);
 
   const examGrades = useMemo(() => {
     if (!exam) return [];
-    return finalGradesList.filter((fg) => {
-      const matchExam =
-        fg.examId === exam.id ||
-        fg.assignmentId === exam.id ||
-        fg.alignmentId === exam.id ||
-        (fg.id && fg.id.startsWith(`${exam.id}_`));
-      if (!matchExam) return false;
-      if (fg.nilai === undefined && fg.score === undefined) return false;
+    return finalGradesList
+      .filter((fg) => {
+        const matchExam =
+          fg.examId === exam.id ||
+          fg.assignmentId === exam.id ||
+          fg.alignmentId === exam.id ||
+          (fg.id && fg.id.startsWith(`${exam.id}_`));
+        if (!matchExam) return false;
+        if (fg.nilai === undefined && fg.score === undefined) return false;
 
-      const stu = studentsList.find((s) => isSameNisn(s.nisn, fg.nisn));
-      const kelasVal = fg.kelas || stu?.kelas || "";
-      if (selectedClass !== "SEMUA_KELAS" && !isClassMatch(kelasVal, selectedClass)) {
-        return false;
-      }
-      return true;
-    });
-  }, [exam, finalGradesList, studentsList, selectedClass]);
+        const stu = studentsList.find((s) => isSameNisn(s.nisn, fg.nisn));
+        const kelasVal = fg.kelas || stu?.kelas || "";
+        if (selectedClass !== "SEMUA_KELAS" && !isClassMatch(kelasVal, selectedClass)) {
+          return false;
+        }
+        return true;
+      })
+      .map((fg) => {
+        const hasLoadedAns = fg.answers && typeof fg.answers === "object" && Object.keys(fg.answers).length > 0;
+        if (hasLoadedAns) return fg;
+        const normKey = `nisn_${String(fg.nisn || "").trim().replace(/^0+/, "") || String(fg.nisn || "").trim()}`;
+        const onDemandAns = examAnswersMap[fg.id] || examAnswersMap[normKey];
+        return onDemandAns ? { ...fg, answers: onDemandAns } : fg;
+      });
+  }, [exam, finalGradesList, studentsList, selectedClass, examAnswersMap]);
 
   const itemStats = useMemo(() => {
     return questions.map((q, qIdx) => {

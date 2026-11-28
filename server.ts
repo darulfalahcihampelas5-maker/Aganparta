@@ -1348,6 +1348,279 @@ Instruksi Output:
     }
   });
 
+  // Quota & Monthly Egress Telemetry Endpoints
+  const QUOTA_TELEMETRY_FILE = "/tmp/sipinter_quota_telemetry.json";
+  const SUPABASE_LIMIT_BYTES = 5 * 1024 * 1024 * 1024;
+  const FIREBASE_DAILY_READ_LIMIT = 50000;
+  const DEFAULT_SUPABASE_URL = "https://ikiruonvyfdphpxqszna.supabase.co";
+  const DEFAULT_SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlraXJ1b252eWZkcGhweHFzem5hIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxNjYyMzYsImV4cCI6MjEwMzc0MjIzNn0.4pfSXgg1j9z5fhP9HM9YF9zJhtbg0FIRrL0EhBAR2OA";
+  let lastSupabaseProbeCache: {
+    ts: number;
+    status: "active" | "exhausted" | "unknown";
+    healthStatus: "active" | "maintenance" | "unreachable" | "restricted";
+    httpStatus?: number;
+    estimatedRecovery?: string;
+    message: string;
+  } | null = null;
+  let lastFirebaseProbeCache: { ts: number; status: "active" | "exhausted" | "unknown"; message: string } | null = null;
+
+  const getMonthKey = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  };
+  const getDayKey = () => new Date().toISOString().slice(0, 10);
+
+  const readTelemetryStore = () => {
+    const month = getMonthKey();
+    const day = getDayKey();
+    const defaults = {
+      month,
+      supabaseBytes: 0,
+      supabaseRequests: 0,
+      supabaseExhausted: false,
+      day,
+      firebaseReads: 0,
+      firebaseWrites: 0,
+      firebaseExhausted: false,
+      lastUpdated: null as string | null,
+    };
+    try {
+      if (fs.existsSync(QUOTA_TELEMETRY_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(QUOTA_TELEMETRY_FILE, "utf-8"));
+        if (parsed && typeof parsed === "object") {
+          const sameMonth = parsed.month === month;
+          const sameDay = parsed.day === day;
+          return {
+            month,
+            supabaseBytes: sameMonth ? Math.max(0, Number(parsed.supabaseBytes) || 0) : 0,
+            supabaseRequests: sameMonth ? Math.max(0, Number(parsed.supabaseRequests) || 0) : 0,
+            supabaseExhausted: sameMonth ? Boolean(parsed.supabaseExhausted) : false,
+            day,
+            firebaseReads: sameDay ? Math.max(0, Number(parsed.firebaseReads) || 0) : 0,
+            firebaseWrites: sameDay ? Math.max(0, Number(parsed.firebaseWrites) || 0) : 0,
+            firebaseExhausted: sameDay ? Boolean(parsed.firebaseExhausted) : false,
+            lastUpdated: parsed.lastUpdated || null,
+          };
+        }
+      }
+    } catch (_) {}
+    return defaults;
+  };
+
+  const writeTelemetryStore = (store: ReturnType<typeof readTelemetryStore>) => {
+    try {
+      fs.writeFileSync(QUOTA_TELEMETRY_FILE, JSON.stringify(store), "utf-8");
+    } catch (_) {}
+  };
+
+  app.post("/api/quota-report", (req, res) => {
+    try {
+      const {
+        supabaseBytes = 0,
+        supabaseRequests = 0,
+        supabaseExhausted,
+        firebaseReads = 0,
+        firebaseWrites = 0,
+        firebaseExhausted,
+      } = req.body || {};
+
+      const store = readTelemetryStore();
+      const addBytes = Math.max(0, Math.min(100 * 1024 * 1024, Number(supabaseBytes) || 0));
+      const addReqs = Math.max(0, Math.min(1000, Number(supabaseRequests) || 0));
+      const addReads = Math.max(0, Math.min(50000, Number(firebaseReads) || 0));
+      const addWrites = Math.max(0, Math.min(20000, Number(firebaseWrites) || 0));
+
+      store.supabaseBytes += addBytes;
+      store.supabaseRequests += addReqs;
+      store.firebaseReads += addReads;
+      store.firebaseWrites += addWrites;
+
+      if (typeof supabaseExhausted === "boolean") {
+        store.supabaseExhausted = supabaseExhausted;
+      }
+      if (typeof firebaseExhausted === "boolean") {
+        store.firebaseExhausted = firebaseExhausted;
+      }
+      store.lastUpdated = new Date().toISOString();
+      writeTelemetryStore(store);
+
+      return res.json({ ok: true, month: store.month, supabaseBytes: store.supabaseBytes });
+    } catch (err: any) {
+      return res.status(400).json({ ok: false, error: err?.message || "Invalid telemetry payload" });
+    }
+  });
+
+  app.get("/api/quota-status", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    const force = req.query.force === "1" || req.query.force === "true";
+    const store = readTelemetryStore();
+    const now = Date.now();
+
+    // 1. Live probe Supabase (using env vars or default project config)
+    const supaUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL;
+    const supaKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
+    if (supaUrl && supaKey && (force || !lastSupabaseProbeCache || now - lastSupabaseProbeCache.ts > 60_000)) {
+      try {
+        const probeResp = await fetch(`${supaUrl.replace(/\/+$/, "")}/rest/v1/exams?select=id&limit=1`, {
+          headers: {
+            apikey: supaKey,
+            Authorization: `Bearer ${supaKey}`,
+          },
+          signal: AbortSignal.timeout(7000),
+        });
+        const bodyText = await probeResp.text();
+        const lower = bodyText.toLowerCase();
+        if (probeResp.ok) {
+          lastSupabaseProbeCache = {
+            ts: now,
+            status: "active",
+            healthStatus: "active",
+            httpStatus: probeResp.status,
+            message: "Server Supabase aktif & kuota egress tersedia.",
+          };
+          store.supabaseExhausted = false;
+        } else if (
+          probeResp.status === 402 ||
+          lower.includes("exceed_egress_quota") ||
+          lower.includes("egress") ||
+          lower.includes("quota") ||
+          lower.includes("spend cap")
+        ) {
+          lastSupabaseProbeCache = {
+            ts: now,
+            status: "exhausted",
+            healthStatus: "restricted",
+            httpStatus: probeResp.status,
+            estimatedRecovery: "± 1 – 3 jam (menunggu pelepasan otomatis pembatasan di server Supabase setelah reset siklus)",
+            message: "Layanan Supabase sedang dibatasi sementara (exceed_egress_quota / menunggu sinkronisasi siklus).",
+          };
+          store.supabaseExhausted = true;
+        } else if (
+          [502, 503, 504, 520, 521, 522, 523, 524, 525, 526].includes(probeResp.status) ||
+          lower.includes("maintenance") ||
+          lower.includes("paused") ||
+          lower.includes("restoring") ||
+          lower.includes("upgrading") ||
+          lower.includes("unavailable") ||
+          lower.includes("starting up")
+        ) {
+          lastSupabaseProbeCache = {
+            ts: now,
+            status: "unknown",
+            healthStatus: "maintenance",
+            httpStatus: probeResp.status,
+            estimatedRecovery: "± 15 – 60 menit (pemeliharaan atau restart server Supabase)",
+            message: `Server Supabase sedang dalam mode pemeliharaan (HTTP ${probeResp.status}).`,
+          };
+        } else if (probeResp.status >= 500) {
+          lastSupabaseProbeCache = {
+            ts: now,
+            status: "unknown",
+            healthStatus: "unreachable",
+            httpStatus: probeResp.status,
+            estimatedRecovery: "± 10 – 30 menit (gangguan sementara pada server Supabase)",
+            message: `Server Supabase mengalami gangguan sementara (HTTP ${probeResp.status}).`,
+          };
+        } else {
+          lastSupabaseProbeCache = {
+            ts: now,
+            status: store.supabaseExhausted ? "exhausted" : "active",
+            healthStatus: store.supabaseExhausted ? "restricted" : "active",
+            httpStatus: probeResp.status,
+            message: `HTTP ${probeResp.status}`,
+          };
+        }
+        writeTelemetryStore(store);
+      } catch (err: any) {
+        lastSupabaseProbeCache = {
+          ts: now,
+          status: store.supabaseExhausted ? "exhausted" : "unknown",
+          healthStatus: "unreachable",
+          estimatedRecovery: "± 5 – 30 menit (server Supabase tidak dapat dijangkau atau koneksi timeout)",
+          message: err?.message || "Server Supabase tidak dapat dijangkau.",
+        };
+      }
+    }
+
+    // 2. Live probe Firebase only when requested with force=1 or stale > 2 min (1 doc read max)
+    if (force || !lastFirebaseProbeCache || now - lastFirebaseProbeCache.ts > 120_000) {
+      try {
+        const fbCfgPath = path.join(process.cwd(), "firebase-applet-config.json");
+        if (fs.existsSync(fbCfgPath)) {
+          const fbCfg = JSON.parse(fs.readFileSync(fbCfgPath, "utf-8"));
+          const fbUrl = `https://firestore.googleapis.com/v1/projects/${fbCfg.projectId}/databases/${fbCfg.firestoreDatabaseId || "(default)"}/documents/config/school_identity?key=${fbCfg.apiKey}`;
+          const fbResp = await fetch(fbUrl);
+          if (fbResp.ok || fbResp.status === 404) {
+            lastFirebaseProbeCache = { ts: now, status: "active", message: "Firebase Firestore aktif." };
+            store.firebaseExhausted = false;
+            writeTelemetryStore(store);
+          } else {
+            const fbErrText = (await fbResp.text()).toLowerCase();
+            if (fbResp.status === 429 || fbErrText.includes("quota") || fbErrText.includes("resource_exhausted") || fbErrText.includes("resource-exhausted")) {
+              lastFirebaseProbeCache = { ts: now, status: "exhausted", message: "Kuota baca harian Firebase (50.000/hari) habis." };
+              store.firebaseExhausted = true;
+              writeTelemetryStore(store);
+            } else {
+              lastFirebaseProbeCache = {
+                ts: now,
+                status: store.firebaseExhausted ? "exhausted" : "active",
+                message: store.firebaseExhausted ? "Kuota baca harian Firebase habis." : "Status Firebase dari telemetri klien.",
+              };
+            }
+          }
+        }
+      } catch (_) {
+        lastFirebaseProbeCache = {
+          ts: now,
+          status: store.firebaseExhausted ? "exhausted" : "active",
+          message: store.firebaseExhausted ? "Kuota baca harian Firebase habis." : "Status Firebase dari telemetri klien.",
+        };
+      }
+    }
+
+    const supaStatus = lastSupabaseProbeCache?.status || (store.supabaseExhausted ? "exhausted" : "active");
+    const supaHealthStatus =
+      lastSupabaseProbeCache?.healthStatus || (store.supabaseExhausted ? "restricted" : "active");
+    const fbStatus = lastFirebaseProbeCache?.status || (store.firebaseExhausted ? "exhausted" : "active");
+    const rawPct = (store.supabaseBytes / SUPABASE_LIMIT_BYTES) * 100;
+    const supaPercentage = supaStatus === "exhausted" ? 100 : Math.min(100, Number(rawPct.toFixed(2)));
+
+    let alertLevel: "normal" | "warning" | "critical" | "exhausted" = "normal";
+    if (supaStatus === "exhausted" || supaPercentage >= 100) {
+      alertLevel = "exhausted";
+    } else if (supaPercentage >= 90) {
+      alertLevel = "critical";
+    } else if (supaPercentage >= 75) {
+      alertLevel = "warning";
+    }
+
+    return res.json({
+      month: store.month,
+      supabase: {
+        status: supaStatus,
+        healthStatus: supaHealthStatus,
+        httpStatus: lastSupabaseProbeCache?.httpStatus,
+        estimatedRecovery: lastSupabaseProbeCache?.estimatedRecovery,
+        egressBytes: store.supabaseBytes,
+        limitBytes: SUPABASE_LIMIT_BYTES,
+        remainingBytes: supaStatus === "exhausted" ? 0 : Math.max(0, SUPABASE_LIMIT_BYTES - store.supabaseBytes),
+        percentage: supaPercentage,
+        requests: store.supabaseRequests,
+        message: lastSupabaseProbeCache?.message || (supaStatus === "exhausted" ? "Limit egress 5 GB tercapai." : "Koneksi Supabase normal."),
+      },
+      firebase: {
+        status: fbStatus,
+        dailyReads: store.firebaseReads,
+        dailyLimitReads: FIREBASE_DAILY_READ_LIMIT,
+        dailyWrites: store.firebaseWrites,
+        message: lastFirebaseProbeCache?.message || (fbStatus === "exhausted" ? "Kuota baca harian Firebase habis." : "Koneksi Firebase normal."),
+      },
+      alertLevel,
+      checkedAt: new Date().toISOString(),
+    });
+  });
+
   // Handle 404 for API routes
   app.all("/api/*", (req, res) => {
     res.status(404).json({ error: `Route ${req.method} ${req.url} not found` });

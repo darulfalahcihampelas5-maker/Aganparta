@@ -8,7 +8,7 @@ import {
   doc,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery, probeSupabaseQuotaStatus } from "../lib/supabaseSync";
 import { db, auth, storage } from "../lib/firebase";
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 import { getDriveImageUrl, getDriveImageFallbackUrl, getDrivePdfEmbedUrl, isYouTubeUrl, getYouTubeEmbedUrl, getYouTubeThumbnailUrl, getMediaEmbedUrl, getExternalOpenUrl, getDirectDownloadUrl, getAlternativePdfEmbedUrl } from "../lib/driveUtils";
@@ -707,6 +707,13 @@ export default function DashboardStudent() {
     } else {
       setShowStudentQuotaModal(false);
     }
+    try {
+      const lastProbe = Number(sessionStorage.getItem("sipinter_student_supa_probe_ts") || "0");
+      if (Date.now() - lastProbe > 5 * 60 * 1000) {
+        sessionStorage.setItem("sipinter_student_supa_probe_ts", String(Date.now()));
+        void probeSupabaseQuotaStatus();
+      }
+    } catch (_) {}
   }, []);
   
   const [student, setStudent] = useState(() => {
@@ -3193,7 +3200,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const fetchSubmissions = async () => {
     if (!currentNisn) return [];
     const cacheKey = `firas_cache_submissions_${currentNisn}`;
-    const cached = getLocalCache<any[]>(cacheKey, 15 * 60 * 1000);
+    const cached = getLocalCache<any[]>(cacheKey, 30 * 60 * 1000);
     if (cached) return cached;
 
     try {
@@ -3283,7 +3290,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
   const fetchFinalGrades = async () => {
     if (!currentNisn) return [];
     const cacheKey = `firas_cache_final_grades_${currentNisn}`;
-    const cached = getLocalCache<any[]>(cacheKey, 15 * 60 * 1000);
+    const cached = getLocalCache<any[]>(cacheKey, 30 * 60 * 1000);
     if (cached && cached.length > 0) return cached;
 
     const rawNisn = currentNisn;
@@ -3318,44 +3325,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       });
     };
 
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data: supaData, error } = await supabase
-          .from("final_grades")
-          .select("*")
-          .in("nisn", variants);
-        if (!error && Array.isArray(supaData) && supaData.length > 0) {
-          supaData.forEach((d) => {
-            putMergedGrade({
-              id: d.id,
-              assignmentId: d.assignment_id || d.exam_id,
-              examId: d.exam_id || d.assignment_id,
-              nisn: d.nisn,
-              studentName: d.student_name,
-              kelas: d.kelas,
-              title: d.title || d.exam_title,
-              examTitle: d.exam_title || d.title,
-              bab: d.bab,
-              type: d.type,
-              status: d.status,
-              isManualColumn: d.is_manual_column,
-              gradedAt: d.graded_at || d.submitted_at,
-              nilai: d.nilai ?? d.score,
-              score: d.score ?? d.nilai,
-              submittedAt: d.submitted_at,
-              violationCount: d.violation_count || 0,
-              answers: d.answers || {},
-              isRemedial: d.is_remedial,
-              remedialScore: d.remedial_score,
-            });
-          });
-        }
-      } catch (err) {
-        console.warn("Supabase student final grades fallback:", err);
-      }
-    }
-
     try {
+      // Single unified query via dbGetDocs (queries Supabase primary with egress tracking, falls back to Firestore/cache)
       const snapshot = variants.length > 1
         ? await getDocs(query(collection(db, "final_grades"), where("nisn", "in", variants)))
         : await getDocs(query(collection(db, "final_grades"), where("nisn", "==", rawNisn)));
@@ -3372,11 +3343,6 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     } catch (e: any) {
       console.warn(`SWR fetch error final grades:`, e.message);
       dispatchIfQuotaError(e);
-      if (mergedByKey.size > 0) {
-        const data = Array.from(mergedByKey.values());
-        setLocalCache(cacheKey, data);
-        return data;
-      }
       if (typeof navigator !== 'undefined' && !navigator.onLine) setIsOffline(true);
       const stale = getLocalCache<any[]>(cacheKey, 24 * 60 * 60 * 1000);
       return stale || [];
@@ -3429,7 +3395,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         const now = Date.now();
-        if (now - lastVisibilitySyncRef.current < 10 * 60 * 1000) return;
+        if (now - lastVisibilitySyncRef.current < 30 * 60 * 1000) return;
         lastVisibilitySyncRef.current = now;
         mutateSubmissions();
         mutateFinalGrades();
@@ -3781,7 +3747,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
   const fetchExams = async () => {
     const cacheKey = `firas_cache_exams_v2_${student?.nisn || 'guest'}`;
-    const cached = getLocalCache<any[]>(cacheKey, 15 * 60 * 1000);
+    const cached = getLocalCache<any[]>(cacheKey, 60 * 60 * 1000);
     if (cached && cached.length > 0) return cached;
 
     try {
@@ -5791,7 +5757,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
 
     try {
       const base64Data = selectedFile;
-      const submissionId = `SUB-${student.nisn}-${selectedTugas.id}`;
+      const cleanNisn = String(student.nisn || student.nis || student.id || "").trim();
+      const submissionId = `SUB-${cleanNisn}-${selectedTugas.id}`;
       const existingSub = submissionsList.find((s: any) => s.id === submissionId);
       const initialSubmittedAt = existingSub?.submittedAt || existingSub?.createdAt || new Date().toISOString();
       const nowIso = new Date().toISOString();
@@ -5802,7 +5769,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
       const newSubmissionObj = {
         id: submissionId,
         assignmentId: selectedTugas.id,
-        nisn: student.nisn,
+        nisn: cleanNisn,
         studentName: student.name || student.displayName || "Siswa",
         kelas: student.kelas || null,
         fileName: "tugas_gambar.jpg",
@@ -5813,26 +5780,22 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
         wasRejected: isPerbaikan || existingSub?.wasRejected || false,
         keterangan: existingNote,
         rejectionReason: existingSub?.rejectionReason || existingNote || "",
+        nilai: null,
         status: "menunggu penilaian guru",
       };
-
-      const cacheKey = `firas_cache_submissions_${student.nisn}`;
-      const currentList = Array.isArray(submissionsList) ? submissionsList : [];
-      const updatedList = [
-        ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
-        newSubmissionObj
-      ];
-
-      // Optimistic update
-      setRealtimeSubmissions(updatedList);
-      setLocalCache(cacheKey, updatedList);
-      mutateSubmissions(updatedList, false);
 
       await setDoc(
         doc(db, "submissions", submissionId),
         newSubmissionObj,
         { merge: true },
       );
+
+      const cacheKey = `firas_cache_submissions_${cleanNisn}`;
+      const currentList = Array.isArray(submissionsList) ? submissionsList : [];
+      const updatedList = [
+        ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
+        newSubmissionObj
+      ];
 
       trackUsage(0, 1); // Track write
       setRealtimeSubmissions(updatedList);
@@ -9869,7 +9832,8 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                   setUploadMessage({ text: "Menyimpan tautan tugas ke database...", type: "warning" });
 
                   try {
-                    const submissionId = `SUB-${student.nisn}-${selectedTugas.id}`;
+                    const cleanNisn = String(student.nisn || student.nis || student.id || "").trim();
+                    const submissionId = `SUB-${cleanNisn}-${selectedTugas.id}`;
                     const existingSub = submissionsList.find((s: any) => s.id === submissionId);
                       const initialSubmittedAt = existingSub?.submittedAt || existingSub?.createdAt || new Date().toISOString();
                       const nowIso = new Date().toISOString();
@@ -9880,7 +9844,7 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                       const newSubmissionObj = {
                         id: submissionId,
                         assignmentId: selectedTugas.id,
-                        nisn: student.nisn,
+                        nisn: cleanNisn,
                         studentName: student.name || student.displayName || "Siswa",
                         kelas: student.kelas || null,
                         fileName: `Link_Drive_${cleanName}.url`,
@@ -9894,31 +9858,24 @@ _Laporan dikirim secara mandiri oleh Siswa untuk berbagi progres belajar. Terima
                         wasRejected: isPerbaikan || existingSub?.wasRejected || false,
                         keterangan: existingNote,
                         rejectionReason: existingSub?.rejectionReason || existingNote || "",
+                        nilai: null,
                         status: "menunggu penilaian guru",
                       };
 
-                      const cacheKey = `firas_cache_submissions_${student.nisn}`;
-                      const currentList = Array.isArray(submissionsList) ? submissionsList : [];
-                      const updatedList = [
-                        ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
-                        newSubmissionObj
-                      ];
-
                       setUploadProgress(70);
-
-                      try {
-                        setRealtimeSubmissions(updatedList);
-                        setLocalCache(cacheKey, updatedList);
-                        mutateSubmissions(updatedList, false);
-                      } catch (e) {
-                        console.warn("Optimistic update error:", e);
-                      }
 
                       await setDoc(
                         doc(db, "submissions", submissionId),
                         newSubmissionObj,
                         { merge: true },
                       );
+
+                      const cacheKey = `firas_cache_submissions_${cleanNisn}`;
+                      const currentList = Array.isArray(submissionsList) ? submissionsList : [];
+                      const updatedList = [
+                        ...currentList.filter((s: any) => s.id !== submissionId && String(s.assignmentId) !== String(selectedTugas.id)),
+                        newSubmissionObj
+                      ];
 
                       setSuccessTugasMateri(selectedTugas?.materi || "Materi Pelajaran");
                       setUploadProgress(100);

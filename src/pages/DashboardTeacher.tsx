@@ -1,4 +1,6 @@
 import { SimulasiBKSettings } from "../components/teacher/SimulasiBKSettings";
+import { QuotaStatusWidget } from "../components/teacher/QuotaStatusWidget";
+import { DatabaseMaintenanceModal } from "../components/teacher/DatabaseMaintenanceModal";
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
@@ -17,7 +19,7 @@ import {
   where,
   onSnapshot,
 } from "firebase/firestore";
-import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, setSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery, getSupabaseEgressStats, resetSupabaseEgressStats, probeSupabaseQuotaStatus, SupabaseEgressStats } from "../lib/supabaseSync";
+import { dbGetDocs as getDocs, dbGetDoc as getDoc, dbSetDoc as setDoc, dbDeleteDoc as deleteDoc, isFirebaseQuotaExhausted, setFirebaseQuotaExhausted, isSupabaseQuotaExhausted, setSupabaseQuotaExhausted, checkAndClearQuotaOnRecovery, checkSupabaseHealth, SupabaseHealthInfo, getFinalGradesForExam } from "../lib/supabaseSync";
 import { OperationType, handleFirestoreError, getLocalCache, setLocalCache, clearTeacherCaches } from "../lib/firestoreUtils";
 import { googleSignIn } from "../lib/googleAuth";
 import { fetchWithRetry } from "../lib/fetchWithRetry";
@@ -186,6 +188,14 @@ const trackUsage = (reads = 0, writes = 0) => {
       window.dispatchEvent(event);
     } catch (e) {
       console.warn("Failed to dispatch usage-updated event", e);
+    }
+    if (reads > 0 || writes > 0) {
+      fetch('/api/quota-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firebaseReads: reads, firebaseWrites: writes }),
+        keepalive: true,
+      }).catch(() => {});
     }
   } catch (e) {
     console.warn("Kesalahan statistik penggunaan:", e);
@@ -434,74 +444,62 @@ export default function DashboardTeacher() {
     }
   }, [activeMenu]);
 
-  const [quotaTick] = useState(0);
-  const [supabaseEgress, setSupabaseEgress] = useState<SupabaseEgressStats>(() => getSupabaseEgressStats());
-  const [isCheckingSupabaseQuota, setIsCheckingSupabaseQuota] = useState(false);
+  const [maintenanceInfo, setMaintenanceInfo] = useState<SupabaseHealthInfo | null>(null);
+  const [isMaintenanceModalOpen, setIsMaintenanceModalOpen] = useState(false);
+  const [isRecheckingMaintenance, setIsRecheckingMaintenance] = useState(false);
 
-  useEffect(() => {
-    const syncEgress = () => {
-      setSupabaseEgress(getSupabaseEgressStats());
-    };
-    window.addEventListener("supabase-egress-updated", syncEgress as EventListener);
-    window.addEventListener("supabase-quota-updated", syncEgress as EventListener);
-    window.addEventListener("storage", syncEgress as EventListener);
-    return () => {
-      window.removeEventListener("supabase-egress-updated", syncEgress as EventListener);
-      window.removeEventListener("supabase-quota-updated", syncEgress as EventListener);
-      window.removeEventListener("storage", syncEgress as EventListener);
-    };
-  }, []);
+  const runSupabaseHealthCheck = async (isManual = false): Promise<SupabaseHealthInfo | null> => {
+    if (isManual) setIsRecheckingMaintenance(true);
+    try {
+      const info = await checkSupabaseHealth();
+      setMaintenanceInfo(info);
+      if (info.mode === "active") {
+        setIsMaintenanceModalOpen(false);
+        sessionStorage.removeItem("sipinter_maintenance_dismissed_mode");
+        const wasDown =
+          sessionStorage.getItem("supabase_was_exhausted") === "true" ||
+          sessionStorage.getItem("supabase_was_unavailable") === "true";
+        if (wasDown || isManual) {
+          sessionStorage.removeItem("supabase_was_exhausted");
+          sessionStorage.removeItem("supabase_was_unavailable");
+          showAlert(
+            "Kabar Baik!",
+            "Database Supabase telah aktif kembali! Seluruh sinkronisasi cloud kini pulih sepenuhnya.",
+            "alert"
+          );
+        }
+      } else {
+        sessionStorage.setItem("supabase_was_unavailable", "true");
+        const dismissedMode = sessionStorage.getItem("sipinter_maintenance_dismissed_mode");
+        if (isManual || dismissedMode !== info.mode) {
+          setIsMaintenanceModalOpen(true);
+        }
+      }
+      return info;
+    } finally {
+      if (isManual) setIsRecheckingMaintenance(false);
+    }
+  };
 
   useEffect(() => {
     if (isSupabaseConfigured && supabase) {
-      (async () => {
-        try {
-          const { error } = await supabase.from("exams").select("id").limit(1);
-          if (!error) {
-            setSupabaseQuotaExhausted(false);
-            const wasExhausted = sessionStorage.getItem("supabase_was_exhausted") === "true";
-            if (wasExhausted) {
-              sessionStorage.removeItem("supabase_was_exhausted");
-              showAlert(
-                "Kabar Baik!",
-                "Database Supabase telah aktif kembali! Seluruh sinkronisasi cloud kini pulih sepenuhnya.",
-                "alert"
-              );
-            }
-          } else {
-            const msg = String(error.message || error.details || "").toLowerCase();
-            if (msg.includes("quota") || msg.includes("egress") || msg.includes("spend cap")) {
-              setSupabaseQuotaExhausted(true);
-              sessionStorage.setItem("supabase_was_exhausted", "true");
-            }
-          }
-        } catch (err: any) {
-          const msg = String(err?.message || err || "").toLowerCase();
-          if (msg.includes("quota") || msg.includes("egress") || msg.includes("spend cap")) {
-            setSupabaseQuotaExhausted(true);
-            sessionStorage.setItem("supabase_was_exhausted", "true");
-          }
-        } finally {
-          setSupabaseEgress(getSupabaseEgressStats());
-        }
-      })();
+      void runSupabaseHealthCheck(false);
     }
-  }, [quotaTick]);
-
-  const handleCheckSupabaseQuota = async () => {
-    setIsCheckingSupabaseQuota(true);
-    try {
-      const res = await probeSupabaseQuotaStatus();
-      setSupabaseEgress(getSupabaseEgressStats());
-      showAlert(
-        res.active ? "Supabase Aktif" : "Kuota Egress Supabase Habis",
-        res.message,
-        res.active ? "alert" : "danger"
-      );
-    } finally {
-      setIsCheckingSupabaseQuota(false);
-    }
-  };
+    const handleHealthIssue = (e: Event) => {
+      const detail = (e as CustomEvent<SupabaseHealthInfo>).detail;
+      if (!detail || detail.mode === "active") return;
+      setMaintenanceInfo(detail);
+      sessionStorage.setItem("supabase_was_unavailable", "true");
+      const dismissedMode = sessionStorage.getItem("sipinter_maintenance_dismissed_mode");
+      if (dismissedMode !== detail.mode) {
+        setIsMaintenanceModalOpen(true);
+      }
+    };
+    window.addEventListener("supabase-health-issue", handleHealthIssue);
+    return () => {
+      window.removeEventListener("supabase-health-issue", handleHealthIssue);
+    };
+  }, []);
 
   const handleSaveMotivationalQuote = async () => {
     if (!motivationalQuoteInput.trim()) return;
@@ -1736,8 +1734,12 @@ export default function DashboardTeacher() {
       const snap = await getDocs(collection(db, "submissions"));
       const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
       trackUsage(snap.size, 0);
-      setSubmissionsList(subs);
-      setLocalCache("firas_cache_submissions", subs);
+      if (subs.length > 0) {
+        setSubmissionsList(subs);
+        setLocalCache("firas_cache_submissions", subs);
+      } else if (!isFirebaseQuotaExhausted() || !isSupabaseQuotaExhausted()) {
+        setSubmissionsList([]);
+      }
       showAlert("Data Disinkronkan", `Berhasil memuat ${subs.length} data respon tugas terbaru dari server.`, "alert");
     } catch (e: any) {
       console.warn("Gagal menyinkronkan data tugas:", e);
@@ -2475,9 +2477,9 @@ export default function DashboardTeacher() {
           }
         })(),
 
-        // 4. Submissions (Direct query to ensure all new/pending/graded submissions appear)
+        // 4. Submissions (TTL 10 minutes on background refreshes to prevent repeated 1.4 MB full scans)
         (async () => {
-          const cachedSubmissions = !forceRefresh && getLocalCache<any[]>("firas_cache_submissions", 2 * 60 * 1000);
+          const cachedSubmissions = !forceRefresh && getLocalCache<any[]>("firas_cache_submissions", 10 * 60 * 1000);
           if (cachedSubmissions && cachedSubmissions.length > 0) {
             setSubmissionsList(cachedSubmissions);
           } else {
@@ -2497,20 +2499,25 @@ export default function DashboardTeacher() {
           }
         })(),
 
-        // 5. Final Grades (Supabase primary + Firestore + completed exam_sessions recovery)
+        // 5. Final Grades (Honor 15-min TTL cache unless forceRefresh to avoid 1.3 MB re-downloads on every teacher action)
         (async () => {
-          const cachedFinalGrades = !forceRefresh && getLocalCache<any[]>("firas_cache_final_grades", 24 * 60 * 60 * 1000);
+          const cachedFinalGrades = !forceRefresh && getLocalCache<any[]>("firas_cache_final_grades", 15 * 60 * 1000);
           if (cachedFinalGrades && cachedFinalGrades.length > 0) {
             setFinalGradesList(cachedFinalGrades);
+            return;
           }
           try {
-            const grades = await getFinalGrades();
+            const grades = await getFinalGrades({ force: forceRefresh });
             if (grades.length > 0) {
               setFinalGradesList(grades);
               setLocalCache("firas_cache_final_grades", grades);
             }
           } catch (e) {
             console.warn("Failed fetching final grades:", e);
+            const staleGrades = getLocalCache<any[]>("firas_cache_final_grades", 24 * 60 * 60 * 1000);
+            if (staleGrades && staleGrades.length > 0) {
+              setFinalGradesList(staleGrades);
+            }
           }
         })(),
 
@@ -4137,16 +4144,23 @@ export default function DashboardTeacher() {
   >("cek-tugas");
 
   useEffect(() => {
-    if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas" && !isFirebaseQuotaExhausted()) {
-      const cached = getLocalCache<any[]>("firas_cache_submissions", 5 * 60 * 1000);
-      if (cached && cached.length > 0) {
-        setSubmissionsList(cached);
-      } else {
+    if (activeMenu === "manajemen-nilai" && activeNilaiTab === "cek-tugas") {
+      let cancelled = false;
+      const staleCached = getLocalCache<any[]>("firas_cache_submissions", 24 * 60 * 60 * 1000);
+      if (staleCached && staleCached.length > 0 && submissionsList.length === 0) {
+        setSubmissionsList(staleCached);
+      }
+
+      const freshCached = getLocalCache<any[]>("firas_cache_submissions", 2 * 60 * 1000);
+      if (!freshCached) {
         getDocs(collection(db, "submissions"))
           .then((snap) => {
+            if (cancelled) return;
             const subs = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-            setSubmissionsList(subs);
-            setLocalCache("firas_cache_submissions", subs);
+            if (subs.length > 0) {
+              setSubmissionsList(subs);
+              setLocalCache("firas_cache_submissions", subs);
+            }
           })
           .catch((err) => {
             const msg = err?.message?.toLowerCase() || String(err).toLowerCase();
@@ -4156,7 +4170,9 @@ export default function DashboardTeacher() {
             }
           });
       }
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
 
     // Pull latest exam & assignment grades when opening Buku Nilai (using TTL cache & throttled refresh to preserve cloud quota)
@@ -4926,23 +4942,6 @@ export default function DashboardTeacher() {
       }
     }
   };
-
-  const formatEgressSize = (bytes: number) => {
-    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + " MB";
-    if (bytes >= 1024) return (bytes / 1024).toFixed(2) + " KB";
-    return bytes + " B";
-  };
-
-  const egressMonthLabel = useMemo(() => {
-    const [year, month] = supabaseEgress.month.split("-");
-    const monthNames = [
-      "Januari", "Februari", "Maret", "April", "Mei", "Juni",
-      "Juli", "Agustus", "September", "Oktober", "November", "Desember"
-    ];
-    const idx = Math.max(0, Math.min(11, Number(month) - 1));
-    return `${monthNames[idx]} ${year}`;
-  }, [supabaseEgress.month]);
 
   // Retention Policy (Option 3) State & Function
   const [isCleaningRetention, setIsCleaningRetention] = useState(false);
@@ -7564,6 +7563,24 @@ export default function DashboardTeacher() {
         onClose={() => setIsStorageModalOpen(false)}
         submissions={submissionsList}
       />
+      <DatabaseMaintenanceModal
+        isOpen={isMaintenanceModalOpen}
+        healthInfo={maintenanceInfo}
+        isRechecking={isRecheckingMaintenance}
+        onRecheck={async () => {
+          const freshInfo = await runSupabaseHealthCheck(true);
+          if (freshInfo?.mode === "active") {
+            void fetchTeacherData(true);
+          }
+        }}
+        onDismiss={() => {
+          if (maintenanceInfo?.mode && maintenanceInfo.mode !== "active") {
+            sessionStorage.setItem("sipinter_maintenance_dismissed_mode", maintenanceInfo.mode);
+          }
+          setIsMaintenanceModalOpen(false);
+        }}
+        onOpenStorageMenu={() => handleMenuChange("manajemen-penyimpanan", 11)}
+      />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-white">
         
         <header className="flex h-20 flex-shrink-0 items-center justify-between bg-gradient-to-r from-[#85cc00]/15 via-[#85cc00]/5 to-slate-50 px-4 sm:px-10 shadow-xs sticky top-0 z-50">
@@ -7586,20 +7603,44 @@ export default function DashboardTeacher() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3 select-none">
-            {/* Supabase Background Sync Status Indicator */}
+            {/* Supabase Background Sync / Maintenance Status Indicator */}
             <button
               type="button"
-              onClick={() => setIsSupabaseModalOpen(true)}
+              onClick={() => {
+                if (onlineStatus && maintenanceInfo && maintenanceInfo.mode !== "active") {
+                  setIsMaintenanceModalOpen(true);
+                } else {
+                  setIsSupabaseModalOpen(true);
+                }
+              }}
               className={`hidden md:inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs border ${
-                onlineStatus
-                  ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
-                  : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                !onlineStatus
+                  ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+                  : maintenanceInfo && maintenanceInfo.mode !== "active"
+                  ? "bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100"
+                  : "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
               }`}
-              title="Status sinkronisasi data SiPinter ke Supabase. Klik untuk detail."
+              title="Status koneksi database Supabase. Klik untuk detail."
             >
-              <span className={`w-2 h-2 rounded-full ${onlineStatus ? "bg-emerald-500 animate-pulse" : "bg-amber-500"}`} />
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  !onlineStatus
+                    ? "bg-amber-500"
+                    : maintenanceInfo && maintenanceInfo.mode !== "active"
+                    ? "bg-rose-500 animate-pulse"
+                    : "bg-emerald-500 animate-pulse"
+                }`}
+              />
               <span className="truncate">
-                {onlineStatus ? "Supabase: Terhubung (Sync)" : "Mode Offline (Lokal)"}
+                {!onlineStatus
+                  ? "Mode Offline (Lokal)"
+                  : maintenanceInfo?.mode === "maintenance"
+                  ? "Supabase: Maintenance"
+                  : maintenanceInfo?.mode === "restricted"
+                  ? "Supabase: Terbatas"
+                  : maintenanceInfo?.mode === "unreachable"
+                  ? "Supabase: Tidak Dijangkau"
+                  : "Supabase: Terhubung (Sync)"}
               </span>
             </button>
 
@@ -7957,37 +7998,6 @@ export default function DashboardTeacher() {
 
                 {activeMenu === "dashboard" && (
                   <div className="space-y-10">
-                    {/* Firebase Quota Exhausted Warning Banner */}
-                    {isFirebaseQuotaExhausted() && (
-                      <div className="mb-6 p-5 bg-rose-50 dark:bg-rose-950/40 border-2 border-rose-300 dark:border-rose-800 rounded-3xl shadow-lg flex flex-col sm:flex-row items-center justify-between gap-4 animate-in fade-in duration-300">
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-600 flex items-center justify-center shrink-0 font-black text-xl">
-                            ⚠️
-                          </div>
-                          <div>
-                            <h4 className="text-sm font-black text-rose-900 dark:text-rose-200 uppercase tracking-wide">
-                              Peringatan: Kuota Server Cloud Tercapai (Limit Kuota Aktif)
-                            </h4>
-                            <p className="text-xs text-rose-700 dark:text-rose-300 font-medium mt-0.5 leading-relaxed">
-                              Sistem otomatis mengalihkan penyimpanan ke <span className="font-bold underline">Cache Lokal & Mode Offline</span> agar aplikasi tetap dapat berjalan normal. Kuota Firebase reset harian (~15:00 WIB), sedangkan Supabase reset siklus bulanan.
-                            </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            onClick={() => {
-                              setFirebaseQuotaExhausted(false);
-                              setSupabaseQuotaExhausted(false);
-                              window.location.reload();
-                            }}
-                            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black uppercase text-[11px] tracking-wider rounded-xl shadow-md transition-all cursor-pointer whitespace-nowrap active:scale-95"
-                          >
-                            Muat Ulang & Cek Kuota
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
                     {/* TEACHER PROFILE & IDENTITY SECTION (Desain seperti Dasbor Siswa) */}
                     <div className="w-full bg-gradient-to-b from-white via-slate-50/80 to-slate-50/40 rounded-[2.5rem] p-6 sm:p-10 border border-slate-200/80 shadow-md relative overflow-hidden text-center">
                       {/* Ambient background glows */}
@@ -14609,144 +14619,13 @@ export default function DashboardTeacher() {
                         </div>
                       </div>
 
-                      {/* Row 1.5: Monitoring Egress Supabase (5 GB / Bulan) */}
-                      <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-6">
-                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                          <div className="flex items-start sm:items-center gap-4">
-                            <div
-                              className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 ${
-                                supabaseEgress.isExhausted
-                                  ? "bg-rose-50 border-rose-200 text-rose-600"
-                                  : "bg-emerald-50 border-emerald-200 text-emerald-600"
-                              }`}
-                            >
-                              <Activity className="w-6 h-6" />
-                            </div>
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2.5">
-                                <h3 className="text-lg font-bold text-slate-950 tracking-tight">
-                                  Progres Egress Supabase ({egressMonthLabel})
-                                </h3>
-                                <span
-                                  className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
-                                    supabaseEgress.isExhausted
-                                      ? "bg-rose-50 text-rose-700 border-rose-200"
-                                      : "bg-emerald-50 text-emerald-700 border-emerald-200"
-                                  }`}
-                                >
-                                  {supabaseEgress.isExhausted ? "Limit Egress Tercapai" : "Aktif & Normal"}
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-500 font-medium mt-0.5">
-                                Batas Kuota Gratis Bulanan: <span className="font-bold text-slate-700 tabular-nums">5.00 GB / Bulan</span> •{" "}
-                                <span className="tabular-nums">{supabaseEgress.requests.toLocaleString()}</span> penarikan data tercatat di perangkat ini
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                            <button
-                              type="button"
-                              disabled={isCheckingSupabaseQuota}
-                              onClick={handleCheckSupabaseQuota}
-                              className="h-10 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer inline-flex items-center justify-center gap-2 whitespace-nowrap disabled:opacity-50"
-                            >
-                              <RefreshCw className={`w-3.5 h-3.5 text-slate-500 shrink-0 ${isCheckingSupabaseQuota ? "animate-spin" : ""}`} />
-                              <span>{isCheckingSupabaseQuota ? "Mengecek..." : "Cek Status Server"}</span>
-                            </button>
-                            <a
-                              href="https://supabase.com/dashboard/org/_/usage"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="h-10 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-xs inline-flex items-center justify-center gap-2 whitespace-nowrap"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5 shrink-0" />
-                              <span>Cek Resmi di Supabase</span>
-                            </a>
-                          </div>
-                        </div>
-
-                        <div
-                          className={`border rounded-2xl p-5 sm:p-6 space-y-3 ${
-                            supabaseEgress.isExhausted
-                              ? "bg-rose-50/50 border-rose-200/80"
-                              : "bg-slate-50/80 border-slate-200/70"
-                          }`}
-                        >
-                          <div className="flex justify-between items-end gap-4">
-                            <div>
-                              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
-                                Estimasi Egress Terpakai (Perangkat Ini)
-                              </p>
-                              <p
-                                className={`text-2xl sm:text-3xl font-black tabular-nums ${
-                                  supabaseEgress.isExhausted ? "text-rose-700" : "text-slate-900"
-                                }`}
-                              >
-                                {supabaseEgress.isExhausted
-                                  ? `Limit 5.00 GB Tercapai (${formatEgressSize(supabaseEgress.bytesUsed)} lokal)`
-                                  : formatEgressSize(supabaseEgress.bytesUsed)}
-                              </p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
-                                Sisa Kuota Bulanan
-                              </p>
-                              <p
-                                className={`text-lg sm:text-xl font-bold tabular-nums ${
-                                  supabaseEgress.isExhausted ? "text-rose-600" : "text-emerald-600"
-                                }`}
-                              >
-                                {supabaseEgress.isExhausted ? "0 B" : formatEgressSize(supabaseEgress.remainingBytes)}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden flex">
-                            <div
-                              className={`h-3 rounded-full transition-all duration-700 ${
-                                supabaseEgress.isExhausted || supabaseEgress.percentage >= 90
-                                  ? "bg-rose-500"
-                                  : supabaseEgress.percentage >= 70
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
-                              }`}
-                              style={{ width: `${Math.max(supabaseEgress.bytesUsed > 0 || supabaseEgress.isExhausted ? 2 : 0, supabaseEgress.percentage)}%` }}
-                            />
-                          </div>
-
-                          <div className="flex flex-wrap justify-between items-center gap-2 text-xs font-semibold">
-                            <span
-                              className={`tabular-nums ${
-                                supabaseEgress.isExhausted || supabaseEgress.percentage >= 90
-                                  ? "text-rose-600"
-                                  : "text-slate-600"
-                              }`}
-                            >
-                              {supabaseEgress.percentage}% Terpakai • Reset otomatis setiap tanggal 1 bulan berikutnya
-                            </span>
-                            <div className="flex items-center gap-3">
-                              {supabaseEgress.bytesUsed > 0 && (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    resetSupabaseEgressStats();
-                                    setSupabaseEgress(getSupabaseEgressStats());
-                                  }}
-                                  className="text-slate-500 hover:text-slate-800 underline cursor-pointer"
-                                >
-                                  Reset Hitungan Lokal
-                                </button>
-                              )}
-                              <span className="text-slate-400 tabular-nums">Batas 5.00 GB / Bulan</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <p className="text-xs text-slate-500 leading-relaxed">
-                          <span className="font-semibold text-slate-700">Catatan:</span> Indikator lokal mencatat lalu lintas data yang ditarik oleh browser ini. Untuk melihat total gabungan resmi dari seluruh HP siswa, klik tombol <span className="font-semibold text-emerald-700">Cek Resmi di Supabase</span>.
-                        </p>
-                      </div>
+                      {/* Row 1.5: Quota Status (Egress Supabase 5 GB/Bulan & Kuota Firebase) */}
+                      <QuotaStatusWidget
+                        sessionReads={sessionUsage.reads}
+                        sessionWrites={sessionUsage.writes}
+                        storageUsedFormatted={storageMetrics.usedFormatted}
+                        storagePercentage={storageMetrics.percentage}
+                      />
 
                       {/* Row 2: Kapasitas Penyimpanan Berkas */}
                       <div className="bg-white rounded-3xl border border-slate-200/80 p-6 sm:p-8 shadow-sm space-y-6">
@@ -15232,11 +15111,19 @@ export default function DashboardTeacher() {
                       finalGradesList={finalGradesList}
                       classesList={classesList}
                       onRefreshGrades={() => {
-                        getFinalGrades()
-                          .then((grades) => {
-                            if (Array.isArray(grades) && grades.length > 0) {
-                              setFinalGradesList(grades);
-                              setLocalCache("firas_cache_final_grades", grades);
+                        const targetExamId = (proctoringExamModal.exam || examsList[0])?.id;
+                        if (!targetExamId) return;
+                        getFinalGradesForExam(targetExamId)
+                          .then((examGrades) => {
+                            if (Array.isArray(examGrades) && examGrades.length > 0) {
+                              setFinalGradesList((prev) => {
+                                const map = new Map<string, any>();
+                                prev.forEach((g) => map.set(g.id, g));
+                                examGrades.forEach((g) => map.set(g.id, { ...(map.get(g.id) || {}), ...g }));
+                                const merged = Array.from(map.values());
+                                setLocalCache("firas_cache_final_grades", merged);
+                                return merged;
+                              });
                             }
                           })
                           .catch(() => {});
